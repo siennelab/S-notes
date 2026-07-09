@@ -134,6 +134,18 @@ QInputDialog {
 #sidebarIcon:hover {
     color: #2C2926;
 }
+#sidebarIconButton {
+    border: 0;
+    border-radius: 6px;
+    padding: 0;
+    background: transparent;
+    color: #8A8078;
+    font-size: 13px;
+}
+#sidebarIconButton:hover {
+    background: #E8DFD3;
+    color: #2C2926;
+}
 #editor,
 #editorSheet {
     background: #FAF7F2;
@@ -338,5 +350,34 @@ QInputDialog {
 }
 #filterLabel {
     padding: 2px 2px 0 2px;
+}
+#exportDialog {
+    background: #FAF7F2;
+}
+#exportTitle {
+    color: #2C2926;
+    font-size: 18px;
+    font-weight: 600;
+}
+#exportDynamicArea {
+    background: #F0E6D8;
+    border-radius: 8px;
+}
+#exportInfoLabel {
+    color: #8A8078;
+    padding: 12px;
+}
+#exportSelectionTree {
+    border: 1px solid #D6CEC4;
+    border-radius: 8px;
+    background: #FAF7F2;
+    color: #2C2926;
+    padding: 4px;
+}
+#exportSelectionTree::item {
+    padding: 6px 8px;
+}
+#exportSelectionTree::item:hover {
+    background: #EDE6DB;
 }
 """

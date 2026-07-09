@@ -36,3 +36,4 @@ local_redaction_rules.json
 .venv/
 __pycache__/
 *.pyc
+.DS_Store

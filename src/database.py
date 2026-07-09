@@ -381,6 +381,83 @@ def get_note(
     return dict(row) if row else None
 
 
+EXPORT_NOTE_SELECT = """
+SELECT
+    id,
+    title,
+    content_html,
+    main_category,
+    sub_category,
+    sub_sub_category,
+    tags,
+    ai_visibility,
+    is_pinned,
+    created_at,
+    updated_at
+FROM notes
+WHERE is_deleted = 0
+"""
+
+
+def get_note_for_export(
+    note_id: int, database_path: Path = DATABASE_PATH
+) -> dict | None:
+    with _connect(database_path) as connection:
+        row = connection.execute(
+            EXPORT_NOTE_SELECT + " AND id = ?",
+            (note_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_notes_for_export(database_path: Path = DATABASE_PATH) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            EXPORT_NOTE_SELECT + " ORDER BY updated_at DESC, created_at DESC, id DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_notes_by_ids_for_export(
+    note_ids: list[int], database_path: Path = DATABASE_PATH
+) -> list[dict]:
+    if not note_ids:
+        return []
+    placeholders = ",".join("?" for _ in note_ids)
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            EXPORT_NOTE_SELECT
+            + f" AND id IN ({placeholders})"
+            + " ORDER BY updated_at DESC, created_at DESC, id DESC",
+            tuple(note_ids),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_notes_under_path_for_export(
+    path: tuple[str, ...], database_path: Path = DATABASE_PATH
+) -> list[dict]:
+    if not path:
+        return []
+    clauses = ["main_category = ?"]
+    params: list[str] = [path[0]]
+    if len(path) >= 2:
+        clauses.append("sub_category = ?")
+        params.append(path[1])
+    if len(path) >= 3:
+        clauses.append("sub_sub_category = ?")
+        params.append(path[2])
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            EXPORT_NOTE_SELECT
+            + " AND "
+            + " AND ".join(clauses)
+            + " ORDER BY updated_at DESC, created_at DESC, id DESC",
+            tuple(params),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def update_note(
     note_id: int,
     *,

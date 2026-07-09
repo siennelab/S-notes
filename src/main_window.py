@@ -50,6 +50,7 @@ from src.database import (
 )
 from src.editor import NotesEditor
 from src.editor_toolbar import EditorToolbar
+from src.export_center import ExportCenterDialog, ExportContext
 from src.smart_views import SMART_VIEWS, get_smart_view_notes
 from src.tag_manager import format_tags, parse_tags
 from src.theme import APP_STYLE
@@ -115,8 +116,11 @@ class MainWindow(QMainWindow):
         add_button.setFixedSize(24, 22)
         add_button.clicked.connect(self.handle_create_note)
         header.addWidget(add_button)
-        export_icon = QLabel("⬇")
-        export_icon.setObjectName("sidebarIcon")
+        export_icon = QPushButton("⬇")
+        export_icon.setObjectName("sidebarIconButton")
+        export_icon.setToolTip("普通导出")
+        export_icon.setFixedSize(24, 22)
+        export_icon.clicked.connect(self.open_export_center)
         link_icon = QLabel("🔗")
         link_icon.setObjectName("sidebarIcon")
         header.addWidget(export_icon)
@@ -717,6 +721,60 @@ class MainWindow(QMainWindow):
                 )
         path = self.item_path(item)
         return self.category_tuple_for_path(path)
+
+    def selected_export_directory_path(self) -> tuple[str, ...]:
+        item = self.directory_tree.currentItem()
+        if item is None:
+            if self.current_note is not None:
+                return self.note_path_tuple(self.current_note)
+            return ()
+        data = item.data(0, Qt.UserRole)
+        if data and data.get("type") == "note":
+            note = get_note(data["id"])
+            if note is not None:
+                return self.note_path_tuple(note)
+            return ()
+        if data and data.get("type") == "directory":
+            return self.item_path(item)
+        if self.current_note is not None:
+            return self.note_path_tuple(self.current_note)
+        return ()
+
+    def note_path_tuple(self, note: dict) -> tuple[str, ...]:
+        path = [note["main_category"]]
+        if note["sub_category"] != DEFAULT_SUB_CATEGORY:
+            path.append(note["sub_category"])
+        if note["sub_sub_category"] != DEFAULT_SUB_SUB_CATEGORY:
+            path.append(note["sub_sub_category"])
+        return tuple(path)
+
+    def visible_note_ids(self) -> list[int]:
+        note_ids: list[int] = []
+
+        def visit(item: QTreeWidgetItem) -> None:
+            data = item.data(0, Qt.UserRole)
+            if data and data.get("type") == "note":
+                note_ids.append(data["id"])
+            for index in range(item.childCount()):
+                visit(item.child(index))
+
+        for index in range(self.directory_tree.topLevelItemCount()):
+            visit(self.directory_tree.topLevelItem(index))
+        return note_ids
+
+    def open_export_center(self) -> None:
+        if not self.force_save_current_note(refresh_tree=False):
+            return
+        context = ExportContext(
+            current_note_id=self.current_note["id"] if self.current_note else None,
+            current_directory_path=self.selected_export_directory_path(),
+            sidebar_mode=self.current_sidebar_mode,
+            filter_value=self.current_filter_value,
+            search_query=self.search_input.text().strip(),
+            visible_note_ids=self.visible_note_ids(),
+        )
+        dialog = ExportCenterDialog(context, self)
+        dialog.exec()
 
     def category_tuple_for_path(self, path: tuple[str, ...]) -> tuple[str, str, str]:
         if len(path) == 1:
