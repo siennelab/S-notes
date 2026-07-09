@@ -9,7 +9,7 @@ Out of scope: full R1, old data migration, AI export, receipt import, related dr
 ## Later Tasks
 
 - Task 1 基础笔记 + 自动保存
-- Task 2 左侧目录
+- Task 2 左侧目录：主分类/子分类/子子分类按名称顺序排序；笔记按更新时间倒序排序。
 - Task 3 标签 + 搜索 + 智能视图
 - Task 4 编辑器稳定性
 - Task 5 普通导出
