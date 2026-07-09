@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from pathlib import Path
 
+from src.tag_manager import normalize_tag
 from src.time_utils import now_shanghai, now_shanghai_iso
 
 
@@ -22,7 +24,10 @@ CREATE TABLE IF NOT EXISTS directories (
     parent_id INTEGER REFERENCES directories(id),
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT,
+    trash_group_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notes (
@@ -40,7 +45,8 @@ CREATE TABLE IF NOT EXISTS notes (
     is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    deleted_at TEXT
+    deleted_at TEXT,
+    trash_group_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -80,6 +86,13 @@ NOTE_COLUMNS = {
     "ai_visibility": "TEXT NOT NULL DEFAULT '不导出给 AI'",
     "is_pinned": "INTEGER NOT NULL DEFAULT 0",
     "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+    "trash_group_id": "TEXT",
+}
+
+DIRECTORY_COLUMNS = {
+    "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+    "deleted_at": "TEXT",
+    "trash_group_id": "TEXT",
 }
 
 
@@ -95,6 +108,7 @@ def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
     with _connect(database_path) as connection:
         connection.executescript(SCHEMA_SQL)
         _migrate_notes_table(connection)
+        _migrate_directories_table(connection)
         _seed_initial_categories(connection)
         _ensure_directory_paths_for_notes(connection)
     return database_path
@@ -108,6 +122,17 @@ def _migrate_notes_table(connection: sqlite3.Connection) -> None:
         if column_name not in existing_columns:
             connection.execute(
                 f"ALTER TABLE notes ADD COLUMN {column_name} {column_definition}"
+            )
+
+
+def _migrate_directories_table(connection: sqlite3.Connection) -> None:
+    existing_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(directories)").fetchall()
+    }
+    for column_name, column_definition in DIRECTORY_COLUMNS.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE directories ADD COLUMN {column_name} {column_definition}"
             )
 
 
@@ -132,12 +157,12 @@ def _find_directory_id(
 ) -> int | None:
     if parent_id is None:
         row = connection.execute(
-            "SELECT id FROM directories WHERE parent_id IS NULL AND name = ?",
+            "SELECT id FROM directories WHERE parent_id IS NULL AND name = ? AND is_deleted = 0",
             (name,),
         ).fetchone()
     else:
         row = connection.execute(
-            "SELECT id FROM directories WHERE parent_id = ? AND name = ?",
+            "SELECT id FROM directories WHERE parent_id = ? AND name = ? AND is_deleted = 0",
             (parent_id, name),
         ).fetchone()
     return row["id"] if row else None
@@ -288,14 +313,15 @@ def rename_note(
 
 def soft_delete_note(note_id: int, database_path: Path = DATABASE_PATH) -> None:
     timestamp = now_shanghai_iso()
+    trash_group_id = uuid.uuid4().hex
     with _connect(database_path) as connection:
         connection.execute(
             """
             UPDATE notes
-            SET is_deleted = 1, deleted_at = ?, updated_at = ?
+            SET is_deleted = 1, deleted_at = ?, updated_at = ?, trash_group_id = ?
             WHERE id = ? AND is_deleted = 0
             """,
-            (timestamp, timestamp, note_id),
+            (timestamp, timestamp, trash_group_id, note_id),
         )
         if connection.total_changes == 0:
             raise ValueError(f"笔记不存在或已删除: {note_id}")
@@ -311,6 +337,7 @@ def list_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
                 main_category,
                 sub_category,
                 sub_sub_category,
+                tags,
                 ai_visibility,
                 is_pinned,
                 created_at,
@@ -323,10 +350,16 @@ def list_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def get_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict | None:
+def get_note(
+    note_id: int,
+    database_path: Path = DATABASE_PATH,
+    *,
+    include_deleted: bool = False,
+) -> dict | None:
+    deleted_filter = "" if include_deleted else "AND is_deleted = 0"
     with _connect(database_path) as connection:
         row = connection.execute(
-            """
+            f"""
             SELECT
                 id,
                 title,
@@ -341,7 +374,7 @@ def get_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict | None:
                 created_at,
                 updated_at
             FROM notes
-            WHERE id = ? AND is_deleted = 0
+            WHERE id = ? {deleted_filter}
             """,
             (note_id,),
         ).fetchone()
@@ -413,8 +446,10 @@ def list_directories(database_path: Path = DATABASE_PATH) -> list[dict]:
     with _connect(database_path) as connection:
         rows = connection.execute(
             """
-            SELECT id, name, parent_id, sort_order, created_at, updated_at
+            SELECT id, name, parent_id, sort_order, created_at, updated_at,
+                   is_deleted, deleted_at, trash_group_id
             FROM directories
+            WHERE is_deleted = 0
             ORDER BY name COLLATE NOCASE ASC, id ASC
             """
         ).fetchall()
@@ -435,7 +470,7 @@ def _get_directory_path(
     current_id = directory_id
     while current_id is not None:
         row = connection.execute(
-            "SELECT id, name, parent_id FROM directories WHERE id = ?",
+            "SELECT id, name, parent_id, is_deleted FROM directories WHERE id = ?",
             (current_id,),
         ).fetchone()
         if row is None:
@@ -474,7 +509,7 @@ def rename_directory(
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
         row = connection.execute(
-            "SELECT id, name, parent_id FROM directories WHERE id = ?",
+            "SELECT id, name, parent_id FROM directories WHERE id = ? AND is_deleted = 0",
             (directory_id,),
         ).fetchone()
         if row is None:
@@ -492,27 +527,430 @@ def rename_directory(
 
 
 def delete_directory(directory_id: int, database_path: Path = DATABASE_PATH) -> None:
+    soft_delete_directory_tree(directory_id, database_path)
+
+
+def soft_delete_directory_tree(
+    directory_id: int, database_path: Path = DATABASE_PATH
+) -> str:
     timestamp = now_shanghai_iso()
+    trash_group_id = uuid.uuid4().hex
     with _connect(database_path) as connection:
         path = _get_directory_path(connection, directory_id)
-        _soft_delete_notes_under_path(connection, path, timestamp)
+        _soft_delete_notes_under_path(connection, path, timestamp, trash_group_id)
         descendant_ids = _collect_descendant_directory_ids(connection, directory_id)
-        sorted_ids = sorted(
-            descendant_ids,
-            key=lambda target_id: _directory_depth(connection, target_id),
-            reverse=True,
+        connection.executemany(
+            """
+            UPDATE directories
+            SET is_deleted = 1, deleted_at = ?, updated_at = ?, trash_group_id = ?
+            WHERE id = ?
+            """,
+            [
+                (timestamp, timestamp, trash_group_id, target_id)
+                for target_id in descendant_ids
+            ],
         )
-        for target_id in sorted_ids:
-            connection.execute("DELETE FROM directories WHERE id = ?", (target_id,))
+    return trash_group_id
 
 
 def soft_delete_notes_under_directory(
     directory_id: int, database_path: Path = DATABASE_PATH
 ) -> None:
     timestamp = now_shanghai_iso()
+    trash_group_id = uuid.uuid4().hex
     with _connect(database_path) as connection:
         path = _get_directory_path(connection, directory_id)
-        _soft_delete_notes_under_path(connection, path, timestamp)
+        _soft_delete_notes_under_path(connection, path, timestamp, trash_group_id)
+
+
+def restore_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict:
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT main_category, sub_category, sub_sub_category
+            FROM notes
+            WHERE id = ? AND is_deleted = 1
+            """,
+            (note_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"回收站中找不到笔记: {note_id}")
+        directory_id = _ensure_directory_path(
+            connection,
+            row["main_category"] or DEFAULT_MAIN_CATEGORY,
+            row["sub_category"] or DEFAULT_SUB_CATEGORY,
+            row["sub_sub_category"] or DEFAULT_SUB_SUB_CATEGORY,
+        )
+        connection.execute(
+            """
+            UPDATE notes
+            SET is_deleted = 0,
+                deleted_at = NULL,
+                trash_group_id = NULL,
+                directory_id = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (directory_id, timestamp, note_id),
+        )
+    note = get_note(note_id, database_path)
+    if note is None:
+        raise RuntimeError(f"恢复后读取失败: {note_id}")
+    return note
+
+
+def permanently_delete_note(note_id: int, database_path: Path = DATABASE_PATH) -> None:
+    with _connect(database_path) as connection:
+        connection.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        if connection.total_changes == 0:
+            raise ValueError(f"笔记不存在: {note_id}")
+
+
+def restore_trash_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict:
+    return restore_note(note_id, database_path)
+
+
+def restore_trash_directory(
+    directory_id: int, database_path: Path = DATABASE_PATH
+) -> None:
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        root_path = _get_directory_path(connection, directory_id)
+        active_parent_id = _ensure_active_parent_path_for_restore(connection, root_path)
+        directory_ids = _collect_descendant_directory_ids(connection, directory_id)
+        paths = [_get_directory_path(connection, target_id) for target_id in directory_ids]
+        trash_group_ids = _trash_group_ids_for_directories(connection, directory_ids)
+        connection.execute(
+            "UPDATE directories SET parent_id = ? WHERE id = ?",
+            (active_parent_id, directory_id),
+        )
+        connection.executemany(
+            """
+            UPDATE directories
+            SET is_deleted = 0, deleted_at = NULL, trash_group_id = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            [(timestamp, target_id) for target_id in directory_ids],
+        )
+        for path in paths:
+            _restore_notes_under_path(connection, path, timestamp, trash_group_ids)
+
+
+def permanently_delete_trash_directory(
+    directory_id: int, database_path: Path = DATABASE_PATH
+) -> None:
+    with _connect(database_path) as connection:
+        directory_ids = _collect_descendant_directory_ids(connection, directory_id)
+        paths = [_get_directory_path(connection, target_id) for target_id in directory_ids]
+        trash_group_ids = _trash_group_ids_for_directories(connection, directory_ids)
+        for path in paths:
+            _permanently_delete_notes_under_path(connection, path, trash_group_ids)
+        sorted_ids = sorted(
+            directory_ids,
+            key=lambda target_id: _directory_depth(connection, target_id),
+            reverse=True,
+        )
+        for target_id in sorted_ids:
+            connection.execute(
+                "DELETE FROM directories WHERE id = ? AND is_deleted = 1",
+                (target_id,),
+            )
+
+
+def list_trash_tree(database_path: Path = DATABASE_PATH) -> dict:
+    with _connect(database_path) as connection:
+        all_directory_rows = connection.execute(
+            """
+            SELECT id, name, parent_id, is_deleted
+            FROM directories
+            """
+        ).fetchall()
+        directory_lookup = {row["id"]: dict(row) for row in all_directory_rows}
+        directory_rows = connection.execute(
+            """
+            SELECT id, name, parent_id, created_at, updated_at, deleted_at, trash_group_id
+            FROM directories
+            WHERE is_deleted = 1
+            ORDER BY deleted_at DESC, name COLLATE NOCASE ASC, id ASC
+            """
+        ).fetchall()
+        note_rows = connection.execute(
+            """
+            SELECT id, title, main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, is_pinned, created_at, updated_at, deleted_at,
+                   trash_group_id
+            FROM notes
+            WHERE is_deleted = 1
+            ORDER BY updated_at DESC, deleted_at DESC, id DESC
+            """
+        ).fetchall()
+    directories = [dict(row) for row in directory_rows]
+    for directory in directories:
+        path = _directory_path_from_lookup(directory_lookup, directory["id"])
+        directory["path"] = path
+        directory["source_path"] = path[:-1]
+    notes = [dict(row) for row in note_rows]
+    for note in notes:
+        note["path"] = [
+            note["main_category"],
+            note["sub_category"],
+            note["sub_sub_category"],
+        ]
+    return {
+        "directories": directories,
+        "notes": notes,
+    }
+
+
+def _directory_path_from_lookup(
+    directory_lookup: dict[int, dict], directory_id: int
+) -> list[str]:
+    names = []
+    current_id = directory_id
+    while current_id is not None and current_id in directory_lookup:
+        row = directory_lookup[current_id]
+        names.append(row["name"])
+        current_id = row["parent_id"]
+    return list(reversed(names))
+
+
+def set_note_pinned(
+    note_id: int, pinned: bool, database_path: Path = DATABASE_PATH
+) -> dict:
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE notes
+            SET is_pinned = ?, updated_at = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (1 if pinned else 0, timestamp, note_id),
+        )
+        if connection.total_changes == 0:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+    note = get_note(note_id, database_path)
+    if note is None:
+        raise RuntimeError(f"固定状态更新后读取失败: {note_id}")
+    return note
+
+
+def set_note_tags(
+    note_id: int, tags: list[str], database_path: Path = DATABASE_PATH
+) -> list[str]:
+    normalized_tags = []
+    seen = set()
+    for raw_tag in tags:
+        tag = normalize_tag(raw_tag)
+        if tag and tag not in seen:
+            normalized_tags.append(tag)
+            seen.add(tag)
+
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        note_exists = connection.execute(
+            "SELECT id FROM notes WHERE id = ? AND is_deleted = 0",
+            (note_id,),
+        ).fetchone()
+        if note_exists is None:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+
+        connection.execute("DELETE FROM note_tags WHERE note_id = ?", (note_id,))
+        for tag in normalized_tags:
+            connection.execute(
+                "INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)",
+                (tag, timestamp),
+            )
+            tag_id = connection.execute(
+                "SELECT id FROM tags WHERE name = ?",
+                (tag,),
+            ).fetchone()["id"]
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO note_tags (note_id, tag_id)
+                VALUES (?, ?)
+                """,
+                (note_id, tag_id),
+            )
+        connection.execute(
+            "UPDATE notes SET tags = ?, updated_at = ? WHERE id = ?",
+            (", ".join(normalized_tags), timestamp, note_id),
+        )
+    return normalized_tags
+
+
+def get_note_tags(note_id: int, database_path: Path = DATABASE_PATH) -> list[str]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT tags.name
+            FROM tags
+            JOIN note_tags ON note_tags.tag_id = tags.id
+            WHERE note_tags.note_id = ?
+            ORDER BY tags.name COLLATE NOCASE ASC
+            """,
+            (note_id,),
+        ).fetchall()
+    return [row["name"] for row in rows]
+
+
+def list_recent_or_common_tags(
+    limit: int = 12, database_path: Path = DATABASE_PATH
+) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT tags.name, COUNT(note_tags.note_id) AS note_count, MAX(notes.updated_at) AS last_used
+            FROM tags
+            JOIN note_tags ON note_tags.tag_id = tags.id
+            JOIN notes ON notes.id = note_tags.note_id
+            WHERE notes.is_deleted = 0
+            GROUP BY tags.id, tags.name
+            ORDER BY note_count DESC, last_used DESC, tags.name COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_notes_by_tag(tag: str, database_path: Path = DATABASE_PATH) -> list[dict]:
+    normalized_tag = normalize_tag(tag)
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT notes.id, notes.title, notes.main_category, notes.sub_category,
+                   notes.sub_sub_category, notes.tags, notes.ai_visibility,
+                   notes.is_pinned, notes.created_at, notes.updated_at
+            FROM notes
+            JOIN note_tags ON note_tags.note_id = notes.id
+            JOIN tags ON tags.id = note_tags.tag_id
+            WHERE notes.is_deleted = 0 AND tags.name = ?
+            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            """,
+            (normalized_tag,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def search_notes(query: str, database_path: Path = DATABASE_PATH) -> list[dict]:
+    term = query.strip()
+    if not term:
+        return []
+    pattern = f"%{term}%"
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT notes.id, notes.title, notes.main_category, notes.sub_category,
+                   notes.sub_sub_category, notes.tags, notes.ai_visibility,
+                   notes.is_pinned, notes.created_at, notes.updated_at
+            FROM notes
+            LEFT JOIN note_tags ON note_tags.note_id = notes.id
+            LEFT JOIN tags ON tags.id = note_tags.tag_id
+            WHERE notes.is_deleted = 0
+              AND (
+                notes.title LIKE ?
+                OR notes.content_html LIKE ?
+                OR notes.main_category LIKE ?
+                OR notes.sub_category LIKE ?
+                OR notes.sub_sub_category LIKE ?
+                OR notes.tags LIKE ?
+                OR tags.name LIKE ?
+              )
+            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            """,
+            (pattern, pattern, pattern, pattern, pattern, pattern, pattern),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_pinned_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
+    return _list_notes_where("is_deleted = 0 AND is_pinned = 1", database_path)
+
+
+def list_recent_notes(
+    limit: int = 10, database_path: Path = DATABASE_PATH
+) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, title, main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, is_pinned, created_at, updated_at
+            FROM notes
+            WHERE is_deleted = 0
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_todo_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT notes.id, notes.title, notes.main_category, notes.sub_category,
+                   notes.sub_sub_category, notes.tags, notes.ai_visibility,
+                   notes.is_pinned, notes.created_at, notes.updated_at
+            FROM notes
+            LEFT JOIN note_tags ON note_tags.note_id = notes.id
+            LEFT JOIN tags ON tags.id = note_tags.tag_id
+            WHERE notes.is_deleted = 0
+              AND (
+                notes.main_category = ?
+                OR tags.name IN ('todo', '#todo')
+                OR notes.tags LIKE '%todo%'
+              )
+            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            """,
+            ("待办",),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_ai_visible_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, title, main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, is_pinned, created_at, updated_at
+            FROM notes
+            WHERE is_deleted = 0 AND ai_visibility != ?
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            """,
+            (DEFAULT_AI_VISIBILITY,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_deleted_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, title, main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, is_pinned, created_at, updated_at, deleted_at
+            FROM notes
+            WHERE is_deleted = 1
+            ORDER BY updated_at DESC, deleted_at DESC, id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _list_notes_where(where_clause: str, database_path: Path) -> list[dict]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, title, main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, is_pinned, created_at, updated_at
+            FROM notes
+            WHERE {where_clause}
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def update_note_directory(
@@ -579,7 +1017,10 @@ def _rename_notes_for_directory_path(
 
 
 def _soft_delete_notes_under_path(
-    connection: sqlite3.Connection, path: tuple[str, ...], timestamp: str
+    connection: sqlite3.Connection,
+    path: tuple[str, ...],
+    timestamp: str,
+    trash_group_id: str,
 ) -> None:
     if len(path) == 1:
         where_clause = "main_category = ?"
@@ -599,15 +1040,118 @@ def _soft_delete_notes_under_path(
         SET directory_id = NULL,
             is_deleted = 1,
             deleted_at = ?,
-            updated_at = ?
+            updated_at = ?,
+            trash_group_id = ?
         WHERE {where_clause}
         """,
         (
             timestamp,
             timestamp,
+            trash_group_id,
             *values,
         ),
     )
+
+
+def _restore_notes_under_path(
+    connection: sqlite3.Connection,
+    path: tuple[str, ...],
+    timestamp: str,
+    trash_group_ids: set[str],
+) -> None:
+    if not trash_group_ids:
+        return
+    if len(path) == 1:
+        where_clause = "main_category = ?"
+        values = (path[0],)
+        sub = DEFAULT_SUB_CATEGORY
+        sub_sub = DEFAULT_SUB_SUB_CATEGORY
+    elif len(path) == 2:
+        where_clause = "main_category = ? AND sub_category = ?"
+        values = (path[0], path[1])
+        sub = path[1]
+        sub_sub = DEFAULT_SUB_SUB_CATEGORY
+    elif len(path) == 3:
+        where_clause = "main_category = ? AND sub_category = ? AND sub_sub_category = ?"
+        values = (path[0], path[1], path[2])
+        sub = path[1]
+        sub_sub = path[2]
+    else:
+        raise ValueError("目录路径无效")
+    directory_id = _ensure_directory_path(connection, path[0], sub, sub_sub)
+    connection.execute(
+        f"""
+        UPDATE notes
+        SET directory_id = ?,
+            is_deleted = 0,
+            deleted_at = NULL,
+            trash_group_id = NULL,
+            updated_at = ?
+        WHERE {where_clause}
+          AND trash_group_id IN ({",".join("?" for _ in trash_group_ids)})
+        """,
+        (directory_id, timestamp, *values, *trash_group_ids),
+    )
+
+
+def _permanently_delete_notes_under_path(
+    connection: sqlite3.Connection, path: tuple[str, ...], trash_group_ids: set[str]
+) -> None:
+    if not trash_group_ids:
+        return
+    if len(path) == 1:
+        where_clause = "main_category = ?"
+        values = (path[0],)
+    elif len(path) == 2:
+        where_clause = "main_category = ? AND sub_category = ?"
+        values = (path[0], path[1])
+    elif len(path) == 3:
+        where_clause = "main_category = ? AND sub_category = ? AND sub_sub_category = ?"
+        values = (path[0], path[1], path[2])
+    else:
+        raise ValueError("目录路径无效")
+    connection.execute(
+        f"""
+        DELETE FROM notes
+        WHERE is_deleted = 1
+          AND {where_clause}
+          AND trash_group_id IN ({",".join("?" for _ in trash_group_ids)})
+        """,
+        (*values, *trash_group_ids),
+    )
+
+
+def _ensure_active_parent_path_for_restore(
+    connection: sqlite3.Connection, path: tuple[str, ...]
+) -> int | None:
+    if len(path) <= 1:
+        return None
+    parent_path = path[:-1]
+    if len(parent_path) == 1:
+        return _ensure_directory(connection, parent_path[0], None)
+    if len(parent_path) == 2:
+        main_id = _ensure_directory(connection, parent_path[0], None)
+        return _ensure_directory(connection, parent_path[1], main_id)
+    main_id = _ensure_directory(connection, parent_path[0], None)
+    sub_id = _ensure_directory(connection, parent_path[1], main_id)
+    return _ensure_directory(connection, parent_path[2], sub_id)
+
+
+def _trash_group_ids_for_directories(
+    connection: sqlite3.Connection, directory_ids: set[int]
+) -> set[str]:
+    if not directory_ids:
+        return set()
+    placeholders = ",".join("?" for _ in directory_ids)
+    rows = connection.execute(
+        f"""
+        SELECT DISTINCT trash_group_id
+        FROM directories
+        WHERE id IN ({placeholders}) AND trash_group_id IS NOT NULL
+        """,
+        tuple(directory_ids),
+    ).fetchall()
+    return {row["trash_group_id"] for row in rows}
 
 
 def _collect_descendant_directory_ids(

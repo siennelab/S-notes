@@ -54,6 +54,40 @@ QPushButton:hover {
     background: #f7faf8;
     border-color: #d1d5db;
 }
+#chipButton {
+    border: 0;
+    border-radius: 10px;
+    padding: 6px 9px;
+    background: #e6efea;
+    color: #4b5563;
+    font-size: 12px;
+}
+#chipButton:hover {
+    background: #dde8ef;
+}
+#trashButton {
+    border: 0;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: #eef2f5;
+    color: #6b7280;
+    text-align: left;
+}
+#trashButton:hover {
+    background: #e5e7eb;
+}
+#clearFilterButton {
+    border: 0;
+    border-radius: 9px;
+    padding: 2px 7px;
+    background: #eef2f5;
+    color: #9ca3af;
+    font-size: 13px;
+}
+#clearFilterButton:hover {
+    background: #dde8ef;
+    color: #6b7280;
+}
 QTextEdit {
     border: 1px solid #e5e7eb;
     border-radius: 12px;
@@ -117,8 +151,13 @@ QInputDialog {
     padding: 10px 2px;
 }
 #metadataLabel,
-#statusLabel {
+#statusLabel,
+#sectionLabel,
+#filterLabel {
     color: #9ca3af;
     font-size: 12px;
+}
+#filterLabel {
+    padding: 2px 2px 0 2px;
 }
 """
