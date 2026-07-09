@@ -13,10 +13,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QListView,
     QMessageBox,
     QPushButton,
     QTreeWidget,
@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ai_safe_export import AiSafePackageExporter
+from src.ai_targets import AI_TARGETS
 from src.database import (
     DATABASE_PATH,
     PROJECT_ROOT,
@@ -36,6 +38,7 @@ from src.database import (
 )
 from src.tag_manager import parse_tags
 from src.time_utils import format_display_datetime, now_shanghai
+from src.sensitive_scan import findings_to_dialog_text
 
 
 EXPORTS_ROOT = PROJECT_ROOT / "exports"
@@ -94,12 +97,21 @@ class ExportResult:
     note_count: int
 
 
+def configure_combo_popup(combo: QComboBox, minimum_popup_width: int) -> None:
+    combo.setView(QListView())
+    combo.setMaxVisibleItems(12)
+    combo.setMinimumContentsLength(8)
+    combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    combo.view().setMinimumWidth(minimum_popup_width)
+    combo.view().setObjectName("comboPopupView")
+
+
 class ExportCenterDialog(QDialog):
     def __init__(self, context: ExportContext, parent=None) -> None:
         super().__init__(parent)
         self.context = context
         self.last_export_path: Path | None = None
-        self.setWindowTitle("普通导出")
+        self.setWindowTitle("导出中心")
         self.setModal(True)
         self.resize(720, 460)
         self.setMinimumSize(680, 420)
@@ -119,10 +131,10 @@ class ExportCenterDialog(QDialog):
         scope_form.setContentsMargins(0, 0, 0, 0)
         scope_form.setSpacing(8)
         self.scope_combo = QComboBox()
+        configure_combo_popup(self.scope_combo, 300)
         for scope in self.available_scopes():
             self.scope_combo.addItem(SCOPE_LABELS[scope], scope)
         self.scope_combo.setMinimumWidth(260)
-        self.scope_combo.view().setMinimumWidth(280)
         self.scope_combo.currentIndexChanged.connect(self.handle_scope_changed)
         scope_form.addRow("范围", self.scope_combo)
         form_row.addLayout(scope_form)
@@ -131,11 +143,11 @@ class ExportCenterDialog(QDialog):
         format_form.setContentsMargins(0, 0, 0, 0)
         format_form.setSpacing(8)
         self.format_combo = QComboBox()
+        configure_combo_popup(self.format_combo, 260)
         self.format_combo.addItem(FORMAT_LABELS[FORMAT_MARKDOWN], FORMAT_MARKDOWN)
         self.format_combo.addItem(FORMAT_LABELS[FORMAT_JSON], FORMAT_JSON)
         self.format_combo.addItem("SQLite 数据库备份", FORMAT_SQLITE)
         self.format_combo.setMinimumWidth(220)
-        self.format_combo.view().setMinimumWidth(240)
         format_form.addRow("格式", self.format_combo)
         form_row.addLayout(format_form)
         form_row.addStretch(1)
@@ -153,19 +165,47 @@ class ExportCenterDialog(QDialog):
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
+        ai_section = QWidget()
+        ai_section.setObjectName("aiSafeExportSection")
+        ai_layout = QHBoxLayout(ai_section)
+        ai_layout.setContentsMargins(12, 10, 12, 10)
+        ai_layout.setSpacing(10)
+        ai_title = QLabel("AI 安全导出")
+        ai_title.setObjectName("exportSectionTitle")
+        ai_layout.addWidget(ai_title)
+        self.ai_target_combo = QComboBox()
+        configure_combo_popup(self.ai_target_combo, 200)
+        for target_name in AI_TARGETS:
+            self.ai_target_combo.addItem(target_name, target_name)
+        self.ai_target_combo.setMinimumWidth(180)
+        ai_layout.addWidget(QLabel("对象"))
+        ai_layout.addWidget(self.ai_target_combo)
+        self.ai_export_button = QPushButton("生成 AI 安全包")
+        self.ai_export_button.clicked.connect(self.export_ai_safe_package)
+        ai_layout.addWidget(self.ai_export_button)
+        ai_layout.addStretch(1)
+        layout.addWidget(ai_section)
+
         button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(8)
+        button_row.setAlignment(Qt.AlignVCenter)
         button_row.addStretch(1)
         self.finder_button = QPushButton("在 Finder 中显示")
+        self.finder_button.setFixedHeight(30)
         self.finder_button.setEnabled(False)
         self.finder_button.clicked.connect(self.reveal_last_export)
         button_row.addWidget(self.finder_button)
 
-        buttons = QDialogButtonBox()
-        self.export_button = buttons.addButton("导出", QDialogButtonBox.AcceptRole)
-        buttons.addButton("取消", QDialogButtonBox.RejectRole)
-        buttons.accepted.connect(self.export_selected)
-        buttons.rejected.connect(self.reject)
-        button_row.addWidget(buttons)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setFixedHeight(30)
+        self.cancel_button.clicked.connect(self.reject)
+        button_row.addWidget(self.cancel_button)
+
+        self.export_button = QPushButton("导出")
+        self.export_button.setFixedHeight(30)
+        self.export_button.clicked.connect(self.export_selected)
+        button_row.addWidget(self.export_button)
         layout.addLayout(button_row)
 
         self.selection_notes = list_notes_for_export()
@@ -383,11 +423,58 @@ class ExportCenterDialog(QDialog):
 
     def reveal_last_export(self) -> None:
         if self.last_export_path is None:
+            QMessageBox.information(self, "没有可显示的文件", "还没有成功导出或生成文件。")
+            return
+        if not self.last_export_path.exists():
+            QMessageBox.warning(self, "无法打开 Finder", f"路径不存在：{self.last_export_path}")
             return
         try:
             subprocess.run(["open", "-R", str(self.last_export_path)], check=True)
         except Exception as error:
             QMessageBox.warning(self, "无法打开 Finder", str(error))
+
+    def export_ai_safe_package(self) -> None:
+        target = self.ai_target_combo.currentData()
+        try:
+            exporter = AiSafePackageExporter()
+            plan = exporter.build_plan(target)
+            if not plan.rendered_notes:
+                QMessageBox.information(
+                    self,
+                    "没有可导出的笔记",
+                    "当前 AI 对象没有可导出的安全资料。",
+                )
+                return
+            if plan.has_sensitive_findings and not self.confirm_sensitive_export(plan):
+                return
+            result = exporter.write_plan(plan)
+        except Exception as error:
+            QMessageBox.warning(self, "AI 安全导出失败", str(error))
+            return
+
+        self.last_export_path = result.package_dir
+        self.finder_button.setEnabled(True)
+        warnings = f"\n提示：{'；'.join(plan.warnings)}" if plan.warnings else ""
+        QMessageBox.information(
+            self,
+            "AI 安全导出成功",
+            (
+                "AI 安全导出成功\n"
+                f"文件夹：{result.package_dir}\n"
+                f"笔记数量：{result.note_count}"
+                f"{warnings}"
+            ),
+        )
+
+    def confirm_sensitive_export(self, plan) -> bool:
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("发现疑似敏感内容")
+        message_box.setText(findings_to_dialog_text(plan.scan_summary))
+        continue_button = message_box.addButton("继续导出", QMessageBox.AcceptRole)
+        message_box.addButton("取消", QMessageBox.RejectRole)
+        message_box.setDefaultButton(continue_button)
+        message_box.exec()
+        return message_box.clickedButton() == continue_button
 
     def notes_for_scope(self, scope: str) -> list[dict]:
         if scope == SCOPE_CURRENT_NOTE:

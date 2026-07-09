@@ -4,6 +4,14 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from src.ai_targets import (
+    AI_TARGET_COMMON,
+    AI_TARGETS,
+    AI_VISIBILITY_NO_EXPORT,
+    LEGACY_AI_TARGET_RENAMES,
+    normalize_ai_targets,
+    validate_ai_visibility,
+)
 from src.tag_manager import normalize_tag
 from src.time_utils import now_shanghai, now_shanghai_iso
 
@@ -13,7 +21,7 @@ DATABASE_PATH = PROJECT_ROOT / "data" / "s_notes.db"
 DEFAULT_MAIN_CATEGORY = "临时"
 DEFAULT_SUB_CATEGORY = "无"
 DEFAULT_SUB_SUB_CATEGORY = "无"
-DEFAULT_AI_VISIBILITY = "不导出给 AI"
+DEFAULT_AI_VISIBILITY = AI_VISIBILITY_NO_EXPORT
 INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "备忘", "终端指令")
 
 
@@ -109,6 +117,7 @@ def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
         connection.executescript(SCHEMA_SQL)
         _migrate_notes_table(connection)
         _migrate_directories_table(connection)
+        _migrate_note_ai_targets_table(connection)
         _seed_initial_categories(connection)
         _ensure_directory_paths_for_notes(connection)
     return database_path
@@ -134,6 +143,34 @@ def _migrate_directories_table(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f"ALTER TABLE directories ADD COLUMN {column_name} {column_definition}"
             )
+
+
+def _migrate_note_ai_targets_table(connection: sqlite3.Connection) -> None:
+    for old_name, new_name in LEGACY_AI_TARGET_RENAMES.items():
+        connection.execute(
+            """
+            UPDATE note_ai_targets
+            SET target_name = ?
+            WHERE target_name = ?
+            """,
+            (new_name, old_name),
+        )
+    connection.execute(
+        """
+        DELETE FROM note_ai_targets
+        WHERE id NOT IN (
+            SELECT MIN(id)
+            FROM note_ai_targets
+            GROUP BY note_id, target_name
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_note_ai_targets_note_target
+        ON note_ai_targets(note_id, target_name)
+        """
+    )
 
 
 def _seed_initial_categories(connection: sqlite3.Connection) -> None:
@@ -813,6 +850,74 @@ def set_note_pinned(
     return note
 
 
+def set_note_ai_visibility(
+    note_id: int, visibility: str, database_path: Path = DATABASE_PATH
+) -> dict:
+    clean_visibility = validate_ai_visibility(visibility)
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE notes
+            SET ai_visibility = ?, updated_at = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (clean_visibility, timestamp, note_id),
+        )
+        if connection.total_changes == 0:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+    note = get_note(note_id, database_path)
+    if note is None:
+        raise RuntimeError(f"AI 可见性更新后读取失败: {note_id}")
+    return note
+
+
+def set_note_ai_targets(
+    note_id: int, targets: list[str], database_path: Path = DATABASE_PATH
+) -> list[str]:
+    normalized_targets = normalize_ai_targets(targets)
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        note_exists = connection.execute(
+            "SELECT id FROM notes WHERE id = ? AND is_deleted = 0",
+            (note_id,),
+        ).fetchone()
+        if note_exists is None:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+
+        connection.execute("DELETE FROM note_ai_targets WHERE note_id = ?", (note_id,))
+        for target in normalized_targets:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO note_ai_targets (note_id, target_name, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (note_id, target, timestamp),
+            )
+        connection.execute(
+            "UPDATE notes SET updated_at = ? WHERE id = ?",
+            (timestamp, note_id),
+        )
+    return normalized_targets
+
+
+def get_note_ai_targets(
+    note_id: int, database_path: Path = DATABASE_PATH
+) -> list[str]:
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT target_name
+            FROM note_ai_targets
+            WHERE note_id = ?
+            ORDER BY target_name COLLATE NOCASE ASC
+            """,
+            (note_id,),
+        ).fetchall()
+    target_set = {row["target_name"] for row in rows}
+    return [target for target in AI_TARGETS if target in target_set]
+
+
 def set_note_tags(
     note_id: int, tags: list[str], database_path: Path = DATABASE_PATH
 ) -> list[str]:
@@ -998,6 +1103,43 @@ def list_ai_visible_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
             ORDER BY updated_at DESC, created_at DESC, id DESC
             """,
             (DEFAULT_AI_VISIBILITY,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_ai_safe_notes_for_target(
+    target_name: str, database_path: Path = DATABASE_PATH
+) -> list[dict]:
+    targets = normalize_ai_targets([target_name])
+    target = targets[0]
+    target_filter = [AI_TARGET_COMMON] if target == AI_TARGET_COMMON else [
+        AI_TARGET_COMMON,
+        target,
+    ]
+    placeholders = ",".join("?" for _ in target_filter)
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT DISTINCT
+                notes.id,
+                notes.title,
+                notes.content_html,
+                notes.main_category,
+                notes.sub_category,
+                notes.sub_sub_category,
+                notes.tags,
+                notes.ai_visibility,
+                notes.is_pinned,
+                notes.created_at,
+                notes.updated_at
+            FROM notes
+            JOIN note_ai_targets ON note_ai_targets.note_id = notes.id
+            WHERE notes.is_deleted = 0
+              AND notes.ai_visibility != ?
+              AND note_ai_targets.target_name IN ({placeholders})
+            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            """,
+            (DEFAULT_AI_VISIBILITY, *target_filter),
         ).fetchall()
     return [dict(row) for row in rows]
 

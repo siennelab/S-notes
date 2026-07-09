@@ -5,12 +5,14 @@ import sys
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListView,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS
 from src.database import (
     DEFAULT_MAIN_CATEGORY,
     DEFAULT_SUB_CATEGORY,
@@ -29,6 +32,7 @@ from src.database import (
     create_note_in_directory,
     delete_directory,
     get_note,
+    get_note_ai_targets,
     get_note_tags,
     list_directories,
     list_deleted_notes,
@@ -44,6 +48,8 @@ from src.database import (
     restore_trash_directory,
     search_notes,
     set_note_pinned,
+    set_note_ai_targets,
+    set_note_ai_visibility,
     set_note_tags,
     soft_delete_note,
     update_note,
@@ -225,7 +231,7 @@ class MainWindow(QMainWindow):
         self.metadata_panel = QWidget()
         self.metadata_panel.setObjectName("metadataPanel")
         metadata_panel_layout = QVBoxLayout(self.metadata_panel)
-        metadata_panel_layout.setContentsMargins(16, 12, 16, 12)
+        metadata_panel_layout.setContentsMargins(14, 10, 14, 10)
         metadata_panel_layout.setSpacing(8)
 
         metadata_top_row = QHBoxLayout()
@@ -234,8 +240,11 @@ class MainWindow(QMainWindow):
 
         main_label = QLabel("主分类")
         main_label.setObjectName("metadataFieldLabel")
+        main_label.setAlignment(Qt.AlignVCenter)
         self.main_category_combo = QComboBox()
-        self.main_category_combo.setFixedWidth(120)
+        self.configure_combo_popup(self.main_category_combo, 180)
+        self.main_category_combo.setMinimumWidth(150)
+        self.main_category_combo.setFixedHeight(26)
         self.main_category_combo.currentTextChanged.connect(
             self.handle_main_category_changed
         )
@@ -244,8 +253,11 @@ class MainWindow(QMainWindow):
 
         sub_label = QLabel("子分类")
         sub_label.setObjectName("metadataFieldLabel")
+        sub_label.setAlignment(Qt.AlignVCenter)
         self.sub_category_combo = QComboBox()
-        self.sub_category_combo.setFixedWidth(140)
+        self.configure_combo_popup(self.sub_category_combo, 190)
+        self.sub_category_combo.setMinimumWidth(170)
+        self.sub_category_combo.setFixedHeight(26)
         self.sub_category_combo.currentTextChanged.connect(
             self.handle_sub_category_changed
         )
@@ -254,38 +266,74 @@ class MainWindow(QMainWindow):
 
         sub_sub_label = QLabel("子子分类")
         sub_sub_label.setObjectName("metadataFieldLabel")
+        sub_sub_label.setAlignment(Qt.AlignVCenter)
         self.sub_sub_category_combo = QComboBox()
-        self.sub_sub_category_combo.setFixedWidth(120)
+        self.configure_combo_popup(self.sub_sub_category_combo, 180)
+        self.sub_sub_category_combo.setMinimumWidth(150)
+        self.sub_sub_category_combo.setFixedHeight(26)
         self.sub_sub_category_combo.currentTextChanged.connect(
             self.handle_sub_sub_category_changed
         )
         metadata_top_row.addWidget(sub_sub_label)
         metadata_top_row.addWidget(self.sub_sub_category_combo, stretch=1)
-
-        ai_label = QLabel("AI 可见性")
-        ai_label.setObjectName("metadataFieldLabel")
-        self.ai_visibility_label = QLabel("AI 可见性：-")
-        self.ai_visibility_label.setObjectName("metadataLabel")
-        self.ai_visibility_label.setFixedWidth(150)
-        metadata_top_row.addWidget(ai_label)
-        metadata_top_row.addWidget(self.ai_visibility_label, stretch=1)
         metadata_panel_layout.addLayout(metadata_top_row)
 
-        metadata_bottom_row = QHBoxLayout()
-        metadata_bottom_row.setContentsMargins(0, 0, 0, 0)
-        metadata_bottom_row.setSpacing(12)
+        metadata_tags_row = QHBoxLayout()
+        metadata_tags_row.setContentsMargins(0, 0, 0, 0)
+        metadata_tags_row.setSpacing(12)
         tags_label = QLabel("标签")
         tags_label.setObjectName("metadataFieldLabel")
+        tags_label.setAlignment(Qt.AlignVCenter)
         self.tags_input = QLineEdit()
+        self.tags_input.setFixedHeight(26)
         self.tags_input.setPlaceholderText("todo, vps, ai-ok")
         self.tags_input.textChanged.connect(self.handle_tags_text_changed)
-        metadata_bottom_row.addWidget(tags_label)
-        metadata_bottom_row.addWidget(self.tags_input, stretch=1)
+        metadata_tags_row.addWidget(tags_label)
+        metadata_tags_row.addWidget(self.tags_input, stretch=1)
         self.metadata_collapse_button = QPushButton("▲")
         self.metadata_collapse_button.setObjectName("metadataCollapseButton")
+        self.metadata_collapse_button.setFixedHeight(24)
         self.metadata_collapse_button.clicked.connect(lambda: self.set_metadata_expanded(False))
-        metadata_bottom_row.addWidget(self.metadata_collapse_button)
-        metadata_panel_layout.addLayout(metadata_bottom_row)
+        metadata_tags_row.addWidget(self.metadata_collapse_button)
+        metadata_panel_layout.addLayout(metadata_tags_row)
+
+        metadata_ai_row = QHBoxLayout()
+        metadata_ai_row.setContentsMargins(0, 2, 0, 0)
+        metadata_ai_row.setSpacing(12)
+        ai_label = QLabel("AI 可见性")
+        ai_label.setObjectName("metadataFieldLabel")
+        ai_label.setAlignment(Qt.AlignVCenter)
+        self.ai_visibility_combo = QComboBox()
+        self.configure_combo_popup(self.ai_visibility_combo, 210)
+        self.ai_visibility_combo.addItems(AI_VISIBILITY_OPTIONS)
+        self.ai_visibility_combo.setMinimumWidth(180)
+        self.ai_visibility_combo.setFixedHeight(26)
+        self.ai_visibility_combo.currentTextChanged.connect(
+            self.handle_ai_visibility_changed
+        )
+        metadata_ai_row.addWidget(ai_label)
+        metadata_ai_row.addWidget(self.ai_visibility_combo)
+        ai_targets_label = QLabel("AI 对象")
+        ai_targets_label.setObjectName("metadataFieldLabel")
+        ai_targets_label.setAlignment(Qt.AlignVCenter)
+        metadata_ai_row.addWidget(ai_targets_label)
+        ai_targets_widget = QWidget()
+        ai_targets_widget.setObjectName("aiTargetsWidget")
+        ai_targets_layout = QHBoxLayout(ai_targets_widget)
+        ai_targets_layout.setContentsMargins(0, 0, 0, 0)
+        ai_targets_layout.setSpacing(16)
+        self.ai_target_checks: dict[str, QCheckBox] = {}
+        for target_name in AI_TARGETS:
+            checkbox = QCheckBox(target_name)
+            checkbox.setObjectName("aiTargetCheck")
+            checkbox.setFixedHeight(22)
+            checkbox.setMinimumWidth(66)
+            checkbox.stateChanged.connect(self.handle_ai_targets_changed)
+            self.ai_target_checks[target_name] = checkbox
+            ai_targets_layout.addWidget(checkbox)
+        ai_targets_layout.addStretch(1)
+        metadata_ai_row.addWidget(ai_targets_widget, stretch=1)
+        metadata_panel_layout.addLayout(metadata_ai_row)
         layout.addWidget(self.metadata_panel)
         self.set_metadata_expanded(False)
 
@@ -802,7 +850,8 @@ class MainWindow(QMainWindow):
         self.body_edit.set_note_content(note["content_html"])
         self.populate_category_controls(note)
         self.tags_input.setText(format_tags(get_note_tags(note_id)))
-        self.ai_visibility_label.setText(f"AI 可见性：{note['ai_visibility']}")
+        self.set_ai_visibility_control(note["ai_visibility"])
+        self.set_ai_target_controls(get_note_ai_targets(note_id))
         self.update_metadata_summary()
         self.set_metadata_expanded(False)
         self.status_label.setText(
@@ -824,7 +873,8 @@ class MainWindow(QMainWindow):
         self.body_edit.set_note_content(note["content_html"])
         self.populate_category_controls(note)
         self.tags_input.setText(format_tags(get_note_tags(note_id)))
-        self.ai_visibility_label.setText(f"AI 可见性：{note['ai_visibility']}")
+        self.set_ai_visibility_control(note["ai_visibility"])
+        self.set_ai_target_controls(get_note_ai_targets(note_id))
         self.update_metadata_summary()
         self.set_metadata_expanded(False)
         self.status_label.setText("回收站中 · 只读")
@@ -877,7 +927,7 @@ class MainWindow(QMainWindow):
             path_parts.append(sub_sub)
         tag_names = parse_tags(self.tags_input.text())
         tags = " ".join(f"#{tag}" for tag in tag_names) if tag_names else "无标签"
-        ai_text = self.ai_visibility_label.text().replace("AI 可见性：", "AI: ")
+        ai_text = f"AI: {self.ai_visibility_combo.currentText()}"
         return f"{' / '.join(path_parts)} · {tags} · {ai_text}"
 
     def update_metadata_summary(self) -> None:
@@ -893,6 +943,14 @@ class MainWindow(QMainWindow):
         if hasattr(self, "metadata_panel"):
             self.metadata_panel.setVisible(expanded)
 
+    def configure_combo_popup(self, combo: QComboBox, minimum_popup_width: int) -> None:
+        combo.setView(QListView())
+        combo.setMaxVisibleItems(12)
+        combo.setMinimumContentsLength(8)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        combo.view().setMinimumWidth(minimum_popup_width)
+        combo.view().setObjectName("comboPopupView")
+
     def set_combo_items(
         self, combo: QComboBox, values: list[str], current_value: str
     ) -> None:
@@ -907,6 +965,26 @@ class MainWindow(QMainWindow):
         if index >= 0:
             combo.setCurrentIndex(index)
         combo.blockSignals(False)
+
+    def set_ai_visibility_control(self, visibility: str) -> None:
+        self.ai_visibility_combo.blockSignals(True)
+        index = self.ai_visibility_combo.findText(visibility)
+        self.ai_visibility_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.ai_visibility_combo.blockSignals(False)
+
+    def set_ai_target_controls(self, targets: list[str]) -> None:
+        target_set = set(targets)
+        for target_name, checkbox in self.ai_target_checks.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(target_name in target_set)
+            checkbox.blockSignals(False)
+
+    def selected_ai_targets(self) -> list[str]:
+        return [
+            target_name
+            for target_name, checkbox in self.ai_target_checks.items()
+            if checkbox.isChecked()
+        ]
 
     def directory_names(self, parent_id: int | None) -> list[str]:
         return [
@@ -979,11 +1057,21 @@ class MainWindow(QMainWindow):
         self.update_metadata_summary()
         self.mark_note_dirty()
 
+    def handle_ai_visibility_changed(self, _value: str = "") -> None:
+        self.update_metadata_summary()
+        self.mark_note_dirty()
+
+    def handle_ai_targets_changed(self, _state: int = 0) -> None:
+        self.mark_note_dirty()
+
     def set_editor_enabled(self, enabled: bool) -> None:
         self.title_input.setEnabled(enabled)
         self.main_category_combo.setEnabled(enabled)
         self.sub_category_combo.setEnabled(enabled)
         self.sub_sub_category_combo.setEnabled(enabled)
+        self.ai_visibility_combo.setEnabled(enabled)
+        for checkbox in self.ai_target_checks.values():
+            checkbox.setEnabled(enabled)
         self.tags_input.setEnabled(enabled)
         self.body_edit.setEnabled(enabled)
         self.editor_toolbar.setEnabled(enabled)
@@ -1019,6 +1107,8 @@ class MainWindow(QMainWindow):
                 or DEFAULT_SUB_SUB_CATEGORY,
             )
             set_note_tags(note["id"], parse_tags(self.tags_input.text()))
+            set_note_ai_visibility(note["id"], self.ai_visibility_combo.currentText())
+            set_note_ai_targets(note["id"], self.selected_ai_targets())
             note = get_note(note["id"])
             if note is None:
                 raise RuntimeError("保存后读取失败")
@@ -1262,7 +1352,8 @@ class MainWindow(QMainWindow):
         self.main_category_combo.clear()
         self.sub_category_combo.clear()
         self.sub_sub_category_combo.clear()
-        self.ai_visibility_label.setText("AI 可见性：-")
+        self.set_ai_visibility_control(AI_VISIBILITY_OPTIONS[0])
+        self.set_ai_target_controls([])
         self.status_label.setText("未选择笔记")
         self.has_unsaved_changes = False
         self.save_timer.stop()

@@ -28,6 +28,7 @@ QComboBox {
     padding: 4px 18px 4px 2px;
     background: #FAF7F2;
     color: #2C2926;
+    combobox-popup: 0;
 }
 QComboBox:hover,
 QComboBox:focus {
@@ -42,14 +43,30 @@ QComboBox::down-arrow {
     width: 0;
     height: 0;
 }
-QComboBox QAbstractItemView {
+QComboBox QAbstractItemView,
+QComboBox QListView,
+#comboPopupView {
     border: 1px solid #D6CEC4;
     border-radius: 6px;
-    padding: 4px;
     background: #FAF7F2;
     color: #2C2926;
+    outline: 0;
     selection-background-color: #E8DFD3;
     selection-color: #2C2926;
+}
+QComboBox QAbstractItemView::item,
+QComboBox QListView::item,
+#comboPopupView::item {
+    min-height: 26px;
+    padding: 5px 10px;
+    background: #FAF7F2;
+    color: #2C2926;
+}
+QComboBox QAbstractItemView::item:selected,
+QComboBox QListView::item:selected,
+#comboPopupView::item:selected {
+    background: #E8DFD3;
+    color: #2C2926;
 }
 QPushButton {
     border: 0;
@@ -175,28 +192,41 @@ QInputDialog {
 #metadataPanel {
     background: #F0E6D8;
     border-radius: 8px;
-    max-height: 120px;
+    max-height: 175px;
 }
 #metadataFieldLabel {
     color: #8A8078;
     font-size: 12px;
-    padding-top: 4px;
+    padding-top: 0;
 }
 #metadataPanel QComboBox,
 #metadataPanel QLineEdit {
-    min-height: 28px;
-    max-height: 32px;
+    min-height: 24px;
+    max-height: 26px;
     background: #FAF7F2;
+    padding-top: 2px;
+    padding-bottom: 2px;
 }
 #metadataPanel #metadataLabel {
     min-height: 28px;
     max-height: 32px;
     padding-top: 6px;
 }
+#aiTargetCheck {
+    color: #6B635B;
+    font-size: 12px;
+    spacing: 6px;
+    padding-top: 1px;
+    padding-bottom: 1px;
+}
+#aiTargetCheck::indicator {
+    width: 12px;
+    height: 12px;
+}
 #metadataCollapseButton {
     border: 0;
     border-radius: 4px;
-    padding: 2px 6px;
+    padding: 1px 6px;
     background: transparent;
     color: #8A8078;
     font-size: 12px;
@@ -362,6 +392,18 @@ QInputDialog {
 #exportDynamicArea {
     background: #F0E6D8;
     border-radius: 8px;
+}
+#aiSafeExportSection {
+    background: #F3EDE4;
+    border-radius: 8px;
+}
+#exportSectionTitle {
+    color: #2C2926;
+    font-size: 14px;
+    font-weight: 600;
+}
+#exportDialog QPushButton {
+    min-height: 30px;
 }
 #exportInfoLabel {
     color: #8A8078;
