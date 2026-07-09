@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import sqlite3
 import uuid
 from pathlib import Path
@@ -12,7 +13,7 @@ from src.ai_targets import (
     normalize_ai_targets,
     validate_ai_visibility,
 )
-from src.tag_manager import normalize_tag
+from src.tag_manager import normalize_tag, parse_tags
 from src.time_utils import now_shanghai, now_shanghai_iso
 
 
@@ -82,6 +83,28 @@ CREATE TABLE IF NOT EXISTS memory_receipts (
     receipt_text TEXT NOT NULL,
     imported_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ai_receipt_inbox (
+    id INTEGER PRIMARY KEY,
+    raw_text TEXT NOT NULL,
+    parse_status TEXT NOT NULL DEFAULT 'failed',
+    status TEXT NOT NULL DEFAULT 'pending',
+    source TEXT NOT NULL DEFAULT '未知',
+    action TEXT NOT NULL DEFAULT '新增',
+    title TEXT NOT NULL DEFAULT '',
+    main_category TEXT NOT NULL DEFAULT '临时',
+    sub_category TEXT NOT NULL DEFAULT '无',
+    sub_sub_category TEXT NOT NULL DEFAULT '无',
+    tags TEXT NOT NULL DEFAULT '',
+    ai_visibility TEXT NOT NULL DEFAULT '不导出给 AI',
+    ai_targets TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    parse_error TEXT
+);
 """
 
 
@@ -103,6 +126,27 @@ DIRECTORY_COLUMNS = {
     "trash_group_id": "TEXT",
 }
 
+AI_RECEIPT_INBOX_COLUMNS = {
+    "raw_text": "TEXT NOT NULL DEFAULT ''",
+    "parse_status": "TEXT NOT NULL DEFAULT 'failed'",
+    "status": "TEXT NOT NULL DEFAULT 'pending'",
+    "source": "TEXT NOT NULL DEFAULT '未知'",
+    "action": "TEXT NOT NULL DEFAULT '新增'",
+    "title": "TEXT NOT NULL DEFAULT ''",
+    "main_category": "TEXT NOT NULL DEFAULT '临时'",
+    "sub_category": "TEXT NOT NULL DEFAULT '无'",
+    "sub_sub_category": "TEXT NOT NULL DEFAULT '无'",
+    "tags": "TEXT NOT NULL DEFAULT ''",
+    "ai_visibility": "TEXT NOT NULL DEFAULT '不导出给 AI'",
+    "ai_targets": "TEXT NOT NULL DEFAULT ''",
+    "body": "TEXT NOT NULL DEFAULT ''",
+    "note_id": "INTEGER REFERENCES notes(id) ON DELETE SET NULL",
+    "created_at": "TEXT NOT NULL DEFAULT ''",
+    "updated_at": "TEXT NOT NULL DEFAULT ''",
+    "decided_at": "TEXT",
+    "parse_error": "TEXT",
+}
+
 
 def _connect(database_path: Path = DATABASE_PATH) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path)
@@ -118,6 +162,7 @@ def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
         _migrate_notes_table(connection)
         _migrate_directories_table(connection)
         _migrate_note_ai_targets_table(connection)
+        _migrate_ai_receipt_inbox_table(connection)
         _seed_initial_categories(connection)
         _ensure_directory_paths_for_notes(connection)
     return database_path
@@ -142,6 +187,18 @@ def _migrate_directories_table(connection: sqlite3.Connection) -> None:
         if column_name not in existing_columns:
             connection.execute(
                 f"ALTER TABLE directories ADD COLUMN {column_name} {column_definition}"
+            )
+
+
+def _migrate_ai_receipt_inbox_table(connection: sqlite3.Connection) -> None:
+    existing_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(ai_receipt_inbox)").fetchall()
+    }
+    for column_name, column_definition in AI_RECEIPT_INBOX_COLUMNS.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE ai_receipt_inbox ADD COLUMN {column_name} {column_definition}"
             )
 
 
@@ -916,6 +973,259 @@ def get_note_ai_targets(
         ).fetchall()
     target_set = {row["target_name"] for row in rows}
     return [target for target in AI_TARGETS if target in target_set]
+
+
+def create_ai_receipt_inbox_item(
+    receipt: dict, database_path: Path = DATABASE_PATH
+) -> dict:
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO ai_receipt_inbox (
+                raw_text, parse_status, status, source, action, title,
+                main_category, sub_category, sub_sub_category, tags,
+                ai_visibility, ai_targets, body, created_at, updated_at,
+                parse_error
+            )
+            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt.get("raw_text", ""),
+                receipt.get("parse_status", "failed"),
+                receipt.get("source", "未知"),
+                receipt.get("action", "新增"),
+                receipt.get("title", ""),
+                receipt.get("main_category", DEFAULT_MAIN_CATEGORY),
+                receipt.get("sub_category", DEFAULT_SUB_CATEGORY),
+                receipt.get("sub_sub_category", DEFAULT_SUB_SUB_CATEGORY),
+                receipt.get("tags", ""),
+                receipt.get("ai_visibility", DEFAULT_AI_VISIBILITY),
+                receipt.get("ai_targets", ""),
+                receipt.get("body", ""),
+                timestamp,
+                timestamp,
+                receipt.get("parse_error", ""),
+            ),
+        )
+        inbox_id = cursor.lastrowid
+    inbox_item = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if inbox_item is None:
+        raise RuntimeError("导入回执后读取失败")
+    return inbox_item
+
+
+def list_ai_receipt_inbox_items(
+    status: str | None = "pending",
+    database_path: Path = DATABASE_PATH,
+) -> list[dict]:
+    status_clause = ""
+    params: tuple[str, ...] = ()
+    if status is not None:
+        status_clause = "WHERE status = ?"
+        params = (status,)
+    with _connect(database_path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, parse_status, status, source, action, title,
+                   main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, ai_targets, note_id, created_at,
+                   updated_at, decided_at, parse_error
+            FROM ai_receipt_inbox
+            {status_clause}
+            ORDER BY
+                CASE status
+                    WHEN 'pending' THEN 0
+                    WHEN 'accepted' THEN 1
+                    WHEN 'rejected' THEN 2
+                    ELSE 3
+                END,
+                updated_at DESC,
+                id DESC
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_ai_receipt_inbox_item(
+    inbox_id: int, database_path: Path = DATABASE_PATH
+) -> dict | None:
+    with _connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT id, raw_text, parse_status, status, source, action, title,
+                   main_category, sub_category, sub_sub_category, tags,
+                   ai_visibility, ai_targets, body, note_id, created_at,
+                   updated_at, decided_at, parse_error
+            FROM ai_receipt_inbox
+            WHERE id = ?
+            """,
+            (inbox_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_ai_receipt_inbox_item(
+    inbox_id: int, fields: dict, database_path: Path = DATABASE_PATH
+) -> dict:
+    current = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if current is None:
+        raise ValueError(f"AI 回执不存在: {inbox_id}")
+    if current["status"] != "pending":
+        raise ValueError("该回执已处理，不能继续修改。")
+
+    timestamp = now_shanghai_iso()
+    allowed_fields = (
+        "source",
+        "action",
+        "title",
+        "main_category",
+        "sub_category",
+        "sub_sub_category",
+        "tags",
+        "ai_visibility",
+        "ai_targets",
+        "body",
+    )
+    values = {key: fields.get(key, current[key]) for key in allowed_fields}
+    values["ai_visibility"] = validate_ai_visibility(values["ai_visibility"])
+    values["ai_targets"] = ", ".join(
+        normalize_ai_targets(_split_ai_target_text(values["ai_targets"]))
+    )
+    with _connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE ai_receipt_inbox
+            SET source = ?, action = ?, title = ?, main_category = ?,
+                sub_category = ?, sub_sub_category = ?, tags = ?,
+                ai_visibility = ?, ai_targets = ?, body = ?, updated_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (
+                values["source"],
+                values["action"],
+                values["title"],
+                values["main_category"],
+                values["sub_category"],
+                values["sub_sub_category"],
+                values["tags"],
+                values["ai_visibility"],
+                values["ai_targets"],
+                values["body"],
+                timestamp,
+                inbox_id,
+            ),
+        )
+        if connection.total_changes == 0:
+            raise ValueError("该回执已处理，不能继续修改。")
+    updated = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if updated is None:
+        raise RuntimeError("保存回执后读取失败")
+    return updated
+
+
+def accept_ai_receipt_inbox_item(
+    inbox_id: int, fields: dict, database_path: Path = DATABASE_PATH
+) -> dict:
+    receipt = update_ai_receipt_inbox_item(inbox_id, fields, database_path)
+    if receipt["status"] != "pending":
+        raise ValueError("该回执已处理，不能重复入库。")
+
+    note = create_note_in_directory(
+        receipt["main_category"] or DEFAULT_MAIN_CATEGORY,
+        receipt["sub_category"] or DEFAULT_SUB_CATEGORY,
+        receipt["sub_sub_category"] or DEFAULT_SUB_SUB_CATEGORY,
+        database_path,
+    )
+    note = update_note(
+        note["id"],
+        title=receipt["title"].strip() or "未命名 AI 回执",
+        content_html=_plain_text_to_html(receipt["body"]),
+        main_category=receipt["main_category"] or DEFAULT_MAIN_CATEGORY,
+        sub_category=receipt["sub_category"] or DEFAULT_SUB_CATEGORY,
+        sub_sub_category=receipt["sub_sub_category"] or DEFAULT_SUB_SUB_CATEGORY,
+        database_path=database_path,
+    )
+    set_note_tags(note["id"], parse_tags(receipt["tags"]), database_path)
+    set_note_ai_visibility(note["id"], receipt["ai_visibility"], database_path)
+    set_note_ai_targets(
+        note["id"],
+        _split_ai_target_text(receipt["ai_targets"]),
+        database_path,
+    )
+
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE ai_receipt_inbox
+            SET status = 'accepted', note_id = ?, updated_at = ?, decided_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (note["id"], timestamp, timestamp, inbox_id),
+        )
+        if connection.total_changes == 0:
+            raise ValueError("该回执已处理，不能重复入库。")
+    return {
+        "receipt": get_ai_receipt_inbox_item(inbox_id, database_path),
+        "note": get_note(note["id"], database_path),
+    }
+
+
+def reject_ai_receipt_inbox_item(
+    inbox_id: int, database_path: Path = DATABASE_PATH
+) -> dict:
+    current = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if current is None:
+        raise ValueError(f"AI 回执不存在: {inbox_id}")
+    if current["status"] != "pending":
+        raise ValueError("该回执已处理，不能重复拒绝。")
+    timestamp = now_shanghai_iso()
+    with _connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE ai_receipt_inbox
+            SET status = 'rejected', updated_at = ?, decided_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (timestamp, timestamp, inbox_id),
+        )
+        if connection.total_changes == 0:
+            raise ValueError("该回执已处理，不能重复拒绝。")
+    receipt = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if receipt is None:
+        raise RuntimeError("拒绝回执后读取失败")
+    return receipt
+
+
+def delete_ai_receipt_inbox_item(
+    inbox_id: int, database_path: Path = DATABASE_PATH
+) -> None:
+    current = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if current is None:
+        raise ValueError(f"AI 回执不存在: {inbox_id}")
+    if current["status"] == "accepted" and current.get("note_id"):
+        raise ValueError("已确认入库的回执保留用于查账，不能在这里删除。")
+    with _connect(database_path) as connection:
+        connection.execute("DELETE FROM ai_receipt_inbox WHERE id = ?", (inbox_id,))
+        if connection.total_changes == 0:
+            raise ValueError(f"AI 回执不存在: {inbox_id}")
+
+
+def _plain_text_to_html(value: str) -> str:
+    escaped = html.escape(value or "")
+    return "<p>" + escaped.replace("\n", "<br>") + "</p>"
+
+
+def _split_ai_target_text(value: str) -> list[str]:
+    if not value.strip() or value.strip().lower() in {"无", "none", "null"}:
+        return []
+    normalized = value.replace("，", ",").replace("、", ",")
+    parts: list[str] = []
+    for chunk in normalized.split(","):
+        parts.extend(part for part in chunk.split() if part)
+    return parts
 
 
 def set_note_tags(

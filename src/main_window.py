@@ -57,6 +57,7 @@ from src.database import (
 from src.editor import NotesEditor
 from src.editor_toolbar import EditorToolbar
 from src.export_center import ExportCenterDialog, ExportContext
+from src.receipt_inbox_dialog import ReceiptInboxDialog
 from src.smart_views import SMART_VIEWS, get_smart_view_notes
 from src.tag_manager import format_tags, parse_tags
 from src.theme import APP_STYLE
@@ -159,6 +160,11 @@ class MainWindow(QMainWindow):
             self.smart_buttons[view_name] = button
         smart_row.addStretch(1)
         layout.addLayout(smart_row)
+
+        self.receipt_inbox_button = QPushButton("🤖 AI 待确认")
+        self.receipt_inbox_button.setObjectName("trashButton")
+        self.receipt_inbox_button.clicked.connect(self.open_receipt_inbox)
+        layout.addWidget(self.receipt_inbox_button)
 
         directory_header = QHBoxLayout()
         directory_header.setContentsMargins(0, 4, 0, 0)
@@ -823,6 +829,15 @@ class MainWindow(QMainWindow):
         )
         dialog = ExportCenterDialog(context, self)
         dialog.exec()
+
+    def open_receipt_inbox(self) -> None:
+        if not self.force_save_current_note(refresh_tree=False):
+            return
+        dialog = ReceiptInboxDialog(self)
+        dialog.exec()
+        self.refresh_current_sidebar_view(
+            self.current_note["id"] if self.current_note else None
+        )
 
     def category_tuple_for_path(self, path: tuple[str, ...]) -> tuple[str, str, str]:
         if len(path) == 1:
