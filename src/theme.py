@@ -163,6 +163,10 @@ QInputDialog {
     background: #E8DFD3;
     color: #2C2926;
 }
+#sidebarIconButton[active="true"] {
+    background: #E8DFD3;
+    color: #2C2926;
+}
 #editor,
 #editorSheet {
     background: #FAF7F2;
@@ -421,5 +425,67 @@ QInputDialog {
 }
 #exportSelectionTree::item:hover {
     background: #EDE6DB;
+}
+#linkDrawer {
+    background: #F3EDE4;
+    border-left: 1px solid #E0D8CE;
+}
+#linkDrawerTitle {
+    color: #2C2926;
+    font-size: 15px;
+    font-weight: 600;
+}
+#linkDrawerCloseButton {
+    border: 0;
+    border-radius: 6px;
+    padding: 0;
+    background: transparent;
+    color: #8A8078;
+    font-size: 14px;
+}
+#linkDrawerCloseButton:hover {
+    background: #E8DFD3;
+    color: #2C2926;
+}
+#linkDrawerEmptyState,
+#linkEmptyText {
+    color: #8A8078;
+    font-size: 12px;
+}
+#linkDrawerScroll {
+    background: #F3EDE4;
+}
+#linkDrawerScroll QWidget {
+    background: #F3EDE4;
+}
+#linkSectionHeader {
+    border: 0;
+    border-radius: 4px;
+    padding: 6px 4px;
+    background: transparent;
+    color: #5D554D;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+}
+#linkSectionHeader:hover {
+    background: #E8DFD3;
+}
+#linkResult {
+    border: 0;
+    border-radius: 6px;
+    background: #FAF7F2;
+}
+#linkResult:hover {
+    background: #EDE6DB;
+}
+#linkResultTitle {
+    color: #2C2926;
+    font-size: 13px;
+    font-weight: 600;
+}
+#linkResultSubtitle {
+    color: #8A8078;
+    font-size: 11px;
 }
 """

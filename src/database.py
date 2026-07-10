@@ -444,6 +444,62 @@ def list_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_notes_for_link_drawer(database_path: Path = DATABASE_PATH) -> list[dict]:
+    with _connect(database_path) as connection:
+        note_rows = connection.execute(
+            """
+            SELECT
+                id,
+                title,
+                content_html,
+                main_category,
+                sub_category,
+                sub_sub_category,
+                tags,
+                ai_visibility,
+                is_pinned,
+                created_at,
+                updated_at
+            FROM notes
+            WHERE is_deleted = 0
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            """
+        ).fetchall()
+        tag_rows = connection.execute(
+            """
+            SELECT notes.id AS note_id, tags.name AS tag_name
+            FROM notes
+            JOIN note_tags ON note_tags.note_id = notes.id
+            JOIN tags ON tags.id = note_tags.tag_id
+            WHERE notes.is_deleted = 0
+            ORDER BY tags.name COLLATE NOCASE ASC
+            """
+        ).fetchall()
+        target_rows = connection.execute(
+            """
+            SELECT notes.id AS note_id, note_ai_targets.target_name
+            FROM notes
+            JOIN note_ai_targets ON note_ai_targets.note_id = notes.id
+            WHERE notes.is_deleted = 0
+            ORDER BY note_ai_targets.target_name COLLATE NOCASE ASC
+            """
+        ).fetchall()
+
+    tags_by_note: dict[int, list[str]] = {}
+    for row in tag_rows:
+        tags_by_note.setdefault(row["note_id"], []).append(row["tag_name"])
+
+    targets_by_note: dict[int, list[str]] = {}
+    for row in target_rows:
+        targets_by_note.setdefault(row["note_id"], []).append(row["target_name"])
+
+    notes = [dict(row) for row in note_rows]
+    for note in notes:
+        note["tags"] = ", ".join(tags_by_note.get(note["id"], [])) or note["tags"]
+        note["ai_targets"] = targets_by_note.get(note["id"], [])
+    return notes
+
+
 def get_note(
     note_id: int,
     database_path: Path = DATABASE_PATH,

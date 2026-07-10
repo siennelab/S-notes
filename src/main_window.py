@@ -57,6 +57,7 @@ from src.database import (
 from src.editor import NotesEditor
 from src.editor_toolbar import EditorToolbar
 from src.export_center import ExportCenterDialog, ExportContext
+from src.link_drawer import LinkDrawer
 from src.receipt_inbox_dialog import ReceiptInboxDialog
 from src.smart_views import SMART_VIEWS, get_smart_view_notes
 from src.tag_manager import format_tags, parse_tags
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         self.current_sidebar_mode = "directory"
         self.current_filter_value = ""
         self.metadata_expanded = False
+        self.link_drawer_visible = False
         self.save_timer = QTimer(self)
         self.save_timer.setInterval(1000)
         self.save_timer.setSingleShot(True)
@@ -102,6 +104,11 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(260)
         layout.addWidget(sidebar)
         layout.addWidget(self._build_editor(), stretch=1)
+        self.link_drawer = LinkDrawer()
+        self.link_drawer.setVisible(False)
+        self.link_drawer.noteSelected.connect(self.open_linked_note)
+        self.link_drawer.closeRequested.connect(self.toggle_link_drawer)
+        layout.addWidget(self.link_drawer)
 
         return root
 
@@ -128,10 +135,13 @@ class MainWindow(QMainWindow):
         export_icon.setToolTip("普通导出")
         export_icon.setFixedSize(24, 22)
         export_icon.clicked.connect(self.open_export_center)
-        link_icon = QLabel("🔗")
-        link_icon.setObjectName("sidebarIcon")
+        self.link_drawer_button = QPushButton("🔗")
+        self.link_drawer_button.setObjectName("sidebarIconButton")
+        self.link_drawer_button.setToolTip("打开/关闭关联抽屉")
+        self.link_drawer_button.setFixedSize(24, 22)
+        self.link_drawer_button.clicked.connect(self.toggle_link_drawer)
         header.addWidget(export_icon)
-        header.addWidget(link_icon)
+        header.addWidget(self.link_drawer_button)
         layout.addLayout(header)
 
         self.search_input = QLineEdit()
@@ -839,6 +849,28 @@ class MainWindow(QMainWindow):
             self.current_note["id"] if self.current_note else None
         )
 
+    def toggle_link_drawer(self) -> None:
+        self.link_drawer_visible = not self.link_drawer_visible
+        self.link_drawer.setVisible(self.link_drawer_visible)
+        self.link_drawer_button.setProperty("active", self.link_drawer_visible)
+        self.link_drawer_button.style().unpolish(self.link_drawer_button)
+        self.link_drawer_button.style().polish(self.link_drawer_button)
+        if self.link_drawer_visible:
+            self.refresh_link_drawer()
+
+    def refresh_link_drawer(self) -> None:
+        if not hasattr(self, "link_drawer"):
+            return
+        current_note_id = self.current_note["id"] if self.current_note else None
+        self.link_drawer.refresh(current_note_id)
+
+    def open_linked_note(self, note_id: int) -> None:
+        if not self.force_save_current_note(refresh_tree=False):
+            return
+        self.load_note(note_id)
+        self.refresh_directory_tree(note_id)
+        self.refresh_link_drawer()
+
     def category_tuple_for_path(self, path: tuple[str, ...]) -> tuple[str, str, str]:
         if len(path) == 1:
             return (path[0], DEFAULT_SUB_CATEGORY, DEFAULT_SUB_SUB_CATEGORY)
@@ -876,6 +908,7 @@ class MainWindow(QMainWindow):
         self.save_timer.stop()
         self.set_editor_enabled(True)
         self.is_loading_note = False
+        self.refresh_link_drawer()
 
     def load_deleted_note(self, note_id: int) -> None:
         note = get_note(note_id, include_deleted=True)
@@ -897,6 +930,7 @@ class MainWindow(QMainWindow):
         self.save_timer.stop()
         self.set_editor_enabled(False)
         self.is_loading_note = False
+        self.refresh_link_drawer()
 
     def populate_category_controls(self, note: dict) -> None:
         self.reload_directory_cache()
@@ -1141,6 +1175,7 @@ class MainWindow(QMainWindow):
             self.refresh_current_sidebar_view(note["id"])
         self.update_metadata_summary()
         self.refresh_tag_filter_row()
+        self.refresh_link_drawer()
         return True
 
     def refresh_current_sidebar_view(self, selected_note_id: int | None = None) -> None:
@@ -1374,6 +1409,7 @@ class MainWindow(QMainWindow):
         self.save_timer.stop()
         self.set_editor_enabled(False)
         self.is_loading_note = False
+        self.refresh_link_drawer()
 
     def refresh_after_directory_change(self) -> None:
         selected_note_id = self.current_note["id"] if self.current_note else None
