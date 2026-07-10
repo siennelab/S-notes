@@ -111,15 +111,42 @@ def permanently_delete_trash_items(
         root_directory_ids, independent_note_ids = _normalize_trash_selection(
             connection, note_ids, directory_ids
         )
-        for directory_id in root_directory_ids:
-            _permanently_delete_trash_directory(connection, directory_id)
-        if independent_note_ids:
-            placeholders = ",".join("?" for _ in independent_note_ids)
-            connection.execute(
-                f"DELETE FROM notes WHERE is_deleted = 1 AND id IN ({placeholders})",
-                tuple(independent_note_ids),
-            )
+        _delete_trash_roots(connection, root_directory_ids, independent_note_ids)
     return _trash_result(root_directory_ids, independent_note_ids)
+
+
+def empty_trash(database_path: Path = DATABASE_PATH) -> dict:
+    with _connect(database_path) as connection:
+        note_ids = [
+            row["id"]
+            for row in connection.execute(
+                "SELECT id FROM notes WHERE is_deleted = 1"
+            ).fetchall()
+        ]
+        directory_ids = [
+            row["id"]
+            for row in connection.execute(
+                "SELECT id FROM directories WHERE is_deleted = 1"
+            ).fetchall()
+        ]
+        note_count = len(note_ids)
+        directory_count = len(directory_ids)
+        if not note_count and not directory_count:
+            return {
+                "note_count": 0,
+                "directory_count": 0,
+                "root_count": 0,
+            }
+
+        root_directory_ids, independent_note_ids = _normalize_trash_selection(
+            connection, note_ids, directory_ids
+        )
+        _delete_trash_roots(connection, root_directory_ids, independent_note_ids)
+    return {
+        "note_count": note_count,
+        "directory_count": directory_count,
+        "root_count": len(root_directory_ids) + len(independent_note_ids),
+    }
 
 
 def _categories_for_directory(
@@ -294,6 +321,21 @@ def _permanently_delete_trash_directory(
     ):
         connection.execute(
             "DELETE FROM directories WHERE id = ? AND is_deleted = 1", (target_id,)
+        )
+
+
+def _delete_trash_roots(
+    connection: sqlite3.Connection,
+    directory_ids: list[int],
+    note_ids: list[int],
+) -> None:
+    for directory_id in directory_ids:
+        _permanently_delete_trash_directory(connection, directory_id)
+    if note_ids:
+        placeholders = ",".join("?" for _ in note_ids)
+        connection.execute(
+            f"DELETE FROM notes WHERE is_deleted = 1 AND id IN ({placeholders})",
+            tuple(note_ids),
         )
 
 

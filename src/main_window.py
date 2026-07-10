@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS
 from src.batch_note_operations import (
+    empty_trash,
     move_notes_to_directory,
     permanently_delete_trash_items,
     restore_trash_items,
@@ -225,6 +226,10 @@ class MainWindow(QMainWindow):
         self.trash_button = QPushButton("🗑 回收站")
         self.trash_button.setObjectName("trashButton")
         self.trash_button.clicked.connect(self.show_trash)
+        self.trash_button.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.trash_button.customContextMenuRequested.connect(
+            self.open_trash_root_context_menu
+        )
         layout.addWidget(self.trash_button)
 
         return sidebar
@@ -579,6 +584,11 @@ class MainWindow(QMainWindow):
     def populate_trash_tree(self, trash_tree: dict) -> None:
         directories = trash_tree["directories"]
         notes = trash_tree["notes"]
+        if not directories and not notes:
+            empty_item = QTreeWidgetItem(["回收站为空"])
+            empty_item.setFlags(Qt.ItemIsEnabled)
+            self.directory_tree.addTopLevelItem(empty_item)
+            return
         directory_items: dict[int, QTreeWidgetItem] = {}
         directory_paths = {tuple(directory["path"]): directory for directory in directories}
 
@@ -1269,19 +1279,23 @@ class MainWindow(QMainWindow):
         data = item.data(0, Qt.UserRole) if item is not None else None
         menu = QMenu(self)
 
-        if self.current_sidebar_mode == "trash" and data:
-            selected_roots = selected_items_without_selected_ancestors(
-                self.directory_tree.selectedItems()
-            )
-            selected_count = len(selected_roots)
-            if selected_count:
-                menu.addAction(
-                    f"恢复所选（{selected_count}）", self.restore_selected_trash_items
+        if self.current_sidebar_mode == "trash":
+            if data:
+                selected_roots = selected_items_without_selected_ancestors(
+                    self.directory_tree.selectedItems()
                 )
-                menu.addAction(
-                    f"永久删除所选（{selected_count}）",
-                    self.confirm_permanent_delete_selected_trash_items,
-                )
+                selected_count = len(selected_roots)
+                if selected_count:
+                    menu.addAction(
+                        f"恢复所选（{selected_count}）",
+                        self.restore_selected_trash_items,
+                    )
+                    menu.addAction(
+                        f"永久删除所选（{selected_count}）",
+                        self.confirm_permanent_delete_selected_trash_items,
+                    )
+                    menu.addSeparator()
+            self.add_empty_trash_action(menu)
         elif not data:
             menu.addAction("新增主分类", lambda: self.prompt_create_directory(None))
         elif data.get("type") == "note":
@@ -1317,6 +1331,56 @@ class MainWindow(QMainWindow):
             menu.addAction("删除", lambda: self.confirm_delete_directory(directory_id))
 
         menu.exec(self.directory_tree.viewport().mapToGlobal(position))
+
+    def open_trash_root_context_menu(self, position) -> None:
+        menu = QMenu(self)
+        self.add_empty_trash_action(menu)
+        menu.exec(self.trash_button.mapToGlobal(position))
+
+    def add_empty_trash_action(self, menu: QMenu) -> None:
+        trash_tree = list_trash_tree()
+        action = menu.addAction("清空回收站", self.confirm_empty_trash)
+        action.setEnabled(bool(trash_tree["notes"] or trash_tree["directories"]))
+
+    def confirm_empty_trash(self) -> None:
+        trash_tree = list_trash_tree()
+        note_count = len(trash_tree["notes"])
+        directory_count = len(trash_tree["directories"])
+        if not note_count and not directory_count:
+            self.status_label.setText("回收站为空")
+            return
+
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("清空回收站")
+        message_box.setText("确定清空回收站吗？")
+        message_box.setInformativeText(
+            "将永久删除回收站中的全部内容，共：\n"
+            f"- {note_count} 条笔记\n"
+            f"- {directory_count} 个目录\n\n"
+            "此操作无法撤销。"
+        )
+        cancel_button = message_box.addButton("取消", QMessageBox.RejectRole)
+        empty_button = message_box.addButton(
+            "清空回收站", QMessageBox.DestructiveRole
+        )
+        message_box.setDefaultButton(cancel_button)
+        message_box.setEscapeButton(cancel_button)
+        message_box.exec()
+        if message_box.clickedButton() != empty_button:
+            return
+
+        try:
+            result = empty_trash()
+        except Exception as error:
+            QMessageBox.warning(self, "清空回收站失败", str(error))
+            return
+        if self.current_note is None:
+            self.clear_editor()
+        self.show_trash()
+        self.status_label.setText(
+            "已清空回收站：永久删除 "
+            f"{result['note_count']} 条笔记、{result['directory_count']} 个目录"
+        )
 
     def selected_trash_payloads(self) -> tuple[list[int], list[int]]:
         roots = selected_items_without_selected_ancestors(
