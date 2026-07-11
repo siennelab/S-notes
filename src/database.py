@@ -843,25 +843,9 @@ def restore_trash_directory(
 ) -> None:
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
-        root_path = _get_directory_path(connection, directory_id)
-        active_parent_id = _ensure_active_parent_path_for_restore(connection, root_path)
-        directory_ids = _collect_descendant_directory_ids(connection, directory_id)
-        paths = [_get_directory_path(connection, target_id) for target_id in directory_ids]
-        trash_group_ids = _trash_group_ids_for_directories(connection, directory_ids)
-        connection.execute(
-            "UPDATE directories SET parent_id = ? WHERE id = ?",
-            (active_parent_id, directory_id),
+        _restore_trash_directories_with_connection(
+            connection, [directory_id], timestamp
         )
-        connection.executemany(
-            """
-            UPDATE directories
-            SET is_deleted = 0, deleted_at = NULL, trash_group_id = NULL, updated_at = ?
-            WHERE id = ?
-            """,
-            [(timestamp, target_id) for target_id in directory_ids],
-        )
-        for path in paths:
-            _restore_notes_under_path(connection, path, timestamp, trash_group_ids)
 
 
 def permanently_delete_trash_directory(
@@ -997,21 +981,31 @@ def set_note_ai_targets(
         ).fetchone()
         if note_exists is None:
             raise ValueError(f"笔记不存在或已删除: {note_id}")
-
-        connection.execute("DELETE FROM note_ai_targets WHERE note_id = ?", (note_id,))
-        for target in normalized_targets:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO note_ai_targets (note_id, target_name, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (note_id, target, timestamp),
-            )
-        connection.execute(
-            "UPDATE notes SET updated_at = ? WHERE id = ?",
-            (timestamp, note_id),
+        _set_note_ai_targets_with_connection(
+            connection, note_id, normalized_targets, timestamp
         )
     return normalized_targets
+
+
+def _set_note_ai_targets_with_connection(
+    connection: sqlite3.Connection,
+    note_id: int,
+    normalized_targets: list[str],
+    timestamp: str,
+) -> None:
+    connection.execute("DELETE FROM note_ai_targets WHERE note_id = ?", (note_id,))
+    for target in normalized_targets:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO note_ai_targets (note_id, target_name, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (note_id, target, timestamp),
+        )
+    connection.execute(
+        "UPDATE notes SET updated_at = ? WHERE id = ?",
+        (timestamp, note_id),
+    )
 
 
 def get_note_ai_targets(
@@ -1182,50 +1176,135 @@ def update_ai_receipt_inbox_item(
 
 
 def accept_ai_receipt_inbox_item(
-    inbox_id: int, fields: dict, database_path: Path = DATABASE_PATH
+    inbox_id: int,
+    fields: dict,
+    database_path: Path = DATABASE_PATH,
+    *,
+    allow_failed_parse: bool = False,
 ) -> dict:
-    receipt = update_ai_receipt_inbox_item(inbox_id, fields, database_path)
-    if receipt["status"] != "pending":
-        raise ValueError("该回执已处理，不能重复入库。")
-
-    note = create_note_in_directory(
-        receipt["main_category"] or DEFAULT_MAIN_CATEGORY,
-        receipt["sub_category"] or DEFAULT_SUB_CATEGORY,
-        receipt["sub_sub_category"] or DEFAULT_SUB_SUB_CATEGORY,
-        database_path,
-    )
-    note = update_note(
-        note["id"],
-        title=receipt["title"].strip() or "未命名 AI 回执",
-        content_html=_plain_text_to_html(receipt["body"]),
-        main_category=receipt["main_category"] or DEFAULT_MAIN_CATEGORY,
-        sub_category=receipt["sub_category"] or DEFAULT_SUB_CATEGORY,
-        sub_sub_category=receipt["sub_sub_category"] or DEFAULT_SUB_SUB_CATEGORY,
-        database_path=database_path,
-    )
-    set_note_tags(note["id"], parse_tags(receipt["tags"]), database_path)
-    set_note_ai_visibility(note["id"], receipt["ai_visibility"], database_path)
-    set_note_ai_targets(
-        note["id"],
-        _split_ai_target_text(receipt["ai_targets"]),
-        database_path,
-    )
-
-    timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
-        connection.execute(
+        receipt = connection.execute(
+            "SELECT * FROM ai_receipt_inbox WHERE id = ?",
+            (inbox_id,),
+        ).fetchone()
+        if receipt is None:
+            raise ValueError(f"AI 回执不存在: {inbox_id}")
+        if receipt["status"] != "pending":
+            raise ValueError("该回执已处理，不能重复入库。")
+        if receipt["parse_status"] != "parsed" and not allow_failed_parse:
+            raise ValueError("该回执解析失败，需要人工确认后才能入库。")
+
+        allowed_fields = (
+            "source",
+            "action",
+            "title",
+            "main_category",
+            "sub_category",
+            "sub_sub_category",
+            "tags",
+            "ai_visibility",
+            "ai_targets",
+            "body",
+        )
+        values = {
+            key: str(fields.get(key, receipt[key]) or "") for key in allowed_fields
+        }
+        values["ai_visibility"] = validate_ai_visibility(values["ai_visibility"])
+        normalized_targets = normalize_ai_targets(
+            _split_ai_target_text(values["ai_targets"])
+        )
+        normalized_tags = _normalize_note_tags(parse_tags(values["tags"]))
+        values["ai_targets"] = ", ".join(normalized_targets)
+        values["tags"] = ", ".join(normalized_tags)
+
+        if receipt["parse_status"] != "parsed" and allow_failed_parse:
+            if not values["title"].strip():
+                raise ValueError("人工确认入库前，标题不能为空。")
+            if not values["main_category"].strip():
+                raise ValueError("人工确认入库前，主分类不能为空。")
+
+        main = values["main_category"].strip() or DEFAULT_MAIN_CATEGORY
+        sub = values["sub_category"].strip() or DEFAULT_SUB_CATEGORY
+        sub_sub = values["sub_sub_category"].strip() or DEFAULT_SUB_SUB_CATEGORY
+        title = values["title"].strip() or "未命名 AI 回执"
+        timestamp = now_shanghai_iso()
+
+        update_cursor = connection.execute(
+            """
+            UPDATE ai_receipt_inbox
+            SET source = ?, action = ?, title = ?, main_category = ?,
+                sub_category = ?, sub_sub_category = ?, tags = ?,
+                ai_visibility = ?, ai_targets = ?, body = ?, updated_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (
+                values["source"],
+                values["action"],
+                title,
+                main,
+                sub,
+                sub_sub,
+                values["tags"],
+                values["ai_visibility"],
+                values["ai_targets"],
+                values["body"],
+                timestamp,
+                inbox_id,
+            ),
+        )
+        if update_cursor.rowcount != 1:
+            raise ValueError("该回执已处理，不能重复入库。")
+
+        directory_id = _ensure_directory_path(connection, main, sub, sub_sub)
+        content_html = _plain_text_to_html(values["body"])
+        note_cursor = connection.execute(
+            """
+            INSERT INTO notes (
+                directory_id, title, body_rich_text, content_html,
+                main_category, sub_category, sub_sub_category, tags,
+                ai_visibility, is_pinned, is_deleted, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
+            """,
+            (
+                directory_id,
+                title,
+                content_html,
+                content_html,
+                main,
+                sub,
+                sub_sub,
+                values["ai_visibility"],
+                timestamp,
+                timestamp,
+            ),
+        )
+        note_id = note_cursor.lastrowid
+        _set_note_tags_with_connection(
+            connection, note_id, normalized_tags, timestamp
+        )
+        _set_note_ai_targets_with_connection(
+            connection, note_id, normalized_targets, timestamp
+        )
+
+        accepted_cursor = connection.execute(
             """
             UPDATE ai_receipt_inbox
             SET status = 'accepted', note_id = ?, updated_at = ?, decided_at = ?
             WHERE id = ? AND status = 'pending'
             """,
-            (note["id"], timestamp, timestamp, inbox_id),
+            (note_id, timestamp, timestamp, inbox_id),
         )
-        if connection.total_changes == 0:
+        if accepted_cursor.rowcount != 1:
             raise ValueError("该回执已处理，不能重复入库。")
+
+    receipt_result = get_ai_receipt_inbox_item(inbox_id, database_path)
+    note_result = get_note(note_id, database_path)
+    if receipt_result is None or note_result is None:
+        raise RuntimeError("确认回执入库后读取失败")
     return {
-        "receipt": get_ai_receipt_inbox_item(inbox_id, database_path),
-        "note": get_note(note["id"], database_path),
+        "receipt": receipt_result,
+        "note": note_result,
     }
 
 
@@ -1287,14 +1366,7 @@ def _split_ai_target_text(value: str) -> list[str]:
 def set_note_tags(
     note_id: int, tags: list[str], database_path: Path = DATABASE_PATH
 ) -> list[str]:
-    normalized_tags = []
-    seen = set()
-    for raw_tag in tags:
-        tag = normalize_tag(raw_tag)
-        if tag and tag not in seen:
-            normalized_tags.append(tag)
-            seen.add(tag)
-
+    normalized_tags = _normalize_note_tags(tags)
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
         note_exists = connection.execute(
@@ -1303,29 +1375,50 @@ def set_note_tags(
         ).fetchone()
         if note_exists is None:
             raise ValueError(f"笔记不存在或已删除: {note_id}")
-
-        connection.execute("DELETE FROM note_tags WHERE note_id = ?", (note_id,))
-        for tag in normalized_tags:
-            connection.execute(
-                "INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)",
-                (tag, timestamp),
-            )
-            tag_id = connection.execute(
-                "SELECT id FROM tags WHERE name = ?",
-                (tag,),
-            ).fetchone()["id"]
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO note_tags (note_id, tag_id)
-                VALUES (?, ?)
-                """,
-                (note_id, tag_id),
-            )
-        connection.execute(
-            "UPDATE notes SET tags = ?, updated_at = ? WHERE id = ?",
-            (", ".join(normalized_tags), timestamp, note_id),
+        _set_note_tags_with_connection(
+            connection, note_id, normalized_tags, timestamp
         )
     return normalized_tags
+
+
+def _normalize_note_tags(tags: list[str]) -> list[str]:
+    normalized_tags: list[str] = []
+    seen = set()
+    for raw_tag in tags:
+        tag = normalize_tag(raw_tag)
+        if tag and tag not in seen:
+            normalized_tags.append(tag)
+            seen.add(tag)
+    return normalized_tags
+
+
+def _set_note_tags_with_connection(
+    connection: sqlite3.Connection,
+    note_id: int,
+    normalized_tags: list[str],
+    timestamp: str,
+) -> None:
+    connection.execute("DELETE FROM note_tags WHERE note_id = ?", (note_id,))
+    for tag in normalized_tags:
+        connection.execute(
+            "INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)",
+            (tag, timestamp),
+        )
+        tag_id = connection.execute(
+            "SELECT id FROM tags WHERE name = ?",
+            (tag,),
+        ).fetchone()["id"]
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO note_tags (note_id, tag_id)
+            VALUES (?, ?)
+            """,
+            (note_id, tag_id),
+        )
+    connection.execute(
+        "UPDATE notes SET tags = ?, updated_at = ? WHERE id = ?",
+        (", ".join(normalized_tags), timestamp, note_id),
+    )
 
 
 def get_note_tags(note_id: int, database_path: Path = DATABASE_PATH) -> list[str]:
@@ -1720,6 +1813,113 @@ def _ensure_active_parent_path_for_restore(
     main_id = _ensure_directory(connection, parent_path[0], None)
     sub_id = _ensure_directory(connection, parent_path[1], main_id)
     return _ensure_directory(connection, parent_path[2], sub_id)
+
+
+def _restore_trash_directories_with_connection(
+    connection: sqlite3.Connection,
+    directory_ids: list[int],
+    timestamp: str,
+) -> None:
+    root_ids = list(dict.fromkeys(int(directory_id) for directory_id in directory_ids))
+    if not root_ids:
+        return
+
+    restore_ids: set[int] = set()
+    root_parent_targets: dict[int, int | None] = {}
+    paths_by_root: dict[int, list[tuple[str, ...]]] = {}
+    trash_groups_by_root: dict[int, set[str]] = {}
+    rows_by_id: dict[int, sqlite3.Row] = {}
+
+    for root_id in root_ids:
+        root = connection.execute(
+            """
+            SELECT id, name, parent_id, is_deleted
+            FROM directories
+            WHERE id = ? AND is_deleted = 1
+            """,
+            (root_id,),
+        ).fetchone()
+        if root is None:
+            raise ValueError(f"回收站中找不到目录: {root_id}")
+        root_path = _get_directory_path(connection, root_id)
+        root_parent_targets[root_id] = _ensure_active_parent_path_for_restore(
+            connection, root_path
+        )
+        tree_ids = _collect_descendant_directory_ids(connection, root_id)
+        restore_ids.update(tree_ids)
+        paths_by_root[root_id] = [
+            _get_directory_path(connection, target_id) for target_id in tree_ids
+        ]
+        trash_groups_by_root[root_id] = _trash_group_ids_for_directories(
+            connection, tree_ids
+        )
+
+    placeholders = ",".join("?" for _ in restore_ids)
+    rows = connection.execute(
+        f"""
+        SELECT id, name, parent_id, is_deleted
+        FROM directories
+        WHERE id IN ({placeholders})
+        """,
+        tuple(restore_ids),
+    ).fetchall()
+    rows_by_id = {row["id"]: row for row in rows}
+    if len(rows_by_id) != len(restore_ids) or any(
+        row["is_deleted"] != 1 for row in rows_by_id.values()
+    ):
+        raise ValueError("待恢复的目录树状态已变更，请刷新后重试。")
+
+    prospective_names: set[tuple[int | None, str]] = set()
+    for target_id, row in rows_by_id.items():
+        target_parent_id = root_parent_targets.get(target_id, row["parent_id"])
+        key = (target_parent_id, row["name"])
+        if key in prospective_names:
+            raise ValueError(
+                f'同级已存在分类“{row["name"]}”，请先重命名或删除冲突分类后再恢复。'
+            )
+        prospective_names.add(key)
+        if target_parent_id is None:
+            conflict = connection.execute(
+                """
+                SELECT id FROM directories
+                WHERE parent_id IS NULL AND name = ? AND is_deleted = 0
+                """,
+                (row["name"],),
+            ).fetchone()
+        else:
+            conflict = connection.execute(
+                """
+                SELECT id FROM directories
+                WHERE parent_id = ? AND name = ? AND is_deleted = 0
+                """,
+                (target_parent_id, row["name"]),
+            ).fetchone()
+        if conflict is not None and conflict["id"] not in restore_ids:
+            raise ValueError(
+                f'同级已存在分类“{row["name"]}”，请先重命名或删除冲突分类后再恢复。'
+            )
+
+    for root_id, parent_id in root_parent_targets.items():
+        connection.execute(
+            "UPDATE directories SET parent_id = ? WHERE id = ? AND is_deleted = 1",
+            (parent_id, root_id),
+        )
+    connection.executemany(
+        """
+        UPDATE directories
+        SET is_deleted = 0, deleted_at = NULL, trash_group_id = NULL, updated_at = ?
+        WHERE id = ? AND is_deleted = 1
+        """,
+        [(timestamp, target_id) for target_id in restore_ids],
+    )
+    for root_id in root_ids:
+        for path in paths_by_root[root_id]:
+            _restore_notes_under_path(
+                connection,
+                path,
+                timestamp,
+                trash_groups_by_root[root_id],
+            )
 
 
 def _trash_group_ids_for_directories(

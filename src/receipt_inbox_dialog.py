@@ -62,6 +62,7 @@ class ReceiptCard(QFrame):
         self.receipt_id = int(receipt["id"])
         self.expanded = False
         self.pending = receipt["status"] == "pending"
+        self.parse_failed = receipt["parse_status"] != "parsed"
 
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
@@ -78,6 +79,10 @@ class ReceiptCard(QFrame):
         self.title_label = ReceiptElidedLabel(receipt["title"] or "未命名回执")
         self.title_label.setObjectName("receiptCardTitle")
         title_area.addWidget(self.title_label)
+        if self.parse_failed:
+            parse_status = QLabel("解析失败")
+            parse_status.setObjectName("receiptParseErrorStatus")
+            title_area.addWidget(parse_status)
         summary = ReceiptElidedLabel(
             f"来源: {receipt['source']} · 动作: {receipt['action']} · "
             f"{format_display_datetime(receipt['created_at'])}"
@@ -116,6 +121,14 @@ class ReceiptCard(QFrame):
         details_layout = QVBoxLayout(self.details)
         details_layout.setContentsMargins(0, 6, 0, 0)
         details_layout.setSpacing(7)
+
+        if self.parse_failed:
+            parse_error = QLabel(
+                "解析错误：" + (receipt.get("parse_error") or "未提供具体错误")
+            )
+            parse_error.setObjectName("receiptParseErrorDetail")
+            parse_error.setWordWrap(True)
+            details_layout.addWidget(parse_error)
 
         self.title_input = QLineEdit(receipt["title"])
         details_layout.addWidget(self._row("标题", self.title_input))
@@ -458,8 +471,17 @@ class ReceiptInboxDialog(QWidget):
         card = self.cards.get(receipt_id)
         if card is None:
             return
+        allow_failed_parse = False
+        if card.parse_failed:
+            if not self._confirm_failed_parse_acceptance():
+                return
+            allow_failed_parse = True
         try:
-            accept_ai_receipt_inbox_item(receipt_id, card.form_fields())
+            accept_ai_receipt_inbox_item(
+                receipt_id,
+                card.form_fields(),
+                allow_failed_parse=allow_failed_parse,
+            )
         except Exception as error:
             QMessageBox.warning(self, "确认入库失败", str(error))
             self.refresh_receipt_list()
@@ -467,6 +489,20 @@ class ReceiptInboxDialog(QWidget):
         self.expanded_receipt_id = None
         self.refresh_receipt_list()
         QMessageBox.information(self, "已确认入库", "已确认入库。")
+
+    def _confirm_failed_parse_acceptance(self) -> bool:
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("人工确认解析失败回执")
+        message_box.setText(
+            "这条回执解析失败。请确认你已经检查并修正标题、分类、"
+            "正文和 AI 设置。\n仍按当前内容入库吗？"
+        )
+        continue_button = message_box.addButton("仍然入库", QMessageBox.AcceptRole)
+        cancel_button = message_box.addButton("取消", QMessageBox.RejectRole)
+        message_box.setDefaultButton(cancel_button)
+        message_box.setEscapeButton(cancel_button)
+        message_box.exec()
+        return message_box.clickedButton() == continue_button
 
     def reject_receipt(self, receipt_id: int) -> None:
         try:

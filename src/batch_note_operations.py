@@ -8,11 +8,10 @@ from src.database import (
     _collect_descendant_directory_ids,
     _connect,
     _directory_depth,
-    _ensure_active_parent_path_for_restore,
     _ensure_directory_path,
     _get_directory_path,
     _permanently_delete_notes_under_path,
-    _restore_notes_under_path,
+    _restore_trash_directories_with_connection,
     _trash_group_ids_for_directories,
 )
 from src.time_utils import now_shanghai_iso
@@ -28,8 +27,9 @@ def restore_trash_items(
         root_directory_ids, independent_note_ids = _normalize_trash_selection(
             connection, note_ids, directory_ids
         )
-        for directory_id in root_directory_ids:
-            _restore_trash_directory(connection, directory_id, timestamp)
+        _restore_trash_directories_with_connection(
+            connection, root_directory_ids, timestamp
+        )
         for note_id in independent_note_ids:
             _restore_trash_note(connection, note_id, timestamp)
     return _trash_result(root_directory_ids, independent_note_ids)
@@ -198,31 +198,6 @@ def _restore_trash_note(
         """,
         (directory_id, timestamp, note_id),
     )
-
-
-def _restore_trash_directory(
-    connection: sqlite3.Connection, directory_id: int, timestamp: str
-) -> None:
-    _require_deleted_directory(connection, directory_id)
-    root_path = _get_directory_path(connection, directory_id)
-    active_parent_id = _ensure_active_parent_path_for_restore(connection, root_path)
-    directory_ids = _collect_descendant_directory_ids(connection, directory_id)
-    paths = [_get_directory_path(connection, target_id) for target_id in directory_ids]
-    trash_group_ids = _trash_group_ids_for_directories(connection, directory_ids)
-    connection.execute(
-        "UPDATE directories SET parent_id = ? WHERE id = ?",
-        (active_parent_id, directory_id),
-    )
-    connection.executemany(
-        """
-        UPDATE directories
-        SET is_deleted = 0, deleted_at = NULL, trash_group_id = NULL, updated_at = ?
-        WHERE id = ? AND is_deleted = 1
-        """,
-        [(timestamp, target_id) for target_id in directory_ids],
-    )
-    for path in paths:
-        _restore_notes_under_path(connection, path, timestamp, trash_group_ids)
 
 
 def _permanently_delete_trash_directory(

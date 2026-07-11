@@ -492,6 +492,8 @@ QToolTip {{
 #receiptCardTitle {{ color: {EDITOR_TEXT}; font-size: 14px; font-weight: 600; }}
 #receiptCardSummary,
 #receiptFieldLabel {{ color: {SIDEBAR_TEXT}; font-size: 11px; }}
+#receiptParseErrorStatus {{ color: {TOOLBAR_ICON}; font-size: 11px; font-weight: 600; }}
+#receiptParseErrorDetail {{ color: {SIDEBAR_TEXT}; font-size: 11px; }}
 #receiptCardDetails {{ background: transparent; }}
 #receiptAcceptButton {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; padding: 5px 9px; }}
 #receiptAcceptButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
