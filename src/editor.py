@@ -48,6 +48,7 @@ MARKDOWN_SIGNAL_RE = re.compile(
     r"(?m)^(#{1,3}\s+|[-*]\s+|\d+\.\s+|>\s+|```)|(\*\*[^*\n]+\*\*)|(`[^`\n]+`)"
 )
 QUOTE_BLOCK_PROPERTY = QTextFormat.UserProperty + 1
+CODE_BLOCK_PROPERTY = QTextFormat.UserProperty + 2
 ZERO_WIDTH_BLANK_CHARACTERS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
 
 
@@ -97,6 +98,7 @@ class NotesEditor(QTextEdit):
         if HTML_MARKER_RE.search(content or ""):
             self.setHtml(content)
             self._restore_quote_properties()
+            self._restore_code_block_properties()
         else:
             self.setPlainText(content or "")
 
@@ -257,35 +259,137 @@ class NotesEditor(QTextEdit):
 
     def apply_list(self, ordered: bool) -> None:
         cursor = self.textCursor()
-        current_list = cursor.currentList()
         target_style = QTextListFormat.ListDecimal if ordered else QTextListFormat.ListDisc
-        if current_list is not None and current_list.format().style() == target_style:
-            self.reset_current_block()
-            return
-        list_format = QTextListFormat()
-        list_format.setStyle(target_style)
-        cursor.createList(list_format)
+        cursor.beginEditBlock()
+        try:
+            target_cursor = self._isolate_selected_blocks(cursor)
+            blocks = self._blocks_for_cursor(target_cursor)
+            remove_target_list = bool(blocks) and all(
+                self._block_list_style(block) == target_style for block in blocks
+            )
+            if remove_target_list:
+                for block in blocks:
+                    block_format = block.blockFormat()
+                    block_format.setObjectIndex(-1)
+                    QTextCursor(block).setBlockFormat(block_format)
+            else:
+                list_format = QTextListFormat()
+                list_format.setStyle(target_style)
+                target_cursor.createList(list_format)
+        finally:
+            cursor.endEditBlock()
+        self.setTextCursor(target_cursor)
+
+    @staticmethod
+    def _block_list_style(block):
+        block_list = block.textList()
+        try:
+            return block_list.format().style() if block_list is not None else None
+        finally:
+            del block_list
+
+    def _isolate_selected_blocks(self, cursor: QTextCursor) -> QTextCursor:
+        if not cursor.hasSelection():
+            return QTextCursor(cursor)
+
+        document = cursor.document()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        end_block = document.findBlock(end)
+        split_end = (
+            end_block.isValid()
+            and end > end_block.position()
+            and end < end_block.position() + len(end_block.text())
+        )
+        if split_end:
+            self._split_block_at(end)
+
+        start_block = document.findBlock(start)
+        split_start = (
+            start_block.isValid()
+            and start > start_block.position()
+            and start < start_block.position() + len(start_block.text())
+        )
+        if split_start:
+            self._split_block_at(start)
+
+        isolated = QTextCursor(document)
+        position_shift = 1 if split_start else 0
+        isolated.setPosition(start + position_shift)
+        isolated.setPosition(end + position_shift, QTextCursor.KeepAnchor)
+        first_block, last_block = self._normalized_selected_block_range(isolated)
+        isolated.setPosition(first_block.position())
+        isolated.setPosition(
+            last_block.position() + len(last_block.text()),
+            QTextCursor.KeepAnchor,
+        )
+        return isolated
+
+    def _split_block_at(self, position: int) -> None:
+        split_cursor = QTextCursor(self.document())
+        split_cursor.setPosition(position)
+        split_cursor.insertBlock(
+            split_cursor.blockFormat(),
+            split_cursor.charFormat(),
+        )
+
+    @staticmethod
+    def _normalized_selected_block_range(cursor: QTextCursor):
+        document = cursor.document()
+        first_block = document.findBlock(cursor.selectionStart())
+        if not cursor.hasSelection():
+            return first_block, first_block
+        last_block = document.findBlock(cursor.selectionEnd() - 1)
+        return first_block, last_block
+
+    @classmethod
+    def _blocks_for_cursor(cls, cursor: QTextCursor) -> list:
+        first_block, last_block = cls._normalized_selected_block_range(cursor)
+        block = first_block
+        last_block_number = last_block.blockNumber()
+        blocks = []
+        while block.isValid() and block.blockNumber() <= last_block_number:
+            blocks.append(block)
+            block = block.next()
+        return blocks
 
     def apply_quote(self) -> None:
         cursor = self.textCursor()
-        current_format = cursor.blockFormat()
-        block_format = QTextBlockFormat()
-        if bool(current_format.property(QUOTE_BLOCK_PROPERTY)):
-            block_format.setProperty(QUOTE_BLOCK_PROPERTY, False)
-            block_format.setLeftMargin(0)
-            block_format.setRightMargin(0)
-            block_format.setTopMargin(0)
-            block_format.setBottomMargin(0)
-            cursor.mergeBlockFormat(block_format)
-            self.viewport().update()
-            return
-        block_format.setProperty(QUOTE_BLOCK_PROPERTY, True)
-        block_format.setLeftMargin(22)
-        block_format.setRightMargin(8)
-        block_format.setTopMargin(3)
-        block_format.setBottomMargin(3)
-        cursor.mergeBlockFormat(block_format)
+        cursor.beginEditBlock()
+        try:
+            target_cursor = self._isolate_selected_blocks(cursor)
+            blocks = self._blocks_for_cursor(target_cursor)
+            remove_quote = bool(blocks) and all(
+                bool(block.blockFormat().property(QUOTE_BLOCK_PROPERTY))
+                for block in blocks
+            )
+            for block in blocks:
+                block_format = block.blockFormat()
+                quote_enabled = not remove_quote
+                block_format.setProperty(QUOTE_BLOCK_PROPERTY, quote_enabled)
+                self._apply_quote_block_visuals(block_format, quote_enabled)
+                QTextCursor(block).setBlockFormat(block_format)
+        finally:
+            cursor.endEditBlock()
+        self.setTextCursor(target_cursor)
         self.viewport().update()
+
+    def _apply_quote_block_visuals(
+        self, block_format: QTextBlockFormat, enabled: bool
+    ) -> None:
+        if self._is_code_block_format(block_format):
+            block_format.setLeftMargin(22 if enabled else 18)
+            return
+        if enabled:
+            block_format.setLeftMargin(22)
+            block_format.setRightMargin(8)
+            block_format.setTopMargin(3)
+            block_format.setBottomMargin(3)
+            return
+        block_format.setLeftMargin(0)
+        block_format.setRightMargin(0)
+        block_format.setTopMargin(0)
+        block_format.setBottomMargin(0)
 
     def _restore_quote_properties(self) -> None:
         block = self.document().begin()
@@ -323,28 +427,79 @@ class NotesEditor(QTextEdit):
 
     def apply_code_block(self) -> None:
         cursor = self.textCursor()
-        block_format = cursor.blockFormat()
-        if block_format.leftMargin() >= 16 and block_format.topMargin() >= 4:
-            self.reset_current_block()
-            return
-        block_format = QTextBlockFormat()
-        block_format.setLeftMargin(18)
-        block_format.setTopMargin(6)
-        block_format.setBottomMargin(6)
-        char_format = QTextCharFormat()
-        char_format.setFontFixedPitch(True)
-        char_format.setFontStyleHint(QFont.Monospace)
-        char_format.setFontPointSize(13)
-        cursor.mergeBlockFormat(block_format)
-        cursor.mergeCharFormat(char_format)
-
-    def reset_current_block(self) -> None:
-        cursor = self.textCursor()
         cursor.beginEditBlock()
-        cursor.setBlockFormat(self.clean_block_format())
-        cursor.mergeCharFormat(self.clean_char_format())
-        self.mergeCurrentCharFormat(self.clean_char_format())
-        cursor.endEditBlock()
+        try:
+            target_cursor = self._isolate_selected_blocks(cursor)
+            blocks = self._blocks_for_cursor(target_cursor)
+            remove_code_block = bool(blocks) and all(
+                self._is_code_block_format(block.blockFormat()) for block in blocks
+            )
+            for block in blocks:
+                block_format = block.blockFormat()
+                code_enabled = not remove_code_block
+                if code_enabled:
+                    block_format.setProperty(CODE_BLOCK_PROPERTY, True)
+                else:
+                    block_format.clearProperty(CODE_BLOCK_PROPERTY)
+                self._apply_code_block_visuals(block_format, code_enabled)
+                QTextCursor(block).setBlockFormat(block_format)
+        finally:
+            cursor.endEditBlock()
+        self.setTextCursor(target_cursor)
+
+    @staticmethod
+    def _apply_code_block_visuals(
+        block_format: QTextBlockFormat, enabled: bool
+    ) -> None:
+        quote_enabled = bool(block_format.property(QUOTE_BLOCK_PROPERTY))
+        if enabled:
+            block_format.setBackground(QColor(SUBTLE_BACKGROUND))
+            block_format.setLeftMargin(22 if quote_enabled else 18)
+            block_format.setRightMargin(8)
+            block_format.setTopMargin(6)
+            block_format.setBottomMargin(6)
+            return
+        block_format.clearProperty(QTextFormat.BackgroundBrush)
+        if quote_enabled:
+            block_format.setLeftMargin(22)
+            block_format.setRightMargin(8)
+            block_format.setTopMargin(3)
+            block_format.setBottomMargin(3)
+            return
+        block_format.setLeftMargin(0)
+        block_format.setRightMargin(0)
+        block_format.setTopMargin(0)
+        block_format.setBottomMargin(0)
+
+    @staticmethod
+    def _is_code_block_format(block_format: QTextBlockFormat) -> bool:
+        if bool(block_format.property(CODE_BLOCK_PROPERTY)):
+            return True
+        has_code_background = (
+            block_format.hasProperty(QTextFormat.BackgroundBrush)
+            and block_format.background().color() == QColor(SUBTLE_BACKGROUND)
+        )
+        has_code_geometry = (
+            block_format.leftMargin() in {18, 22}
+            and block_format.topMargin() == 6
+            and block_format.bottomMargin() == 6
+        )
+        is_legacy_code_block = (
+            block_format.leftMargin() == 18
+            and has_code_geometry
+            and not bool(block_format.property(QUOTE_BLOCK_PROPERTY))
+        )
+        return (has_code_background and has_code_geometry) or is_legacy_code_block
+
+    def _restore_code_block_properties(self) -> None:
+        block = self.document().begin()
+        while block.isValid():
+            block_format = block.blockFormat()
+            if self._is_code_block_format(block_format):
+                block_format.setProperty(CODE_BLOCK_PROPERTY, True)
+                QTextCursor(block).setBlockFormat(block_format)
+            block = block.next()
+        self.document().clearUndoRedoStacks()
 
     def normalize_format_range(self, start: int, end: int) -> None:
         if end <= start:

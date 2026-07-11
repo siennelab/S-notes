@@ -1058,9 +1058,20 @@ class MainWindow(QMainWindow):
         return (DEFAULT_MAIN_CATEGORY, DEFAULT_SUB_CATEGORY, DEFAULT_SUB_SUB_CATEGORY)
 
     def selected_export_directory_path(self) -> tuple[str, ...]:
-        if self.current_note is not None:
-            return self.note_path_tuple(self.current_note)
-        return ()
+        if self.current_sidebar_mode != "directory":
+            return ()
+        main = self.main_filter_combo.currentText()
+        if not main or main == "全部":
+            return ()
+        path = [main]
+        sub = self.sub_filter_combo.currentText()
+        if not sub or sub == "-":
+            return tuple(path)
+        path.append(sub)
+        sub_sub = self.sub_sub_filter_combo.currentText()
+        if sub_sub and sub_sub != "-":
+            path.append(sub_sub)
+        return tuple(path)
 
     def note_path_tuple(self, note: dict) -> tuple[str, ...]:
         path = [note["main_category"]]
