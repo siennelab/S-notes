@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.app_paths import AI_READBOX_DIR
 from src.ai_targets import (
     AI_TARGET_COMMON,
     AI_VISIBILITY_REDACTED,
@@ -12,7 +13,6 @@ from src.ai_targets import (
 )
 from src.database import (
     DATABASE_PATH,
-    PROJECT_ROOT,
     get_note_ai_targets,
     list_ai_safe_notes_for_target,
 )
@@ -26,9 +26,6 @@ from src.sensitive_scan import (
 )
 from src.tag_manager import parse_tags
 from src.time_utils import format_display_datetime, now_shanghai
-
-
-AI_READBOX_DIR = PROJECT_ROOT / "exports" / "ai_readbox"
 
 
 @dataclass

@@ -4,10 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.database import PROJECT_ROOT
-
-
-REDACTION_RULES_PATH = PROJECT_ROOT / "config" / "local_redaction_rules.json"
+from src.app_paths import REDACTION_RULES_PATH
 
 
 @dataclass

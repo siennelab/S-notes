@@ -2,6 +2,9 @@
 
 Task 0 project skeleton for a local PySide6 + SQLite notes app.
 
+User-writable data is stored outside the source tree in
+`~/Library/Application Support/S-notes/`.
+
 ## Run
 
 ```bash

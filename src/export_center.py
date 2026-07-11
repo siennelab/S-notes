@@ -23,11 +23,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.app_paths import (
+    BACKUPS_DIR as SQLITE_BACKUP_DIR,
+    EXPORTS_ROOT,
+    JSON_EXPORT_DIR,
+    MARKDOWN_EXPORT_DIR,
+)
 from src.ai_safe_export import AiSafePackageExporter
 from src.ai_targets import AI_TARGETS
 from src.database import (
     DATABASE_PATH,
-    PROJECT_ROOT,
     get_note_for_export,
     list_directories,
     list_notes_by_ids_for_export,
@@ -38,12 +43,6 @@ from src.floating_combo import FloatingComboBox
 from src.tag_manager import parse_tags
 from src.time_utils import format_display_datetime, now_shanghai
 from src.sensitive_scan import findings_to_dialog_text
-
-
-EXPORTS_ROOT = PROJECT_ROOT / "exports"
-MARKDOWN_EXPORT_DIR = EXPORTS_ROOT / "markdown"
-JSON_EXPORT_DIR = EXPORTS_ROOT / "json"
-SQLITE_BACKUP_DIR = EXPORTS_ROOT / "backups"
 
 
 SCOPE_CURRENT_NOTE = "current_note"
@@ -237,7 +236,7 @@ class ExportCenterDialog(QDialog):
         if scope == SCOPE_SQLITE_BACKUP:
             self.format_combo.setCurrentIndex(self.format_combo.findData(FORMAT_SQLITE))
             self.format_combo.setEnabled(False)
-            self.summary_label.setText("复制当前 SQLite 数据库到 exports/backups/。")
+            self.summary_label.setText("复制当前 SQLite 数据库到 S-notes 用户数据备份目录。")
         else:
             self.format_combo.setEnabled(True)
             sqlite_index = self.format_combo.findData(FORMAT_SQLITE)
@@ -411,10 +410,15 @@ class ExportCenterDialog(QDialog):
 
         self.last_export_path = result.path
         self.finder_button.setEnabled(True)
+        result_summary = (
+            "完整数据库已备份"
+            if scope == SCOPE_SQLITE_BACKUP
+            else f"笔记数量：{result.note_count}"
+        )
         QMessageBox.information(
             self,
             "导出成功",
-            f"导出成功\n文件路径：{result.path}\n笔记数量：{result.note_count}",
+            f"导出成功\n文件路径：{result.path}\n{result_summary}",
         )
 
     def reveal_last_export(self) -> None:

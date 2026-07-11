@@ -5,6 +5,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from src.app_paths import DATABASE_PATH
 from src.ai_targets import (
     AI_TARGET_COMMON,
     AI_TARGETS,
@@ -17,8 +18,6 @@ from src.tag_manager import normalize_tag, parse_tags
 from src.time_utils import now_shanghai, now_shanghai_iso
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = PROJECT_ROOT / "data" / "s_notes.db"
 DEFAULT_MAIN_CATEGORY = "临时"
 DEFAULT_SUB_CATEGORY = "无"
 DEFAULT_SUB_SUB_CATEGORY = "无"
