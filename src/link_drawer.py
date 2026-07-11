@@ -364,6 +364,7 @@ class LinkDrawer(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("linkDrawer")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedWidth(340)
         self.cards: list[LinkResultWidget] = []
 

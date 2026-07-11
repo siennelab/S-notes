@@ -11,12 +11,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QListView,
     QMessageBox,
     QPushButton,
     QTreeWidget,
@@ -36,6 +34,7 @@ from src.database import (
     list_notes_for_export,
     list_notes_under_path_for_export,
 )
+from src.floating_combo import FloatingComboBox
 from src.tag_manager import parse_tags
 from src.time_utils import format_display_datetime, now_shanghai
 from src.sensitive_scan import findings_to_dialog_text
@@ -97,13 +96,10 @@ class ExportResult:
     note_count: int
 
 
-def configure_combo_popup(combo: QComboBox, minimum_popup_width: int) -> None:
-    combo.setView(QListView())
-    combo.setMaxVisibleItems(12)
-    combo.setMinimumContentsLength(8)
-    combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-    combo.view().setMinimumWidth(minimum_popup_width)
-    combo.view().setObjectName("comboPopupView")
+def configure_combo_popup(
+    combo: FloatingComboBox, minimum_popup_width: int
+) -> None:
+    combo.configure_popup(minimum_popup_width)
 
 
 class ExportCenterDialog(QDialog):
@@ -130,7 +126,7 @@ class ExportCenterDialog(QDialog):
         scope_form = QFormLayout()
         scope_form.setContentsMargins(0, 0, 0, 0)
         scope_form.setSpacing(8)
-        self.scope_combo = QComboBox()
+        self.scope_combo = FloatingComboBox()
         configure_combo_popup(self.scope_combo, 300)
         for scope in self.available_scopes():
             self.scope_combo.addItem(SCOPE_LABELS[scope], scope)
@@ -142,7 +138,7 @@ class ExportCenterDialog(QDialog):
         format_form = QFormLayout()
         format_form.setContentsMargins(0, 0, 0, 0)
         format_form.setSpacing(8)
-        self.format_combo = QComboBox()
+        self.format_combo = FloatingComboBox()
         configure_combo_popup(self.format_combo, 260)
         self.format_combo.addItem(FORMAT_LABELS[FORMAT_MARKDOWN], FORMAT_MARKDOWN)
         self.format_combo.addItem(FORMAT_LABELS[FORMAT_JSON], FORMAT_JSON)
@@ -173,7 +169,7 @@ class ExportCenterDialog(QDialog):
         ai_title = QLabel("AI 安全导出")
         ai_title.setObjectName("exportSectionTitle")
         ai_layout.addWidget(ai_title)
-        self.ai_target_combo = QComboBox()
+        self.ai_target_combo = FloatingComboBox()
         configure_combo_popup(self.ai_target_combo, 200)
         for target_name in AI_TARGETS:
             self.ai_target_combo.addItem(target_name, target_name)

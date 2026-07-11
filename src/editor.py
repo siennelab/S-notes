@@ -7,6 +7,8 @@ from PySide6.QtCore import QMimeData
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QPainter,
+    QPen,
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
@@ -14,6 +16,8 @@ from PySide6.QtGui import (
     QTextListFormat,
 )
 from PySide6.QtWidgets import QTextEdit
+
+from src.theme import EDITOR_TEXT, SIDEBAR_TEXT, SUBTLE_BACKGROUND, TOOLBAR_ICON
 
 
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -43,21 +47,23 @@ HTML_ATTRIBUTE_RE = re.compile(r"""(?is)\s(?:style|class|id|on\w+|href|src|data-
 MARKDOWN_SIGNAL_RE = re.compile(
     r"(?m)^(#{1,3}\s+|[-*]\s+|\d+\.\s+|>\s+|```)|(\*\*[^*\n]+\*\*)|(`[^`\n]+`)"
 )
+QUOTE_BLOCK_PROPERTY = QTextFormat.UserProperty + 1
+ZERO_WIDTH_BLANK_CHARACTERS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
 
 
 class NotesEditor(QTextEdit):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.document().setDefaultStyleSheet(
-            """
-            body { color: #2C2926; font-size: 15px; line-height: 180%; }
-            p { margin: 0 0 12px 0; }
-            h1 { font-size: 22pt; font-weight: 700; margin: 12px 0 8px 0; }
-            h2 { font-size: 18pt; font-weight: 700; margin: 10px 0 6px 0; }
-            h3 { font-size: 16pt; font-weight: 700; margin: 8px 0 6px 0; }
-            blockquote { margin-left: 18px; color: #8A8078; font-style: italic; }
-            pre { font-family: 'SF Mono', Menlo, Monaco, monospace; font-size: 12pt; color: #5D554D; background: #EDE6DB; padding: 8px; }
-            code { font-family: 'SF Mono', Menlo, Monaco, monospace; color: #5D554D; background: #EDE6DB; }
+            f"""
+            body {{ color: {EDITOR_TEXT}; font-size: 15px; line-height: 180%; }}
+            p {{ margin: 0 0 12px 0; }}
+            h1 {{ font-size: 22pt; font-weight: 700; margin: 12px 0 8px 0; }}
+            h2 {{ font-size: 18pt; font-weight: 700; margin: 10px 0 6px 0; }}
+            h3 {{ font-size: 16pt; font-weight: 700; margin: 8px 0 6px 0; }}
+            blockquote {{ margin-left: 18px; color: {SIDEBAR_TEXT}; font-style: italic; }}
+            pre {{ font-family: 'SF Mono', Menlo, Monaco, monospace; font-size: 12pt; color: {TOOLBAR_ICON}; background: {SUBTLE_BACKGROUND}; padding: 8px; }}
+            code {{ font-family: 'SF Mono', Menlo, Monaco, monospace; color: {TOOLBAR_ICON}; background: {SUBTLE_BACKGROUND}; }}
             """
         )
 
@@ -90,6 +96,7 @@ class NotesEditor(QTextEdit):
     def set_note_content(self, content: str) -> None:
         if HTML_MARKER_RE.search(content or ""):
             self.setHtml(content)
+            self._restore_quote_properties()
         else:
             self.setPlainText(content or "")
 
@@ -122,6 +129,105 @@ class NotesEditor(QTextEdit):
 
         text = self.toPlainText()
         self.setPlainText(self.sanitize_pasted_text(text))
+
+    def compress_blank_paragraphs(self, keep_one: bool) -> int:
+        if self.isReadOnly() or not self.isEnabled():
+            return 0
+
+        first_block, last_block = self._selected_block_range()
+        blank_runs = self._blank_block_runs(first_block, last_block)
+        positions_to_remove = [
+            block.position()
+            for run in blank_runs
+            for block in (run[1:] if keep_one else run)
+        ]
+        if (
+            not keep_one
+            and self.document().blockCount() == 1
+            and not self.document().begin().text()
+        ):
+            positions_to_remove = []
+        if not positions_to_remove:
+            self.setFocus()
+            return 0
+
+        preserved_cursor = QTextCursor(self.textCursor())
+        vertical_scroll = self.verticalScrollBar().value()
+        edit_cursor = QTextCursor(self.document())
+        edit_cursor.beginEditBlock()
+        try:
+            for position in reversed(positions_to_remove):
+                block = self.document().findBlock(position)
+                if block.isValid():
+                    self._remove_blank_block(block)
+        finally:
+            edit_cursor.endEditBlock()
+
+        self.setTextCursor(preserved_cursor)
+        self.verticalScrollBar().setValue(vertical_scroll)
+        self.setFocus()
+        return len(positions_to_remove)
+
+    @staticmethod
+    def _is_blank_block(block) -> bool:
+        if not block.isValid():
+            return False
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if (
+                fragment.isValid()
+                and fragment.charFormat().objectType() != QTextFormat.NoObject
+            ):
+                return False
+            iterator += 1
+        return all(
+            character.isspace() or character in ZERO_WIDTH_BLANK_CHARACTERS
+            for character in block.text()
+        )
+
+    def _selected_block_range(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return self.document().begin(), self.document().lastBlock()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        return (
+            self.document().findBlock(start),
+            self.document().findBlock(max(start, end - 1)),
+        )
+
+    def _blank_block_runs(self, first_block, last_block) -> list[list]:
+        runs: list[list] = []
+        current_run: list = []
+        block = first_block
+        last_number = last_block.blockNumber()
+        while block.isValid() and block.blockNumber() <= last_number:
+            if self._is_blank_block(block):
+                current_run.append(block)
+            elif current_run:
+                runs.append(current_run)
+                current_run = []
+            block = block.next()
+        if current_run:
+            runs.append(current_run)
+        return runs
+
+    def _remove_blank_block(self, block) -> None:
+        cursor = QTextCursor(self.document())
+        next_block = block.next()
+        if next_block.isValid():
+            cursor.setPosition(block.position())
+            cursor.setPosition(next_block.position(), QTextCursor.KeepAnchor)
+        else:
+            previous_block = block.previous()
+            if previous_block.isValid():
+                cursor.setPosition(previous_block.position() + previous_block.length() - 1)
+                cursor.setPosition(self.document().characterCount() - 1, QTextCursor.KeepAnchor)
+            else:
+                cursor.setPosition(block.position())
+                cursor.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
+        cursor.removeSelectedText()
 
     def apply_heading(self, level: int) -> None:
         cursor = self.textCursor()
@@ -163,16 +269,57 @@ class NotesEditor(QTextEdit):
     def apply_quote(self) -> None:
         cursor = self.textCursor()
         current_format = cursor.blockFormat()
-        if current_format.leftMargin() >= 20:
-            self.reset_current_block()
-            return
         block_format = QTextBlockFormat()
+        if bool(current_format.property(QUOTE_BLOCK_PROPERTY)):
+            block_format.setProperty(QUOTE_BLOCK_PROPERTY, False)
+            block_format.setLeftMargin(0)
+            block_format.setRightMargin(0)
+            block_format.setTopMargin(0)
+            block_format.setBottomMargin(0)
+            cursor.mergeBlockFormat(block_format)
+            self.viewport().update()
+            return
+        block_format.setProperty(QUOTE_BLOCK_PROPERTY, True)
         block_format.setLeftMargin(22)
         block_format.setRightMargin(8)
-        char_format = QTextCharFormat()
-        char_format.setFontItalic(True)
+        block_format.setTopMargin(3)
+        block_format.setBottomMargin(3)
         cursor.mergeBlockFormat(block_format)
-        cursor.mergeCharFormat(char_format)
+        self.viewport().update()
+
+    def _restore_quote_properties(self) -> None:
+        block = self.document().begin()
+        while block.isValid():
+            block_format = block.blockFormat()
+            if block_format.leftMargin() >= 20:
+                block_format.setProperty(QUOTE_BLOCK_PROPERTY, True)
+                QTextCursor(block).setBlockFormat(block_format)
+            block = block.next()
+        self.document().clearUndoRedoStacks()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(QColor(SIDEBAR_TEXT), 3))
+        document_layout = self.document().documentLayout()
+        horizontal_offset = self.horizontalScrollBar().value()
+        vertical_offset = self.verticalScrollBar().value()
+        block = self.document().begin()
+        while block.isValid():
+            block_format = block.blockFormat()
+            if bool(block_format.property(QUOTE_BLOCK_PROPERTY)):
+                rect = document_layout.blockBoundingRect(block).translated(
+                    -horizontal_offset, -vertical_offset
+                )
+                if rect.bottom() >= 0 and rect.top() <= self.viewport().height():
+                    line_x = rect.left() + 7
+                    painter.drawLine(
+                        int(line_x),
+                        int(rect.top() + 3),
+                        int(line_x),
+                        int(rect.bottom() - 3),
+                    )
+            block = block.next()
 
     def apply_code_block(self) -> None:
         cursor = self.textCursor()
@@ -226,7 +373,7 @@ class NotesEditor(QTextEdit):
         char_format.clearProperty(QTextFormat.FontItalic)
         char_format.clearProperty(QTextFormat.FontUnderline)
         char_format.clearProperty(QTextFormat.FontStrikeOut)
-        char_format.setForeground(QColor("#2C2926"))
+        char_format.setForeground(QColor(EDITOR_TEXT))
         char_format.setFontPointSize(15)
         char_format.setFontWeight(QFont.Normal)
         char_format.setFontItalic(False)

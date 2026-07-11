@@ -5,7 +5,6 @@ from PySide6.QtGui import QCloseEvent, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -31,6 +30,7 @@ from src.database import (
     list_ai_receipt_inbox_items,
     reject_ai_receipt_inbox_item,
 )
+from src.floating_combo import FloatingComboBox
 from src.memory_receipt_importer import parse_ai_targets_text, parse_memory_receipt
 from src.tag_manager import format_tags, parse_tags
 from src.time_utils import format_display_datetime
@@ -143,8 +143,9 @@ class ReceiptCard(QFrame):
         ai_label = QLabel("AI 可见性")
         ai_label.setObjectName("receiptFieldLabel")
         ai_row.addWidget(ai_label)
-        self.ai_visibility_combo = QComboBox()
+        self.ai_visibility_combo = FloatingComboBox()
         self.ai_visibility_combo.addItems(AI_VISIBILITY_OPTIONS)
+        self.ai_visibility_combo.configure_popup(220)
         index = self.ai_visibility_combo.findText(receipt["ai_visibility"])
         self.ai_visibility_combo.setCurrentIndex(index if index >= 0 else 0)
         ai_row.addWidget(self.ai_visibility_combo, stretch=1)

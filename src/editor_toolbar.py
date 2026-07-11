@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
 
 from PySide6.QtWidgets import (
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +43,17 @@ class EditorToolbar(QWidget):
         self.clear_format_button = self._button(
             main_row, "清格式", "清除选区或全文格式", editor.clear_formatting
         )
+        self.compress_blank_lines_button = QToolButton()
+        self.compress_blank_lines_button.setObjectName("toolbarButton")
+        self.compress_blank_lines_button.setToolTip("压缩空行")
+        self.compress_blank_lines_button.setFixedSize(28, 28)
+        self.compress_blank_lines_button.setIconSize(QSize(18, 18))
+        self.compress_blank_lines_button.setIcon(
+            QIcon(str(Path(__file__).with_name("icons") / "compress-blank-lines.svg"))
+        )
+        self.compress_blank_lines_button.setMenu(self._build_compress_blank_lines_menu())
+        self.compress_blank_lines_button.setPopupMode(QToolButton.InstantPopup)
+        main_row.addWidget(self.compress_blank_lines_button)
         main_row.addSpacing(8)
         self.format_button = QPushButton("标题▾")
         self.format_button.setObjectName("toolbarButton")
@@ -97,6 +110,16 @@ class EditorToolbar(QWidget):
         menu.addAction("小字", lambda: self.editor.apply_font_size(12))
         menu.addAction("正文大小", lambda: self.editor.apply_font_size(16))
         menu.addAction("大字", lambda: self.editor.apply_font_size(20))
+        return menu
+
+    def _build_compress_blank_lines_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction(
+            "保留一个空行", lambda: self.editor.compress_blank_paragraphs(True)
+        )
+        menu.addAction(
+            "移除所有空行", lambda: self.editor.compress_blank_paragraphs(False)
+        )
         return menu
 
     def _button(self, layout: QHBoxLayout, text: str, tooltip: str, callback, icon: str | None = None) -> QPushButton:
