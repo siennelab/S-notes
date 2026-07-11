@@ -24,9 +24,9 @@ from PySide6.QtWidgets import (
 
 from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS
 from src.database import (
+    _connect,
     accept_ai_receipt_inbox_item,
     create_ai_receipt_inbox_item,
-    delete_ai_receipt_inbox_item,
     get_ai_receipt_inbox_item,
     list_ai_receipt_inbox_items,
     reject_ai_receipt_inbox_item,
@@ -98,14 +98,14 @@ class ReceiptCard(QFrame):
         )
         self.delete_button = QPushButton("删除")
         self.delete_button.setObjectName("receiptRejectButton")
-        self.delete_button.setToolTip("删除回执")
+        self.delete_button.setToolTip("删除回执；不会删除正式笔记")
         self.delete_button.clicked.connect(
             lambda: self.deleteRequested.emit(self.receipt_id)
         )
 
         self.accept_button.setVisible(self.pending)
         self.reject_button.setVisible(self.pending)
-        self.delete_button.setVisible(receipt["status"] == "rejected")
+        self.delete_button.setVisible(not self.pending)
         top.addWidget(self.accept_button)
         top.addWidget(self.reject_button)
         top.addWidget(self.delete_button)
@@ -505,7 +505,7 @@ class ReceiptInboxDialog(QWidget):
             if not should_delete:
                 return
             try:
-                delete_ai_receipt_inbox_item(receipt_id)
+                self._delete_receipt_record(receipt_id)
             except Exception as error:
                 QMessageBox.warning(self, "删除失败", str(error))
                 return
@@ -516,6 +516,15 @@ class ReceiptInboxDialog(QWidget):
 
         message_box.finished.connect(finish_delete)
         message_box.open()
+
+    def _delete_receipt_record(self, receipt_id: int) -> None:
+        current = get_ai_receipt_inbox_item(receipt_id)
+        if current is None:
+            raise ValueError(f"AI 回执不存在: {receipt_id}")
+        with _connect() as connection:
+            connection.execute("DELETE FROM ai_receipt_inbox WHERE id = ?", (receipt_id,))
+            if connection.total_changes == 0:
+                raise ValueError(f"AI 回执不存在: {receipt_id}")
 
 
 class ReceiptImportPreviewDialog(QDialog):
