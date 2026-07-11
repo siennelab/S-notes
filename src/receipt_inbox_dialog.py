@@ -229,12 +229,9 @@ class ReceiptCard(QFrame):
         menu = QMenu(self)
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(self.receipt["status"] in {"pending", "rejected"})
-        delete_action.triggered.connect(
-            lambda checked=False, receipt_id=self.receipt_id: self.deleteRequested.emit(
-                receipt_id
-            )
-        )
-        menu.exec(self.mapToGlobal(position))
+        chosen_action = menu.exec(self.mapToGlobal(position))
+        if chosen_action == delete_action:
+            self.deleteRequested.emit(self.receipt_id)
 
 
 class ReceiptInboxDialog(QDialog):
@@ -346,22 +343,43 @@ class ReceiptInboxDialog(QDialog):
                 for receipt in list_ai_receipt_inbox_items(status=None)
                 if receipt["status"] != "pending"
             ]
+
         receipts = []
         for summary in receipt_summaries:
             receipt = get_ai_receipt_inbox_item(summary["id"])
             if receipt is not None:
                 receipts.append(receipt)
 
-        self._clear_cards()
+        new_content = QWidget()
+        new_content.setObjectName("receiptScrollContent")
+        new_content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        new_layout = QVBoxLayout(new_content)
+        new_layout.setContentsMargins(0, 0, 0, 0)
+        new_layout.setSpacing(8)
+        new_cards: dict[int, ReceiptCard] = {}
+
         for receipt in receipts:
-            card = ReceiptCard(receipt, self.cards_content)
+            card = ReceiptCard(receipt, new_content)
             card.toggleRequested.connect(self.toggle_card)
             card.acceptRequested.connect(self.accept_receipt)
             card.rejectRequested.connect(self.reject_receipt)
             card.deleteRequested.connect(self.confirm_delete_receipt)
             card.set_expanded(receipt["id"] == self.expanded_receipt_id)
-            self.cards[receipt["id"]] = card
-            self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
+            new_cards[receipt["id"]] = card
+            new_layout.addWidget(card)
+        new_layout.addStretch(1)
+
+        old_content = self.scroll.takeWidget()
+        for card in self.cards.values():
+            card.blockSignals(True)
+            card.setEnabled(False)
+
+        self.cards = new_cards
+        self.cards_content = new_content
+        self.cards_layout = new_layout
+        self.scroll.setWidget(new_content)
+        if old_content is not None:
+            old_content.deleteLater()
 
         empty = not receipts
         self.scroll.setVisible(not empty)
@@ -369,18 +387,6 @@ class ReceiptInboxDialog(QDialog):
         self.empty_state.setText(
             "当前没有待确认回执" if self.list_filter == "pending" else "当前没有已处理回执"
         )
-
-    def _clear_cards(self) -> None:
-        old_cards = list(self.cards.values())
-        self.cards.clear()
-        for card in old_cards:
-            card.toggleRequested.disconnect(self.toggle_card)
-            card.acceptRequested.disconnect(self.accept_receipt)
-            card.rejectRequested.disconnect(self.reject_receipt)
-            card.deleteRequested.disconnect(self.confirm_delete_receipt)
-            self.cards_layout.removeWidget(card)
-            card.setParent(None)
-            card.deleteLater()
 
     def _set_tab_state(self, button: QPushButton, active: bool) -> None:
         button.setProperty("active", active)
