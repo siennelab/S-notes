@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QSize, QTimer, Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -12,11 +14,18 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QLayout,
     QListView,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QAbstractItemView,
+    QHeaderView,
+    QStackedWidget,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -29,6 +38,7 @@ from src.batch_note_operations import (
     permanently_delete_trash_items,
     restore_trash_items,
 )
+from src.category_manager import CategoryManagerDialog
 from src.database import (
     DEFAULT_MAIN_CATEGORY,
     DEFAULT_SUB_CATEGORY,
@@ -92,6 +102,9 @@ class MainWindow(QMainWindow):
         self.current_filter_value = ""
         self.metadata_expanded = False
         self.link_drawer_visible = False
+        self.filter_controls_loading = False
+        self.note_id_before_trash: int | None = None
+        self.receipt_inbox_dialog: ReceiptInboxDialog | None = None
         self.save_timer = QTimer(self)
         self.save_timer.setInterval(1000)
         self.save_timer.setSingleShot(True)
@@ -104,7 +117,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("S-notes")
         self.resize(1360, 860)
         self.setCentralWidget(self._build_content())
-        self.refresh_tag_filter_row()
+        self.reload_directory_cache()
+        self.populate_filter_controls()
         self.refresh_directory_tree()
         self.ensure_startup_note_loaded()
 
@@ -115,7 +129,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         sidebar = self._build_sidebar()
-        sidebar.setFixedWidth(260)
+        sidebar.setFixedWidth(390)
         layout.addWidget(sidebar)
         layout.addWidget(self._build_editor(), stretch=1)
         self.link_drawer = LinkDrawer()
@@ -130,47 +144,22 @@ class MainWindow(QMainWindow):
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(10)
 
-        header = QHBoxLayout()
         title = QLabel("S-notes")
         title.setObjectName("sidebarTitle")
         title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        header.addWidget(title, stretch=1)
-        add_button = QPushButton("+")
-        add_button.setObjectName("addNoteButton")
-        add_button.setToolTip("新建笔记")
-        add_button.setFixedSize(24, 22)
-        add_button.clicked.connect(self.handle_create_note)
-        header.addWidget(add_button)
-        export_icon = QPushButton("⬇")
-        export_icon.setObjectName("sidebarIconButton")
-        export_icon.setToolTip("普通导出")
-        export_icon.setFixedSize(24, 22)
-        export_icon.clicked.connect(self.open_export_center)
-        self.link_drawer_button = QPushButton("🔗")
-        self.link_drawer_button.setObjectName("sidebarIconButton")
-        self.link_drawer_button.setToolTip("打开/关闭关联抽屉")
-        self.link_drawer_button.setFixedSize(24, 22)
-        self.link_drawer_button.clicked.connect(self.toggle_link_drawer)
-        header.addWidget(export_icon)
-        header.addWidget(self.link_drawer_button)
-        layout.addLayout(header)
+        title.setFixedHeight(46)
+        layout.addWidget(title)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索，或输入 #标签")
+        self.search_input.setObjectName("sidebarSearch")
+        self.search_input.setPlaceholderText("搜索笔记或 #标签")
+        self.search_input.setFixedHeight(34)
+        self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self.handle_search_text_changed)
         layout.addWidget(self.search_input)
-
-        self.tag_filter_row = QHBoxLayout()
-        self.tag_filter_row.setContentsMargins(0, 0, 0, 0)
-        self.tag_filter_row.setSpacing(4)
-        layout.addLayout(self.tag_filter_row)
-
-        self.smart_section_label = QLabel("智能视图")
-        self.smart_section_label.setObjectName("sectionLabel")
-        layout.addWidget(self.smart_section_label)
 
         smart_row = QHBoxLayout()
         smart_row.setSpacing(4)
@@ -180,35 +169,72 @@ class MainWindow(QMainWindow):
             button.setObjectName("smartTabButton")
             button.setProperty("active", False)
             button.clicked.connect(lambda checked=False, name=view_name: self.show_smart_view(name))
-            smart_row.addWidget(button)
+            button.setCheckable(True)
+            button.setFixedHeight(30)
+            smart_row.addWidget(button, stretch=1)
             self.smart_buttons[view_name] = button
-        smart_row.addStretch(1)
+        self.receipt_inbox_button = QPushButton("待确认")
+        self.receipt_inbox_button.setObjectName("smartTabButton")
+        self.receipt_inbox_button.setFixedHeight(30)
+        self.receipt_inbox_button.setToolTip("打开 AI 待确认")
+        self.receipt_inbox_button.clicked.connect(self.open_receipt_inbox)
+        smart_row.addWidget(self.receipt_inbox_button, stretch=1)
         layout.addLayout(smart_row)
 
-        self.receipt_inbox_button = QPushButton("🤖 AI 待确认")
-        self.receipt_inbox_button.setObjectName("trashButton")
-        self.receipt_inbox_button.clicked.connect(self.open_receipt_inbox)
-        layout.addWidget(self.receipt_inbox_button)
+        filters = QHBoxLayout()
+        filters.setSpacing(6)
+        self.main_filter_combo = QComboBox()
+        self.sub_filter_combo = QComboBox()
+        self.sub_sub_filter_combo = QComboBox()
+        for combo, width in ((self.main_filter_combo, 106), (self.sub_filter_combo, 82), (self.sub_sub_filter_combo, 82)):
+            combo.setObjectName("categoryFilter")
+            combo.setFixedHeight(32)
+            combo.setFixedWidth(width)
+            self.configure_combo_popup(combo, width)
+            filters.addWidget(combo)
+        self.category_manager_button = QPushButton("管理")
+        self.category_manager_button.setObjectName("categoryManagerButton")
+        self.category_manager_button.setToolTip("分类管理")
+        self.category_manager_button.setFixedSize(58, 32)
+        self.category_manager_button.clicked.connect(self.open_category_manager)
+        filters.addWidget(self.category_manager_button)
+        self.main_filter_combo.currentTextChanged.connect(self.handle_main_filter_changed)
+        self.sub_filter_combo.currentTextChanged.connect(self.handle_sub_filter_changed)
+        self.sub_sub_filter_combo.currentTextChanged.connect(self.apply_category_filters)
+        layout.addLayout(filters)
 
-        directory_header = QHBoxLayout()
-        directory_header.setContentsMargins(0, 4, 0, 0)
-        directory_header.setSpacing(4)
-        directory_label = QLabel("目录")
-        directory_label.setObjectName("sectionLabel")
-        directory_header.addWidget(directory_label, stretch=1)
-        layout.addLayout(directory_header)
+        self.note_table = QTableWidget(0, 5)
+        self.note_table.setObjectName("noteTable")
+        self.note_table.setHorizontalHeaderLabels(["日期", "标题", "主分类", "子分类", "子子分类"])
+        self.note_table.verticalHeader().hide()
+        self.note_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.note_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.note_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.note_table.setShowGrid(False)
+        self.note_table.setTextElideMode(Qt.ElideRight)
+        self.note_table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        self.note_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
+        header = self.note_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.resizeSection(0, 58)
+        header.resizeSection(1, 150)
+        header.resizeSection(2, 78)
+        header.resizeSection(3, 78)
+        header.resizeSection(4, 88)
+        header.setStretchLastSection(False)
+        self.note_table.cellClicked.connect(self.handle_note_table_clicked)
+        self.note_table.itemSelectionChanged.connect(self.update_delete_button_state)
+        self.note_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.note_table.customContextMenuRequested.connect(self.open_note_table_context_menu)
 
-        view_status_row = QHBoxLayout()
-        view_status_row.setSpacing(6)
-        self.filter_label = QLabel("目录")
-        self.filter_label.setObjectName("filterLabel")
-        view_status_row.addWidget(self.filter_label, stretch=1)
-        self.clear_filter_button = QPushButton("×")
-        self.clear_filter_button.setObjectName("clearFilterButton")
-        self.clear_filter_button.setToolTip("返回目录")
-        self.clear_filter_button.clicked.connect(self.return_to_directory)
-        view_status_row.addWidget(self.clear_filter_button)
-        layout.addLayout(view_status_row)
+        self.sidebar_stack = QStackedWidget()
+        note_view = QWidget()
+        note_view_layout = QVBoxLayout(note_view)
+        note_view_layout.setContentsMargins(0, 0, 0, 0)
+        note_view_layout.setSpacing(0)
+        note_view_layout.addWidget(self.note_table, stretch=1)
+        self.note_view = note_view
+        self.sidebar_stack.addWidget(note_view)
 
         self.directory_tree = SidebarTreeWidget(self.handle_notes_dropped)
         self.directory_tree.itemClicked.connect(self.handle_tree_item_clicked)
@@ -216,14 +242,32 @@ class MainWindow(QMainWindow):
         self.directory_tree.customContextMenuRequested.connect(
             self.open_directory_context_menu
         )
-        layout.addWidget(self.directory_tree, stretch=1)
+        self.directory_tree.setObjectName("trashTree")
+        self.directory_tree.setRootIsDecorated(False)
+        trash_view = QWidget()
+        trash_view_layout = QVBoxLayout(trash_view)
+        trash_view_layout.setContentsMargins(0, 0, 0, 0)
+        trash_view_layout.setSpacing(4)
+        trash_header = QHBoxLayout()
+        trash_header.addWidget(QLabel("回收站"), stretch=1)
+        self.trash_close_button = QPushButton("×")
+        self.trash_close_button.setObjectName("trashCloseButton")
+        self.trash_close_button.setToolTip("退出回收站")
+        self.trash_close_button.setFixedSize(28, 28)
+        self.trash_close_button.clicked.connect(self.exit_trash)
+        trash_header.addWidget(self.trash_close_button)
+        trash_view_layout.addLayout(trash_header)
+        trash_view_layout.addWidget(self.directory_tree, stretch=1)
+        self.trash_view = trash_view
+        self.sidebar_stack.addWidget(trash_view)
+        layout.addWidget(self.sidebar_stack, stretch=1)
 
         trash_divider = QFrame()
         trash_divider.setObjectName("trashDivider")
         trash_divider.setFrameShape(QFrame.HLine)
         layout.addWidget(trash_divider)
 
-        self.trash_button = QPushButton("🗑 回收站")
+        self.trash_button = QPushButton("回收站")
         self.trash_button.setObjectName("trashButton")
         self.trash_button.clicked.connect(self.show_trash)
         self.trash_button.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -244,15 +288,22 @@ class MainWindow(QMainWindow):
         editor_sheet = QWidget()
         editor_sheet.setObjectName("editorSheet")
         layout = QVBoxLayout(editor_sheet)
-        layout.setContentsMargins(48, 36, 48, 24)
+        layout.setContentsMargins(36, 30, 36, 18)
         layout.setSpacing(10)
         outer_layout.addWidget(editor_sheet, stretch=1)
 
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
         self.title_input = QLineEdit()
         self.title_input.setObjectName("titleInput")
         self.title_input.setPlaceholderText("标题")
         self.title_input.textChanged.connect(self.mark_note_dirty)
-        layout.addWidget(self.title_input)
+        title_row.addWidget(self.title_input, stretch=1)
+        self.pin_button = self._icon_button("pin.svg", "固定当前笔记", self.toggle_current_note_pinned)
+        self.link_drawer_button = self._icon_button("link.svg", "打开或关闭关联栏", self.toggle_link_drawer)
+        title_row.addWidget(self.pin_button)
+        title_row.addWidget(self.link_drawer_button)
+        layout.addLayout(title_row)
 
         self.metadata_summary_button = QPushButton("")
         self.metadata_summary_button.setObjectName("metadataSummaryButton")
@@ -263,6 +314,7 @@ class MainWindow(QMainWindow):
         self.metadata_panel = QWidget()
         self.metadata_panel.setObjectName("metadataPanel")
         metadata_panel_layout = QVBoxLayout(self.metadata_panel)
+        metadata_panel_layout.setSizeConstraint(QLayout.SetNoConstraint)
         metadata_panel_layout.setContentsMargins(14, 10, 14, 10)
         metadata_panel_layout.setSpacing(8)
 
@@ -275,7 +327,8 @@ class MainWindow(QMainWindow):
         main_label.setAlignment(Qt.AlignVCenter)
         self.main_category_combo = QComboBox()
         self.configure_combo_popup(self.main_category_combo, 180)
-        self.main_category_combo.setMinimumWidth(150)
+        self.main_category_combo.setMinimumWidth(0)
+        self.main_category_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.main_category_combo.setFixedHeight(26)
         self.main_category_combo.currentTextChanged.connect(
             self.handle_main_category_changed
@@ -288,7 +341,8 @@ class MainWindow(QMainWindow):
         sub_label.setAlignment(Qt.AlignVCenter)
         self.sub_category_combo = QComboBox()
         self.configure_combo_popup(self.sub_category_combo, 190)
-        self.sub_category_combo.setMinimumWidth(170)
+        self.sub_category_combo.setMinimumWidth(0)
+        self.sub_category_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.sub_category_combo.setFixedHeight(26)
         self.sub_category_combo.currentTextChanged.connect(
             self.handle_sub_category_changed
@@ -301,7 +355,8 @@ class MainWindow(QMainWindow):
         sub_sub_label.setAlignment(Qt.AlignVCenter)
         self.sub_sub_category_combo = QComboBox()
         self.configure_combo_popup(self.sub_sub_category_combo, 180)
-        self.sub_sub_category_combo.setMinimumWidth(150)
+        self.sub_sub_category_combo.setMinimumWidth(0)
+        self.sub_sub_category_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.sub_sub_category_combo.setFixedHeight(26)
         self.sub_sub_category_combo.currentTextChanged.connect(
             self.handle_sub_sub_category_changed
@@ -338,34 +393,43 @@ class MainWindow(QMainWindow):
         self.ai_visibility_combo = QComboBox()
         self.configure_combo_popup(self.ai_visibility_combo, 210)
         self.ai_visibility_combo.addItems(AI_VISIBILITY_OPTIONS)
-        self.ai_visibility_combo.setMinimumWidth(180)
+        self.ai_visibility_combo.setMinimumWidth(0)
+        self.ai_visibility_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.ai_visibility_combo.setFixedHeight(26)
         self.ai_visibility_combo.currentTextChanged.connect(
             self.handle_ai_visibility_changed
         )
         metadata_ai_row.addWidget(ai_label)
-        metadata_ai_row.addWidget(self.ai_visibility_combo)
+        metadata_ai_row.addWidget(self.ai_visibility_combo, stretch=1)
+        metadata_panel_layout.addLayout(metadata_ai_row)
+
+        metadata_targets_row = QHBoxLayout()
+        metadata_targets_row.setContentsMargins(0, 0, 0, 0)
+        metadata_targets_row.setSpacing(12)
         ai_targets_label = QLabel("AI 对象")
         ai_targets_label.setObjectName("metadataFieldLabel")
         ai_targets_label.setAlignment(Qt.AlignVCenter)
-        metadata_ai_row.addWidget(ai_targets_label)
+        metadata_targets_row.addWidget(ai_targets_label)
         ai_targets_widget = QWidget()
         ai_targets_widget.setObjectName("aiTargetsWidget")
+        ai_targets_widget.setMinimumWidth(0)
+        ai_targets_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         ai_targets_layout = QHBoxLayout(ai_targets_widget)
         ai_targets_layout.setContentsMargins(0, 0, 0, 0)
-        ai_targets_layout.setSpacing(16)
+        ai_targets_layout.setSpacing(8)
         self.ai_target_checks: dict[str, QCheckBox] = {}
         for target_name in AI_TARGETS:
             checkbox = QCheckBox(target_name)
             checkbox.setObjectName("aiTargetCheck")
             checkbox.setFixedHeight(22)
-            checkbox.setMinimumWidth(66)
+            checkbox.setMinimumWidth(0)
+            checkbox.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             checkbox.stateChanged.connect(self.handle_ai_targets_changed)
             self.ai_target_checks[target_name] = checkbox
             ai_targets_layout.addWidget(checkbox)
         ai_targets_layout.addStretch(1)
-        metadata_ai_row.addWidget(ai_targets_widget, stretch=1)
-        metadata_panel_layout.addLayout(metadata_ai_row)
+        metadata_targets_row.addWidget(ai_targets_widget, stretch=1)
+        metadata_panel_layout.addLayout(metadata_targets_row)
         layout.addWidget(self.metadata_panel)
         self.set_metadata_expanded(False)
 
@@ -376,26 +440,45 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.editor_toolbar)
         layout.addWidget(self.body_edit, stretch=1)
 
+        self.empty_editor_label = QLabel("选择一篇笔记开始编辑")
+        self.empty_editor_label.setObjectName("editorEmptyState")
+        self.empty_editor_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.empty_editor_label, stretch=1)
+
+        status_row = QHBoxLayout()
         self.status_label = QLabel("未选择笔记")
         self.status_label.setObjectName("statusLabel")
-        self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.status_label)
+        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        status_row.addWidget(self.status_label, stretch=1)
+        self.delete_note_button = QPushButton("删除")
+        self.delete_note_button.setObjectName("deleteNoteButton")
+        self.delete_note_button.setIcon(QIcon(str(Path(__file__).with_name("icons") / "trash.svg")))
+        self.delete_note_button.setIconSize(QSize(16, 16))
+        self.delete_note_button.setFixedHeight(30)
+        self.delete_note_button.setToolTip("删除笔记")
+        self.delete_note_button.clicked.connect(self.confirm_delete_selected_notes)
+        status_row.addWidget(self.delete_note_button)
+        self.new_note_button = self._icon_button("plus.svg", "新建笔记", self.handle_create_note)
+        self.export_button = self._icon_button("export.svg", "导出", self.open_export_center)
+        status_row.addWidget(self.new_note_button)
+        status_row.addWidget(self.export_button)
+        layout.addLayout(status_row)
 
         self.set_editor_enabled(False)
         return editor
 
+    def _icon_button(self, filename: str, tooltip: str, callback) -> QPushButton:
+        button = QPushButton()
+        button.setObjectName("iconButton")
+        button.setIcon(QIcon(str(Path(__file__).with_name("icons") / filename)))
+        button.setIconSize(QSize(16, 16))
+        button.setFixedSize(30, 30)
+        button.setToolTip(tooltip)
+        button.clicked.connect(callback)
+        return button
+
     def ensure_startup_note_loaded(self) -> None:
-        notes = list_notes()
-        if notes:
-            note = notes[0]
-        else:
-            note = create_note_in_directory(
-                DEFAULT_MAIN_CATEGORY,
-                DEFAULT_SUB_CATEGORY,
-                DEFAULT_SUB_SUB_CATEGORY,
-            )
-        self.load_note(note["id"])
-        self.refresh_directory_tree(note["id"])
+        self.clear_editor()
 
     def refresh_tag_filter_row(self) -> None:
         if not hasattr(self, "tag_filter_row"):
@@ -451,40 +534,8 @@ class MainWindow(QMainWindow):
         expanded_directory_id: int | None = None,
     ) -> None:
         self.set_sidebar_mode("directory")
-        self.reload_directory_cache()
-        notes = list_notes()
-        selected_note = None
-        if selected_note_id is not None:
-            selected_note = next(
-                (note for note in notes if note["id"] == selected_note_id), None
-            )
-
-        self.directory_tree.blockSignals(True)
-        self.directory_tree.clear()
-        selected_item = None
-        expanded_directory_ids = self.expanded_directory_ids_for_note(selected_note)
-        expanded_directory_ids.update(
-            self.ancestor_directory_ids(expanded_directory_id)
-            if expanded_directory_id is not None
-            else set()
-        )
-
-        for main_dir in self.display_children_for_directory(None):
-            main_item = self.create_directory_item(main_dir)
-            self.directory_tree.addTopLevelItem(main_item)
-            self.add_directory_children(main_item, main_dir, notes, selected_note_id)
-            self.apply_directory_expansion(main_item, expanded_directory_ids)
-            if selected_note_id is not None:
-                selected_item = selected_item or self.find_note_item(
-                    main_item, selected_note_id
-                )
-
-        if selected_item is not None:
-            self.directory_tree.setCurrentItem(selected_item)
-            self.directory_tree.scrollToItem(selected_item)
-        if selected_note_ids is not None:
-            self.directory_tree.select_note_ids(selected_note_ids)
-        self.directory_tree.blockSignals(False)
+        self.sidebar_stack.setCurrentWidget(self.note_view)
+        self.apply_category_filters(selected_note_id=selected_note_id)
 
     def display_flat_notes(
         self,
@@ -497,26 +548,156 @@ class MainWindow(QMainWindow):
         selected_note_id: int | None = None,
     ) -> None:
         self.set_sidebar_mode(mode, value, title)
-        self.directory_tree.blockSignals(True)
-        self.directory_tree.clear()
-        selected_item = None
-        for note in notes:
-            item = QTreeWidgetItem([note["title"] or "未命名笔记"])
-            item.setData(
-                0,
-                Qt.UserRole,
-                {"type": "deleted_note" if deleted else "note", "id": note["id"]},
+        self.sidebar_stack.setCurrentWidget(self.note_view)
+        self.populate_note_table(notes, selected_note_id)
+
+    def populate_filter_controls(self) -> None:
+        self.filter_controls_loading = True
+        self.set_combo_items(self.main_filter_combo, ["全部", *self.directory_names(None)], "全部")
+        self.set_combo_items(self.sub_filter_combo, ["-"], "-")
+        self.set_combo_items(self.sub_sub_filter_combo, ["-"], "-")
+        self.filter_controls_loading = False
+
+    def handle_main_filter_changed(self) -> None:
+        if self.filter_controls_loading:
+            return
+        self.filter_controls_loading = True
+        main = self.main_filter_combo.currentText()
+        main_id = self.directory_id_for_path((main,)) if main != "全部" else None
+        self.set_combo_items(self.sub_filter_combo, ["-", *self.directory_names(main_id)] if main_id else ["-"], "-")
+        self.set_combo_items(self.sub_sub_filter_combo, ["-"], "-")
+        self.filter_controls_loading = False
+        self.return_to_directory(keep_filters=True)
+
+    def handle_sub_filter_changed(self) -> None:
+        if self.filter_controls_loading:
+            return
+        self.filter_controls_loading = True
+        main, sub = self.main_filter_combo.currentText(), self.sub_filter_combo.currentText()
+        sub_id = self.directory_id_for_path((main, sub)) if main != "全部" and sub != "-" else None
+        self.set_combo_items(self.sub_sub_filter_combo, ["-", *self.directory_names(sub_id)] if sub_id else ["-"], "-")
+        self.filter_controls_loading = False
+        self.return_to_directory(keep_filters=True)
+
+    def apply_category_filters(self, _value: str = "", *, selected_note_id: int | None = None) -> None:
+        if self.filter_controls_loading:
+            return
+        notes = list_notes()
+        main, sub, sub_sub = self.main_filter_combo.currentText(), self.sub_filter_combo.currentText(), self.sub_sub_filter_combo.currentText()
+        if main and main != "全部":
+            notes = [note for note in notes if note["main_category"] == main]
+        if sub and sub != "-":
+            notes = [note for note in notes if note["sub_category"] == sub]
+        if sub_sub and sub_sub != "-":
+            notes = [note for note in notes if note["sub_sub_category"] == sub_sub]
+        self.populate_note_table(notes, selected_note_id)
+
+    def populate_note_table(self, notes: list[dict], selected_note_id: int | None = None) -> None:
+        notes = sorted(notes, key=lambda note: (bool(note.get("is_pinned")), note["updated_at"], note["id"]), reverse=True)
+        self.note_table.blockSignals(True)
+        self.note_table.setRowCount(len(notes))
+        if not notes:
+            self.note_table.setRowCount(1)
+            empty = QTableWidgetItem("这里还没有笔记")
+            empty.setFlags(Qt.NoItemFlags)
+            self.note_table.setItem(0, 1, empty)
+            self.note_table.setRowHeight(0, 36)
+            self.note_table.blockSignals(False)
+            self.update_delete_button_state()
+            return
+        pin_icon = QIcon(str(Path(__file__).with_name("icons") / "pin.svg"))
+        selected_row = None
+        for row, note in enumerate(notes):
+            date_text = str(note["updated_at"])[5:10]
+            values = [date_text, note["title"] or "未命名笔记", note["main_category"], note["sub_category"], note["sub_sub_category"]]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.UserRole, note["id"])
+                item.setToolTip(value)
+                if column == 1 and note.get("is_pinned"):
+                    item.setIcon(pin_icon)
+                self.note_table.setItem(row, column, item)
+            self.note_table.setRowHeight(row, 36)
+            if note["id"] == selected_note_id:
+                selected_row = row
+        if selected_row is not None:
+            self.note_table.selectRow(selected_row)
+            self.note_table.scrollToItem(self.note_table.item(selected_row, 0))
+        self.note_table.blockSignals(False)
+        self.update_delete_button_state()
+
+    def handle_note_table_clicked(self, row: int, _column: int) -> None:
+        item = self.note_table.item(row, 0)
+        if item is None or is_multi_select_click():
+            self.update_delete_button_state()
+            return
+        if not self.force_save_current_note(refresh_tree=False):
+            return
+        self.load_note(int(item.data(Qt.UserRole)))
+
+    def selected_note_ids(self) -> list[int]:
+        rows = sorted({index.row() for index in self.note_table.selectionModel().selectedRows()})
+        return [
+            int(self.note_table.item(row, 0).data(Qt.UserRole))
+            for row in rows
+            if self.note_table.item(row, 0) is not None
+            and self.note_table.item(row, 0).data(Qt.UserRole) is not None
+        ]
+
+    def update_delete_button_state(self) -> None:
+        if not hasattr(self, "delete_note_button"):
+            return
+        count = len(self.selected_note_ids())
+        in_trash = self.current_sidebar_mode == "trash"
+        self.delete_note_button.setVisible(not in_trash)
+        self.delete_note_button.setEnabled(not in_trash and count > 0)
+
+    def open_note_table_context_menu(self, position) -> None:
+        item = self.note_table.itemAt(position)
+        if item is None or item.data(Qt.UserRole) is None:
+            return
+        row = item.row()
+        note_id = int(self.note_table.item(row, 0).data(Qt.UserRole))
+        selected_ids = self.selected_note_ids()
+        if note_id not in selected_ids:
+            self.note_table.clearSelection()
+            self.note_table.selectRow(row)
+            selected_ids = [note_id]
+        menu = QMenu(self)
+        if len(selected_ids) > 1:
+            count_action = menu.addAction(f"已选择 {len(selected_ids)} 篇笔记")
+            count_action.setEnabled(False)
+            menu.addAction("移入回收站", self.confirm_delete_selected_notes)
+        else:
+            note = get_note(note_id)
+            menu.addAction(
+                "取消固定" if note and note["is_pinned"] else "固定笔记",
+                lambda: self.toggle_note_pinned(note_id, not bool(note and note["is_pinned"])),
             )
-            configure_note_item(item, draggable=False)
-            updated_at = format_display_datetime(note["updated_at"])
-            item.setToolTip(0, f"{note['main_category']} / 更新于 {updated_at}")
-            self.directory_tree.addTopLevelItem(item)
-            if selected_note_id == note["id"]:
-                selected_item = item
-        if selected_item is not None:
-            self.directory_tree.setCurrentItem(selected_item)
-            self.directory_tree.scrollToItem(selected_item)
-        self.directory_tree.blockSignals(False)
+            menu.addAction("重命名笔记", lambda: self.prompt_rename_note(note_id))
+            menu.addAction("删除笔记", lambda: self.confirm_delete_note(note_id))
+        menu.exec(self.note_table.viewport().mapToGlobal(position))
+
+    def confirm_delete_selected_notes(self) -> None:
+        note_ids = self.selected_note_ids()
+        if len(note_ids) <= 1:
+            if note_ids:
+                self.confirm_delete_note(note_ids[0])
+            return
+        if not self.confirm_continue(
+            "删除所选笔记",
+            f"删除所选的 {len(note_ids)} 篇笔记后，它们会移入回收站。是否继续？",
+        ):
+            return
+        try:
+            for note_id in note_ids:
+                soft_delete_note(note_id)
+        except Exception as error:
+            QMessageBox.warning(self, "删除笔记失败", str(error))
+            return
+        if self.current_note and self.current_note["id"] in note_ids:
+            self.clear_editor()
+        self.refresh_current_sidebar_view()
 
     def handle_search_text_changed(self) -> None:
         self.search_timer.start()
@@ -557,6 +738,9 @@ class MainWindow(QMainWindow):
         )
 
     def show_smart_view(self, view_name: str) -> None:
+        if self.current_sidebar_mode == "smart_view" and self.current_filter_value == view_name:
+            self.return_to_directory()
+            return
         self.search_input.blockSignals(True)
         self.search_input.clear()
         self.search_input.blockSignals(False)
@@ -570,16 +754,37 @@ class MainWindow(QMainWindow):
         )
 
     def show_trash(self) -> None:
+        if self.current_sidebar_mode != "trash":
+            self.note_id_before_trash = self.current_note["id"] if self.current_note else None
         self.search_input.blockSignals(True)
         self.search_input.clear()
         self.search_input.blockSignals(False)
         self.set_sidebar_mode("trash", label="回收站")
+        self.sidebar_stack.setCurrentWidget(self.trash_view)
         trash_tree = list_trash_tree()
         self.directory_tree.blockSignals(True)
         self.directory_tree.clear()
         self.populate_trash_tree(trash_tree)
         self.directory_tree.expandAll()
         self.directory_tree.blockSignals(False)
+        self.update_delete_button_state()
+
+    def exit_trash(self) -> None:
+        note_id = self.note_id_before_trash
+        self.note_id_before_trash = None
+        self.return_to_directory()
+        if note_id is not None and get_note(note_id) is not None:
+            self.load_note(note_id)
+            self.refresh_directory_tree(note_id)
+        elif self.current_note is None:
+            self.clear_editor()
+        self.update_delete_button_state()
+
+    def open_category_manager(self) -> None:
+        if not self.force_save_current_note(refresh_tree=False):
+            return
+        dialog = CategoryManagerDialog(self)
+        dialog.exec()
 
     def populate_trash_tree(self, trash_tree: dict) -> None:
         directories = trash_tree["directories"]
@@ -594,7 +799,7 @@ class MainWindow(QMainWindow):
 
         for directory in sorted(directories, key=lambda item: (len(item["path"]), item["path"])):
             source = " / ".join(directory["source_path"])
-            label = f"📁 {directory['name']}"
+            label = directory["name"]
             if source:
                 label = f"{label} · 来自 {source}"
             item = QTreeWidgetItem([label])
@@ -612,7 +817,7 @@ class MainWindow(QMainWindow):
                 self.directory_tree.addTopLevelItem(item)
 
         for note in notes:
-            note_item = QTreeWidgetItem([f"📝 {note['title'] or '未命名笔记'}"])
+            note_item = QTreeWidgetItem([note["title"] or "未命名笔记"])
             note_item.setData(0, Qt.UserRole, {"type": "deleted_note", "id": note["id"]})
             configure_trash_item(note_item)
             parent_item = self.trash_parent_item_for_note(
@@ -646,9 +851,6 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.current_sidebar_mode = mode
         self.current_filter_value = value
-        self.filter_label.setText(label or "目录")
-        self.filter_label.setVisible(mode != "directory")
-        self.clear_filter_button.setVisible(mode != "directory")
         if hasattr(self, "directory_tree"):
             self.directory_tree.set_interaction_mode(mode)
         self.update_smart_tab_states()
@@ -657,19 +859,24 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "smart_buttons"):
             return
         for view_name, button in self.smart_buttons.items():
-            button.setProperty(
-                "active",
+            active = (
                 self.current_sidebar_mode == "smart_view"
-                and self.current_filter_value == view_name,
+                and self.current_filter_value == view_name
             )
+            button.setProperty("active", active)
+            button.blockSignals(True)
+            button.setChecked(active)
+            button.blockSignals(False)
             button.style().unpolish(button)
             button.style().polish(button)
 
-    def return_to_directory(self) -> None:
+    def return_to_directory(self, keep_filters: bool = False) -> None:
         self.search_timer.stop()
         self.search_input.blockSignals(True)
         self.search_input.clear()
         self.search_input.blockSignals(False)
+        if not keep_filters:
+            self.populate_filter_controls()
         selected_note_id = self.current_note["id"] if self.current_note else None
         if selected_note_id is not None and get_note(selected_note_id) is None:
             selected_note_id = None
@@ -821,39 +1028,16 @@ class MainWindow(QMainWindow):
         self.refresh_directory_tree(note["id"])
 
     def selected_note_target_path(self) -> tuple[str, str, str]:
-        item = self.directory_tree.currentItem()
-        if item is None:
-            return (
-                DEFAULT_MAIN_CATEGORY,
-                DEFAULT_SUB_CATEGORY,
-                DEFAULT_SUB_SUB_CATEGORY,
-            )
-        data = item.data(0, Qt.UserRole)
-        if data and data.get("type") == "note":
-            note = get_note(data["id"])
-            if note is not None:
-                return (
-                    note["main_category"],
-                    note["sub_category"],
-                    note["sub_sub_category"],
-                )
-        path = self.item_path(item)
-        return self.category_tuple_for_path(path)
+        if self.current_note is not None:
+            return self.note_path_tuple(self.current_note) + (DEFAULT_SUB_CATEGORY,) * (3 - len(self.note_path_tuple(self.current_note)))
+        main = self.main_filter_combo.currentText()
+        if main and main != "全部":
+            sub = self.sub_filter_combo.currentText()
+            sub_sub = self.sub_sub_filter_combo.currentText()
+            return (main, DEFAULT_SUB_CATEGORY if sub == "-" else sub, DEFAULT_SUB_SUB_CATEGORY if sub_sub == "-" else sub_sub)
+        return (DEFAULT_MAIN_CATEGORY, DEFAULT_SUB_CATEGORY, DEFAULT_SUB_SUB_CATEGORY)
 
     def selected_export_directory_path(self) -> tuple[str, ...]:
-        item = self.directory_tree.currentItem()
-        if item is None:
-            if self.current_note is not None:
-                return self.note_path_tuple(self.current_note)
-            return ()
-        data = item.data(0, Qt.UserRole)
-        if data and data.get("type") == "note":
-            note = get_note(data["id"])
-            if note is not None:
-                return self.note_path_tuple(note)
-            return ()
-        if data and data.get("type") == "directory":
-            return self.item_path(item)
         if self.current_note is not None:
             return self.note_path_tuple(self.current_note)
         return ()
@@ -867,18 +1051,7 @@ class MainWindow(QMainWindow):
         return tuple(path)
 
     def visible_note_ids(self) -> list[int]:
-        note_ids: list[int] = []
-
-        def visit(item: QTreeWidgetItem) -> None:
-            data = item.data(0, Qt.UserRole)
-            if data and data.get("type") == "note":
-                note_ids.append(data["id"])
-            for index in range(item.childCount()):
-                visit(item.child(index))
-
-        for index in range(self.directory_tree.topLevelItemCount()):
-            visit(self.directory_tree.topLevelItem(index))
-        return note_ids
+        return [int(self.note_table.item(row, 0).data(Qt.UserRole)) for row in range(self.note_table.rowCount()) if self.note_table.item(row, 0) and self.note_table.item(row, 0).data(Qt.UserRole) is not None]
 
     def open_export_center(self) -> None:
         if not self.force_save_current_note(refresh_tree=False):
@@ -897,11 +1070,46 @@ class MainWindow(QMainWindow):
     def open_receipt_inbox(self) -> None:
         if not self.force_save_current_note(refresh_tree=False):
             return
+        if self.receipt_inbox_dialog is not None:
+            try:
+                self.receipt_inbox_dialog.show()
+                self.receipt_inbox_dialog.raise_()
+                self.receipt_inbox_dialog.activateWindow()
+                return
+            except RuntimeError:
+                self.receipt_inbox_dialog = None
         dialog = ReceiptInboxDialog(self)
-        dialog.exec()
+        self.receipt_inbox_dialog = dialog
+        dialog.finished.connect(
+            lambda _result, target=dialog: self.handle_receipt_inbox_closed(target)
+        )
+        dialog.destroyed.connect(
+            lambda _object=None, target=dialog: self.clear_receipt_inbox_reference(target)
+        )
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def handle_receipt_inbox_closed(self, dialog: ReceiptInboxDialog) -> None:
+        if self.receipt_inbox_dialog is dialog:
+            self.receipt_inbox_dialog = None
         self.refresh_current_sidebar_view(
             self.current_note["id"] if self.current_note else None
         )
+
+    def clear_receipt_inbox_reference(
+        self, dialog: ReceiptInboxDialog | None = None
+    ) -> None:
+        if dialog is not None and self.receipt_inbox_dialog is not dialog:
+            return
+        self.receipt_inbox_dialog = None
+        try:
+            self.receipt_inbox_button.setProperty("active", False)
+            self.receipt_inbox_button.setChecked(False)
+            self.receipt_inbox_button.style().unpolish(self.receipt_inbox_button)
+            self.receipt_inbox_button.style().polish(self.receipt_inbox_button)
+        except RuntimeError:
+            pass
 
     def toggle_link_drawer(self) -> None:
         self.link_drawer_visible = not self.link_drawer_visible
@@ -911,6 +1119,26 @@ class MainWindow(QMainWindow):
         self.link_drawer_button.style().polish(self.link_drawer_button)
         if self.link_drawer_visible:
             self.refresh_link_drawer()
+
+    def toggle_current_note_pinned(self) -> None:
+        if self.current_note is None:
+            return
+        self.toggle_note_pinned(self.current_note["id"], not bool(self.current_note["is_pinned"]))
+        refreshed = get_note(self.current_note["id"])
+        if refreshed is not None:
+            self.current_note = refreshed
+        self.update_note_action_states()
+
+    def update_note_action_states(self) -> None:
+        has_note = self.current_note is not None
+        self.pin_button.setEnabled(has_note)
+        self.link_drawer_button.setEnabled(has_note)
+        self.export_button.setEnabled(has_note)
+        self.pin_button.setProperty("active", has_note and bool(self.current_note.get("is_pinned")))
+        self.pin_button.setToolTip("取消固定" if has_note and self.current_note.get("is_pinned") else "固定当前笔记")
+        self.pin_button.style().unpolish(self.pin_button)
+        self.pin_button.style().polish(self.pin_button)
+        self.update_delete_button_state()
 
     def refresh_link_drawer(self) -> None:
         if not hasattr(self, "link_drawer"):
@@ -991,6 +1219,7 @@ class MainWindow(QMainWindow):
         self.has_unsaved_changes = False
         self.save_timer.stop()
         self.set_editor_enabled(True)
+        self.update_note_action_states()
         self.is_loading_note = False
         self.refresh_link_drawer()
 
@@ -1012,7 +1241,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("回收站中 · 只读")
         self.has_unsaved_changes = False
         self.save_timer.stop()
-        self.set_editor_enabled(False)
+        self.set_editor_enabled(False, show_content=True)
         self.is_loading_note = False
         self.refresh_link_drawer()
 
@@ -1197,7 +1426,9 @@ class MainWindow(QMainWindow):
     def handle_ai_targets_changed(self, _state: int = 0) -> None:
         self.mark_note_dirty()
 
-    def set_editor_enabled(self, enabled: bool) -> None:
+    def set_editor_enabled(self, enabled: bool, *, show_content: bool | None = None) -> None:
+        if show_content is None:
+            show_content = enabled
         self.title_input.setEnabled(enabled)
         self.main_category_combo.setEnabled(enabled)
         self.sub_category_combo.setEnabled(enabled)
@@ -1210,6 +1441,16 @@ class MainWindow(QMainWindow):
         self.editor_toolbar.setEnabled(enabled)
         self.metadata_summary_button.setEnabled(enabled)
         self.metadata_panel.setEnabled(enabled)
+        self.title_input.setVisible(show_content)
+        self.pin_button.setVisible(enabled)
+        self.link_drawer_button.setVisible(enabled)
+        self.metadata_summary_button.setVisible(show_content)
+        self.metadata_panel.setVisible(show_content and self.metadata_expanded)
+        self.editor_toolbar.setVisible(show_content)
+        self.body_edit.setVisible(show_content)
+        self.empty_editor_label.setVisible(not show_content)
+        if hasattr(self, "pin_button"):
+            self.update_note_action_states()
 
     def mark_note_dirty(self) -> None:
         if self.is_loading_note or self.current_note is None:
@@ -1605,10 +1846,37 @@ class MainWindow(QMainWindow):
         self.has_unsaved_changes = False
         self.save_timer.stop()
         self.set_editor_enabled(False)
+        self.update_note_action_states()
         self.is_loading_note = False
         self.refresh_link_drawer()
 
     def refresh_after_directory_change(self) -> None:
+        previous_main = self.main_filter_combo.currentText()
+        previous_sub = self.sub_filter_combo.currentText()
+        previous_sub_sub = self.sub_sub_filter_combo.currentText()
+        self.reload_directory_cache()
+
+        main_names = self.directory_names(None)
+        valid_main = previous_main if previous_main in main_names else "全部"
+        main_id = self.directory_id_for_path((valid_main,)) if valid_main != "全部" else None
+        sub_names = self.directory_names(main_id) if main_id is not None else []
+        valid_sub = previous_sub if previous_sub in sub_names else "-"
+        sub_id = (
+            self.directory_id_for_path((valid_main, valid_sub))
+            if valid_main != "全部" and valid_sub != "-"
+            else None
+        )
+        sub_sub_names = self.directory_names(sub_id) if sub_id is not None else []
+        valid_sub_sub = previous_sub_sub if previous_sub_sub in sub_sub_names else "-"
+
+        self.filter_controls_loading = True
+        self.set_combo_items(self.main_filter_combo, ["全部", *main_names], valid_main)
+        self.set_combo_items(self.sub_filter_combo, ["-", *sub_names], valid_sub)
+        self.set_combo_items(
+            self.sub_sub_filter_combo, ["-", *sub_sub_names], valid_sub_sub
+        )
+        self.filter_controls_loading = False
+
         selected_note_id = self.current_note["id"] if self.current_note else None
         if selected_note_id is not None:
             if get_note(selected_note_id) is None:
@@ -1616,7 +1884,9 @@ class MainWindow(QMainWindow):
                 selected_note_id = None
             else:
                 self.load_note(selected_note_id)
-        self.refresh_directory_tree(selected_note_id)
+        self.set_sidebar_mode("directory")
+        self.sidebar_stack.setCurrentWidget(self.note_view)
+        self.apply_category_filters(selected_note_id=selected_note_id)
 
     def reload_current_note(self) -> None:
         if self.current_note is None:

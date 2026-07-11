@@ -141,9 +141,16 @@ QInputDialog {
 }
 #sidebarTitle {
     color: #2C2926;
-    font-size: 14px;
+    font-size: 26px;
     font-weight: 600;
 }
+#sidebarSearch, #categoryFilter {
+    border: 1px solid #D6CEC4;
+    border-radius: 7px;
+    background: #FAF7F2;
+    padding: 5px 9px;
+}
+#categoryFilter { padding-right: 18px; }
 #sidebarIcon {
     color: #8A8078;
     font-size: 12px;
@@ -285,7 +292,7 @@ QInputDialog {
 }
 #smartTabButton {
     border: 0;
-    border-radius: 16px;
+    border-radius: 6px;
     padding: 4px 8px;
     background: transparent;
     color: #8A8078;
@@ -295,9 +302,102 @@ QInputDialog {
     background: #E8DFD3;
 }
 #smartTabButton[active="true"] {
-    background: #C4956A;
-    color: #FFFFFF;
+    background: #E8DFD3;
+    color: #2C2926;
 }
+#noteTable {
+    border: 0;
+    background: #F3EDE4;
+    alternate-background-color: #F3EDE4;
+    outline: 0;
+}
+#noteTable::item {
+    border: 0;
+    padding: 5px 6px;
+}
+#noteTable::item:hover { background: #EDE6DB; }
+#noteTable::item:selected { background: #E8DFD3; color: #2C2926; }
+#categoryManagerButton {
+    border: 0;
+    border-radius: 6px;
+    color: #6B635B;
+    padding: 4px 6px;
+}
+#categoryManagerButton:hover { background: #E8DFD3; }
+#deleteNoteButton {
+    border: 0;
+    border-radius: 6px;
+    color: #6B635B;
+    padding: 4px 7px;
+    background: transparent;
+}
+#deleteNoteButton:hover { background: #E8DFD3; }
+#deleteNoteButton:disabled { color: #B8AFA6; background: transparent; }
+#categoryManagerDialog { background: #FAF7F2; }
+#categoryManagerTitle { color: #6B635B; font-size: 12px; }
+#categoryColumn {
+    background: #F3EDE4;
+    border-radius: 8px;
+}
+#categoryManagerList {
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    outline: 0;
+}
+#categoryManagerList::item { padding: 7px 8px; }
+#categoryManagerList::item:hover { background: #EDE6DB; }
+#categoryManagerList::item:selected { background: #E8DFD3; color: #2C2926; }
+#categoryNewButton {
+    border: 0;
+    border-radius: 5px;
+    color: #6B635B;
+    text-align: left;
+    padding: 6px 7px;
+}
+#categoryNewButton:hover { background: #E8DFD3; }
+#categoryNewButton:disabled { color: #B8AFA6; background: transparent; }
+#categoryManagerClose { padding: 5px 12px; }
+#noteTable QHeaderView::section {
+    border: 0;
+    border-bottom: 1px solid #D6CEC4;
+    background: #F3EDE4;
+    color: #8A8078;
+    padding: 6px;
+    font-size: 12px;
+    font-weight: 500;
+}
+#iconButton {
+    border: 0;
+    border-radius: 6px;
+    padding: 5px;
+    background: transparent;
+}
+#iconButton:hover, #iconButton[active="true"] { background: #E8DFD3; }
+#iconButton:disabled { background: transparent; }
+#editorEmptyState { color: #8A8078; font-size: 15px; }
+QAbstractScrollArea::corner { background: transparent; }
+QScrollBar:vertical {
+    border: 0;
+    background: transparent;
+    width: 7px;
+    margin: 0;
+}
+QScrollBar:horizontal {
+    border: 0;
+    background: transparent;
+    height: 7px;
+    margin: 0;
+}
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: #D6CEC4;
+    border-radius: 3px;
+    min-height: 24px;
+    min-width: 24px;
+}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #8A8078; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; background: transparent; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 #addNoteButton {
     border: 0;
     border-radius: 6px;
@@ -354,6 +454,28 @@ QInputDialog {
     background: #EDE6DB;
     color: #2C2926;
 }
+#trashCloseButton {
+    border: 0;
+    border-radius: 6px;
+    padding: 0;
+    color: #8A8078;
+    background: transparent;
+    font-size: 15px;
+}
+#trashCloseButton:hover { background: #E8DFD3; color: #2C2926; }
+#trashTree {
+    border: 0;
+    outline: 0;
+    padding: 0;
+}
+#trashTree::item {
+    border: 0;
+    border-left: 0;
+    margin: 1px 0;
+    padding: 7px 8px;
+}
+#trashTree::item:selected { border: 0; background: #E8DFD3; color: #2C2926; }
+#trashTree::branch { background: transparent; border: 0; }
 #clearFilterButton {
     border: 0;
     border-radius: 4px;
@@ -377,10 +499,9 @@ QInputDialog {
     font-size: 12px;
 }
 #statusLabel {
-    background: #F3EDE4;
+    background: transparent;
     color: #8A8078;
     padding: 4px 6px;
-    border-radius: 6px;
 }
 #filterLabel {
     padding: 2px 2px 0 2px;
@@ -452,6 +573,10 @@ QInputDialog {
     color: #8A8078;
     font-size: 12px;
 }
+#linkDrawerSummary {
+    color: #8A8078;
+    font-size: 12px;
+}
 #linkDrawerScroll {
     background: #F3EDE4;
 }
@@ -473,8 +598,20 @@ QInputDialog {
 }
 #linkResult {
     border: 0;
-    border-radius: 6px;
-    background: #FAF7F2;
+    border-radius: 4px;
+    background: transparent;
+}
+#linkReasonTags { background: transparent; }
+#linkReasonTag {
+    border-radius: 7px;
+    padding: 2px 6px;
+    background: #F0E6D8;
+    color: #6B635B;
+    font-size: 11px;
+}
+#linkReasonTag[important="true"] {
+    background: #C4956A;
+    color: #FFFFFF;
 }
 #linkResult:hover {
     background: #EDE6DB;
@@ -484,8 +621,50 @@ QInputDialog {
     font-size: 13px;
     font-weight: 600;
 }
-#linkResultSubtitle {
+#linkResultPath,
+#linkResultUpdated {
     color: #8A8078;
     font-size: 11px;
 }
+#receiptInboxDialog { background: #FAF7F2; }
+#receiptInboxTitle { color: #2C2926; font-size: 18px; font-weight: 600; }
+#receiptTabButton {
+    border-radius: 7px;
+    color: #8A8078;
+    padding: 5px 9px;
+}
+#receiptTabButton[active="true"] { background: #E8DFD3; color: #2C2926; }
+#receiptImportButton { color: #6B635B; padding: 5px 8px; }
+#receiptEmptyState { color: #8A8078; font-size: 13px; }
+#receiptScroll { border: 0; background: #FAF7F2; }
+#receiptScrollContent { background: #FAF7F2; }
+#receiptCard {
+    border: 1px solid #E0D8CE;
+    border-radius: 8px;
+    background: #FAF7F2;
+}
+#receiptCard[expanded="true"] { border-color: #C4956A; background: #F3EDE4; }
+#receiptCard:hover { background: #F3EDE4; }
+#receiptCardTitle { color: #2C2926; font-size: 14px; font-weight: 600; }
+#receiptCardSummary { color: #8A8078; font-size: 11px; }
+#receiptFieldLabel { color: #8A8078; font-size: 11px; }
+#receiptCardDetails { background: transparent; }
+#receiptAcceptButton {
+    background: #C4956A;
+    color: #FFFFFF;
+    padding: 5px 9px;
+}
+#receiptAcceptButton:hover { background: #6B635B; }
+#receiptAcceptButton:pressed { background: #2C2926; }
+#receiptAcceptButton:disabled {
+    background: #E8DFD3;
+    color: #B8AFA6;
+}
+#receiptRejectButton {
+    color: #6B635B;
+    background: transparent;
+    padding: 5px 8px;
+}
+#receiptRejectButton:hover { background: #E8DFD3; }
+#receiptRejectButton:pressed { background: #D6CEC4; }
 """

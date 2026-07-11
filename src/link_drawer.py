@@ -6,12 +6,15 @@ from pathlib import Path
 from html.parser import HTMLParser
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -98,6 +101,9 @@ class LinkResult:
     title: str
     subtitle: str = ""
     reason: str = ""
+    path: str = ""
+    updated_at: str = ""
+    reasons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -134,6 +140,8 @@ def _add_unique(results: list[LinkResult], note: dict, subtitle: str, reason: st
             title=note["title"] or "未命名笔记",
             subtitle=subtitle,
             reason=reason,
+            path=_path_text(note),
+            updated_at=note["updated_at"],
         )
     )
 
@@ -252,63 +260,54 @@ def build_link_drawer_data(
     return LinkDrawerData(sections=sections)
 
 
-class LinkSectionWidget(QWidget):
-    noteSelected = Signal(int)
+REASON_LABELS = (
+    ("manual_references", "引用"),
+    ("backlinks", "被引用"),
+    ("same_directory", "同目录"),
+    ("same_tags", "同标签"),
+    ("text_related", "正文"),
+    ("ai_related", "AI共享"),
+)
 
-    def __init__(self, title: str, empty_text: str, parent=None) -> None:
-        super().__init__(parent)
-        self.title = title
-        self.empty_text = empty_text
-        self.expanded = True
-        self.result_count = 0
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+def aggregate_link_results(data: LinkDrawerData) -> list[LinkResult]:
+    merged: dict[int, LinkResult] = {}
+    stable_order: list[int] = []
+    for section_key, label in REASON_LABELS:
+        for result in data.sections.get(section_key, []):
+            if result.note_id not in merged:
+                merged[result.note_id] = LinkResult(
+                    note_id=result.note_id,
+                    title=result.title,
+                    path=result.path,
+                    updated_at=result.updated_at,
+                )
+                stable_order.append(result.note_id)
+            if label not in merged[result.note_id].reasons:
+                merged[result.note_id].reasons.append(label)
+    results = [merged[note_id] for note_id in stable_order]
+    results.sort(key=lambda item: item.updated_at, reverse=True)
+    results.sort(key=lambda item: len(item.reasons), reverse=True)
+    results.sort(
+        key=lambda item: any(reason in {"引用", "被引用"} for reason in item.reasons),
+        reverse=True,
+    )
+    return results
 
-        self.header_button = QPushButton()
-        self.header_button.setObjectName("linkSectionHeader")
-        self.header_button.setCursor(Qt.PointingHandCursor)
-        self.header_button.clicked.connect(self.toggle_expanded)
-        layout.addWidget(self.header_button)
 
-        self.body = QWidget()
-        self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(0, 0, 0, 8)
-        self.body_layout.setSpacing(6)
-        layout.addWidget(self.body)
-        self.set_results([])
+class ElidedLabel(QLabel):
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.full_text = text
+        self.setToolTip(text)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
-    def toggle_expanded(self) -> None:
-        self.expanded = not self.expanded
-        self.body.setVisible(self.expanded)
-        self.update_header()
-
-    def update_header(self) -> None:
-        marker = "▾" if self.expanded else "▸"
-        self.header_button.setText(f"{marker} {self.title} · {self.result_count}")
-
-    def set_results(self, results: list[LinkResult]) -> None:
-        while self.body_layout.count():
-            item = self.body_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-
-        self.result_count = len(results)
-        self.update_header()
-        if not results:
-            empty = QLabel(self.empty_text)
-            empty.setObjectName("linkEmptyText")
-            empty.setWordWrap(True)
-            self.body_layout.addWidget(empty)
-            return
-
-        for result in results:
-            row = LinkResultWidget(result)
-            row.noteSelected.connect(self.noteSelected)
-            self.body_layout.addWidget(row)
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        text = self.fontMetrics().elidedText(self.full_text, Qt.ElideRight, self.width())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.rect(), Qt.AlignLeft | Qt.AlignVCenter, text)
 
 
 class LinkResultWidget(QFrame):
@@ -321,19 +320,36 @@ class LinkResultWidget(QFrame):
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(2)
+        layout.setContentsMargins(10, 9, 10, 9)
+        layout.setSpacing(6)
 
-        title = QLabel(result.title)
+        title = ElidedLabel(result.title)
         title.setObjectName("linkResultTitle")
-        title.setWordWrap(True)
+        title.setWordWrap(False)
         layout.addWidget(title)
 
-        if result.subtitle:
-            subtitle = QLabel(result.subtitle)
-            subtitle.setObjectName("linkResultSubtitle")
-            subtitle.setWordWrap(True)
-            layout.addWidget(subtitle)
+        tags = QWidget()
+        tags.setObjectName("linkReasonTags")
+        tags_layout = QGridLayout(tags)
+        tags_layout.setContentsMargins(0, 0, 0, 0)
+        tags_layout.setHorizontalSpacing(4)
+        tags_layout.setVerticalSpacing(4)
+        for index, reason in enumerate(result.reasons):
+            tag = QLabel(reason)
+            tag.setObjectName("linkReasonTag")
+            tag.setProperty("important", reason in {"引用", "被引用"})
+            tag.setAlignment(Qt.AlignCenter)
+            tags_layout.addWidget(tag, index // 3, index % 3)
+        tags_layout.setColumnStretch(3, 1)
+        layout.addWidget(tags)
+
+        path = ElidedLabel(result.path or "未分类")
+        path.setObjectName("linkResultPath")
+        layout.addWidget(path)
+
+        updated = QLabel(format_display_datetime(result.updated_at))
+        updated.setObjectName("linkResultUpdated")
+        layout.addWidget(updated)
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -349,7 +365,7 @@ class LinkDrawer(QWidget):
         super().__init__(parent)
         self.setObjectName("linkDrawer")
         self.setFixedWidth(340)
-        self.sections: dict[str, LinkSectionWidget] = {}
+        self.cards: list[LinkResultWidget] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -367,7 +383,11 @@ class LinkDrawer(QWidget):
         header.addWidget(close_button)
         layout.addLayout(header)
 
-        self.empty_state = QLabel("未选择笔记")
+        self.summary = QLabel("共 0 篇关联笔记")
+        self.summary.setObjectName("linkDrawerSummary")
+        layout.addWidget(self.summary)
+
+        self.empty_state = QLabel("暂无关联笔记")
         self.empty_state.setObjectName("linkDrawerEmptyState")
         self.empty_state.setWordWrap(True)
         layout.addWidget(self.empty_state)
@@ -376,22 +396,32 @@ class LinkDrawer(QWidget):
         self.scroll.setObjectName("linkDrawerScroll")
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         content = QWidget()
-        self.sections_layout = QVBoxLayout(content)
-        self.sections_layout.setContentsMargins(0, 0, 0, 0)
-        self.sections_layout.setSpacing(8)
-        for key, section_title, empty_text in SECTION_TITLES:
-            section = LinkSectionWidget(section_title, empty_text)
-            section.noteSelected.connect(self.noteSelected)
-            self.sections[key] = section
-            self.sections_layout.addWidget(section)
-        self.sections_layout.addStretch(1)
+        content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.cards_layout = QVBoxLayout(content)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(8)
+        self.cards_layout.addStretch(1)
         self.scroll.setWidget(content)
         layout.addWidget(self.scroll, stretch=1)
 
     def refresh(self, current_note_id: int | None) -> None:
-        self.empty_state.setVisible(current_note_id is None)
-        self.scroll.setVisible(current_note_id is not None)
         data = build_link_drawer_data(current_note_id)
-        for key, _title, _empty in SECTION_TITLES:
-            self.sections[key].set_results(data.sections.get(key, []))
+        self.set_results(aggregate_link_results(data))
+
+    def set_results(self, results: list[LinkResult]) -> None:
+        while self.cards_layout.count() > 1:
+            item = self.cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.cards = []
+        self.summary.setText(f"共 {len(results)} 篇关联笔记")
+        self.empty_state.setVisible(not results)
+        self.scroll.setVisible(bool(results))
+        for result in results:
+            card = LinkResultWidget(result)
+            card.noteSelected.connect(self.noteSelected)
+            self.cards.append(card)
+            self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)

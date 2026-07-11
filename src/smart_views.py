@@ -7,7 +7,6 @@ from src.database import (
 
 
 SMART_VIEWS = (
-    ("固定", "pinned"),
     ("最近", "recent"),
     ("待办", "todo"),
     ("AI资料", "ai"),

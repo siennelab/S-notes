@@ -28,6 +28,8 @@ FIELD_ALIASES = {
     "AI可见性": "ai_visibility",
     "AI 可见性": "ai_visibility",
     "适用对象": "ai_targets",
+    "AI对象": "ai_targets",
+    "AI 对象": "ai_targets",
     "正文": "body",
 }
 
@@ -121,6 +123,14 @@ def _default_values(raw_text: str) -> dict:
 def _extract_marked_content(raw_text: str) -> tuple[str, str]:
     start = raw_text.find(START_MARKER)
     end = raw_text.find(END_MARKER)
+    if start < 0 and end < 0:
+        has_known_field = any(
+            match is not None and _field_key(match.group(1)) is not None
+            for line in raw_text.splitlines()
+            for match in [FIELD_RE.match(line)]
+        )
+        if has_known_field:
+            return raw_text.strip(), ""
     if start < 0 or end < 0 or end <= start:
         return raw_text, "未找到完整的 S-notes 记忆回执头尾标记。"
     content = raw_text[start + len(START_MARKER):end]

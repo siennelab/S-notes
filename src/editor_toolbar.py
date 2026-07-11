@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from PySide6.QtGui import QIcon
+
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -29,33 +32,33 @@ class EditorToolbar(QWidget):
         main_row.setSpacing(5)
         layout.addLayout(main_row)
 
-        self.undo_button = self._button(main_row, "↶", "撤销", editor.undo)
-        self.redo_button = self._button(main_row, "↷", "重做", editor.redo)
-        self._separator(main_row)
+        self.undo_button = self._button(main_row, "", "撤销", editor.undo, "undo.svg")
+        self.redo_button = self._button(main_row, "", "重做", editor.redo, "redo.svg")
+        main_row.addSpacing(8)
         self.bold_button = self._button(main_row, "B", "加粗", editor.apply_bold)
         self.italic_button = self._button(main_row, "I", "斜体", editor.apply_italic)
         self.strike_button = self._button(main_row, "S", "删除线", editor.apply_strike)
         self.clear_format_button = self._button(
             main_row, "清格式", "清除选区或全文格式", editor.clear_formatting
         )
-        self._separator(main_row)
+        main_row.addSpacing(8)
         self.format_button = QPushButton("标题▾")
         self.format_button.setObjectName("toolbarButton")
         self.format_button.setToolTip("标题和字号")
         self.format_button.setMenu(self._build_format_menu())
         main_row.addWidget(self.format_button)
 
-        for text, tooltip, callback in (
-            ("•", "无序列表", lambda: editor.apply_list(False)),
-            ("1.", "有序列表", lambda: editor.apply_list(True)),
-            ("“”", "引用", editor.apply_quote),
-            ("{}", "代码块", editor.apply_code_block),
+        for text, tooltip, callback, icon in (
+            ("", "无序列表", lambda: editor.apply_list(False), "bullets.svg"),
+            ("", "有序列表", lambda: editor.apply_list(True), "numbered.svg"),
+            ("", "引用", editor.apply_quote, "quote.svg"),
+            ("代码", "代码块", editor.apply_code_block, None),
         ):
-            self._button(main_row, text, tooltip, callback)
-        self._separator(main_row)
+            self._button(main_row, text, tooltip, callback, icon)
+        main_row.addSpacing(8)
 
         self.find_toggle_button = self._button(
-            main_row, "⌕", "展开或收起查找替换", self.toggle_find_panel
+            main_row, "查找", "展开或收起查找替换", self.toggle_find_panel
         )
         main_row.addStretch(1)
 
@@ -96,10 +99,13 @@ class EditorToolbar(QWidget):
         menu.addAction("大字", lambda: self.editor.apply_font_size(20))
         return menu
 
-    def _button(self, layout: QHBoxLayout, text: str, tooltip: str, callback) -> QPushButton:
+    def _button(self, layout: QHBoxLayout, text: str, tooltip: str, callback, icon: str | None = None) -> QPushButton:
         button = QPushButton(text)
         button.setObjectName("toolbarButton")
         button.setToolTip(tooltip)
+        button.setFixedHeight(28)
+        if icon:
+            button.setIcon(QIcon(str(Path(__file__).with_name("icons") / icon)))
         button.clicked.connect(callback)
         layout.addWidget(button)
         return button
