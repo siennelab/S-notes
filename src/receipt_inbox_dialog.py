@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QCloseEvent, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -62,6 +63,8 @@ class ReceiptCard(QFrame):
         self.receipt_id = int(receipt["id"])
         self.expanded = False
         self.pending = receipt["status"] == "pending"
+        self._context_menu: QMenu | None = None
+
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
         self.setCursor(Qt.PointingHandCursor)
@@ -86,12 +89,17 @@ class ReceiptCard(QFrame):
         summary.setObjectName("receiptCardSummary")
         title_area.addWidget(summary)
         top.addLayout(title_area, stretch=1)
+
         self.accept_button = QPushButton("确认")
         self.accept_button.setObjectName("receiptAcceptButton")
-        self.accept_button.clicked.connect(lambda: self.acceptRequested.emit(self.receipt_id))
+        self.accept_button.clicked.connect(
+            lambda: self.acceptRequested.emit(self.receipt_id)
+        )
         self.reject_button = QPushButton("拒绝")
         self.reject_button.setObjectName("receiptRejectButton")
-        self.reject_button.clicked.connect(lambda: self.rejectRequested.emit(self.receipt_id))
+        self.reject_button.clicked.connect(
+            lambda: self.rejectRequested.emit(self.receipt_id)
+        )
         self.accept_button.setVisible(self.pending)
         self.reject_button.setVisible(self.pending)
         top.addWidget(self.accept_button)
@@ -215,7 +223,9 @@ class ReceiptCard(QFrame):
             "tags": format_tags(parse_tags(self.tags_input.text())),
             "ai_visibility": self.ai_visibility_combo.currentText(),
             "ai_targets": ", ".join(
-                target for target, checkbox in self.ai_target_checks.items() if checkbox.isChecked()
+                target
+                for target, checkbox in self.ai_target_checks.items()
+                if checkbox.isChecked()
             ),
             "body": self.body_edit.toPlainText(),
         }
@@ -226,22 +236,44 @@ class ReceiptCard(QFrame):
         super().mouseReleaseEvent(event)
 
     def _open_context_menu(self, position) -> None:
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(self.receipt["status"] in {"pending", "rejected"})
-        chosen_action = menu.exec(self.mapToGlobal(position))
-        if chosen_action == delete_action:
-            self.deleteRequested.emit(self.receipt_id)
+        receipt_id = self.receipt_id
+
+        def request_delete() -> None:
+            QTimer.singleShot(
+                0,
+                lambda target_id=receipt_id: self.deleteRequested.emit(target_id),
+            )
+
+        delete_action.triggered.connect(request_delete)
+        menu.aboutToHide.connect(self._release_context_menu)
+        self._context_menu = menu
+        menu.popup(self.mapToGlobal(position))
+
+    def _release_context_menu(self) -> None:
+        menu = self._context_menu
+        self._context_menu = None
+        if menu is not None:
+            menu.deleteLater()
 
 
-class ReceiptInboxDialog(QDialog):
+class ReceiptInboxDialog(QWidget):
+    finished = Signal(int)
+
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
+        super().__init__(parent, Qt.Window)
         self.list_filter = "pending"
         self.expanded_receipt_id: int | None = None
         self.cards: dict[int, ReceiptCard] = {}
+        self.scroll: QScrollArea | None = None
+        self._refresh_scheduled = False
+        self._finished_emitted = False
+        self._delete_message_box: QMessageBox | None = None
+
         self.setWindowTitle("AI 待确认收件箱")
-        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.resize(600, 700)
         self.setMinimumSize(520, 420)
@@ -259,10 +291,14 @@ class ReceiptInboxDialog(QDialog):
         toolbar.setSpacing(6)
         self.pending_filter_button = QPushButton("待确认（0）")
         self.pending_filter_button.setObjectName("receiptTabButton")
-        self.pending_filter_button.clicked.connect(lambda: self.set_list_filter("pending"))
+        self.pending_filter_button.clicked.connect(
+            lambda: self.set_list_filter("pending")
+        )
         self.processed_filter_button = QPushButton("已处理")
         self.processed_filter_button.setObjectName("receiptTabButton")
-        self.processed_filter_button.clicked.connect(lambda: self.set_list_filter("processed"))
+        self.processed_filter_button.clicked.connect(
+            lambda: self.set_list_filter("processed")
+        )
         toolbar.addWidget(self.pending_filter_button)
         toolbar.addWidget(self.processed_filter_button)
         toolbar.addStretch(1)
@@ -272,25 +308,13 @@ class ReceiptInboxDialog(QDialog):
         toolbar.addWidget(self.import_button)
         layout.addLayout(toolbar)
 
+        self.content_stack = QStackedWidget()
+        self.content_stack.setObjectName("receiptContentStack")
         self.empty_state = QLabel("")
         self.empty_state.setObjectName("receiptEmptyState")
         self.empty_state.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.empty_state, stretch=1)
-
-        self.scroll = QScrollArea()
-        self.scroll.setObjectName("receiptScroll")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.cards_content = QWidget()
-        self.cards_content.setObjectName("receiptScrollContent")
-        self.cards_content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.cards_layout = QVBoxLayout(self.cards_content)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.setSpacing(8)
-        self.cards_layout.addStretch(1)
-        self.scroll.setWidget(self.cards_content)
-        layout.addWidget(self.scroll, stretch=1)
+        self.content_stack.addWidget(self.empty_state)
+        layout.addWidget(self.content_stack, stretch=1)
 
         footer = QHBoxLayout()
         footer.addStretch(1)
@@ -301,6 +325,12 @@ class ReceiptInboxDialog(QDialog):
         layout.addLayout(footer)
 
         self.refresh_receipt_list()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._finished_emitted:
+            self._finished_emitted = True
+            self.finished.emit(0)
+        super().closeEvent(event)
 
     def import_from_clipboard(self) -> None:
         text = QApplication.clipboard().text()
@@ -316,7 +346,7 @@ class ReceiptInboxDialog(QDialog):
             return
         parsed = parse_memory_receipt(import_text)
         receipt = create_ai_receipt_inbox_item(parsed.to_record())
-        self.set_list_filter("pending", refresh=False)
+        self.list_filter = "pending"
         self.expanded_receipt_id = receipt["id"]
         self.refresh_receipt_list()
         self.show()
@@ -327,14 +357,32 @@ class ReceiptInboxDialog(QDialog):
         self.list_filter = value
         self.expanded_receipt_id = None
         if refresh:
-            self.refresh_receipt_list()
+            self.schedule_refresh()
+
+    def schedule_refresh(self) -> None:
+        if self._refresh_scheduled:
+            return
+        self._refresh_scheduled = True
+        QTimer.singleShot(0, self._run_scheduled_refresh)
+
+    def _run_scheduled_refresh(self) -> None:
+        self._refresh_scheduled = False
+        self.refresh_receipt_list()
+        if self.isVisible():
+            self.raise_()
+            self.activateWindow()
 
     def refresh_receipt_list(self) -> None:
         pending_receipts = list_ai_receipt_inbox_items(status="pending")
         pending_count = len(pending_receipts)
         self.pending_filter_button.setText(f"待确认（{pending_count}）")
-        self._set_tab_state(self.pending_filter_button, self.list_filter == "pending")
-        self._set_tab_state(self.processed_filter_button, self.list_filter == "processed")
+        self._set_tab_state(
+            self.pending_filter_button, self.list_filter == "pending"
+        )
+        self._set_tab_state(
+            self.processed_filter_button, self.list_filter == "processed"
+        )
+
         if self.list_filter == "pending":
             receipt_summaries = pending_receipts
         else:
@@ -350,43 +398,66 @@ class ReceiptInboxDialog(QDialog):
             if receipt is not None:
                 receipts.append(receipt)
 
-        new_content = QWidget()
-        new_content.setObjectName("receiptScrollContent")
-        new_content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        new_layout = QVBoxLayout(new_content)
-        new_layout.setContentsMargins(0, 0, 0, 0)
-        new_layout.setSpacing(8)
-        new_cards: dict[int, ReceiptCard] = {}
+        if not receipts:
+            self._show_empty_state()
+            return
 
+        new_scroll, new_cards = self._build_cards_page(receipts)
+        old_scroll = self.scroll
+        self.cards = new_cards
+        self.scroll = new_scroll
+        self.content_stack.addWidget(new_scroll)
+        self.content_stack.setCurrentWidget(new_scroll)
+
+        if old_scroll is not None:
+            self.content_stack.removeWidget(old_scroll)
+            old_scroll.setEnabled(False)
+            QTimer.singleShot(0, old_scroll.deleteLater)
+
+    def _build_cards_page(
+        self, receipts: list[dict]
+    ) -> tuple[QScrollArea, dict[int, ReceiptCard]]:
+        scroll = QScrollArea()
+        scroll.setObjectName("receiptScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        content.setObjectName("receiptScrollContent")
+        content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        cards_layout = QVBoxLayout(content)
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+        cards_layout.setSpacing(8)
+
+        cards: dict[int, ReceiptCard] = {}
         for receipt in receipts:
-            card = ReceiptCard(receipt, new_content)
+            card = ReceiptCard(receipt, content)
             card.toggleRequested.connect(self.toggle_card)
             card.acceptRequested.connect(self.accept_receipt)
             card.rejectRequested.connect(self.reject_receipt)
             card.deleteRequested.connect(self.confirm_delete_receipt)
             card.set_expanded(receipt["id"] == self.expanded_receipt_id)
-            new_cards[receipt["id"]] = card
-            new_layout.addWidget(card)
-        new_layout.addStretch(1)
+            cards[receipt["id"]] = card
+            cards_layout.addWidget(card)
+        cards_layout.addStretch(1)
+        scroll.setWidget(content)
+        return scroll, cards
 
-        old_content = self.scroll.takeWidget()
-        for card in self.cards.values():
-            card.blockSignals(True)
-            card.setEnabled(False)
-
-        self.cards = new_cards
-        self.cards_content = new_content
-        self.cards_layout = new_layout
-        self.scroll.setWidget(new_content)
-        if old_content is not None:
-            old_content.deleteLater()
-
-        empty = not receipts
-        self.scroll.setVisible(not empty)
-        self.empty_state.setVisible(empty)
+    def _show_empty_state(self) -> None:
+        old_scroll = self.scroll
+        self.scroll = None
+        self.cards = {}
         self.empty_state.setText(
-            "当前没有待确认回执" if self.list_filter == "pending" else "当前没有已处理回执"
+            "当前没有待确认回执"
+            if self.list_filter == "pending"
+            else "当前没有已处理回执"
         )
+        self.content_stack.setCurrentWidget(self.empty_state)
+        if old_scroll is not None:
+            self.content_stack.removeWidget(old_scroll)
+            old_scroll.setEnabled(False)
+            QTimer.singleShot(0, old_scroll.deleteLater)
 
     def _set_tab_state(self, button: QPushButton, active: bool) -> None:
         button.setProperty("active", active)
@@ -394,7 +465,9 @@ class ReceiptInboxDialog(QDialog):
         button.style().polish(button)
 
     def toggle_card(self, receipt_id: int) -> None:
-        self.expanded_receipt_id = None if self.expanded_receipt_id == receipt_id else receipt_id
+        self.expanded_receipt_id = (
+            None if self.expanded_receipt_id == receipt_id else receipt_id
+        )
         for card_id, card in self.cards.items():
             card.set_expanded(card_id == self.expanded_receipt_id)
 
@@ -428,22 +501,39 @@ class ReceiptInboxDialog(QDialog):
         if receipt is None:
             self.refresh_receipt_list()
             return
+
+        if self._delete_message_box is not None:
+            self._delete_message_box.raise_()
+            self._delete_message_box.activateWindow()
+            return
+
         message_box = QMessageBox(self)
         message_box.setWindowTitle("删除 AI 回执")
         message_box.setText("确定删除这条 AI 回执记录吗？这不会删除任何正式笔记。")
         delete_button = message_box.addButton("删除", QMessageBox.AcceptRole)
         message_box.addButton("取消", QMessageBox.RejectRole)
         message_box.setDefaultButton(delete_button)
-        message_box.exec()
-        if message_box.clickedButton() != delete_button:
-            return
-        try:
-            delete_ai_receipt_inbox_item(receipt_id)
-        except Exception as error:
-            QMessageBox.warning(self, "删除失败", str(error))
-            return
-        self.expanded_receipt_id = None
-        self.refresh_receipt_list()
+        message_box.setWindowModality(Qt.WindowModal)
+        self._delete_message_box = message_box
+
+        def finish_delete(_result: int) -> None:
+            should_delete = message_box.clickedButton() is delete_button
+            self._delete_message_box = None
+            message_box.deleteLater()
+            if not should_delete:
+                return
+            try:
+                delete_ai_receipt_inbox_item(receipt_id)
+            except Exception as error:
+                QMessageBox.warning(self, "删除失败", str(error))
+                return
+            self.expanded_receipt_id = None
+            self.refresh_receipt_list()
+            self.raise_()
+            self.activateWindow()
+
+        message_box.finished.connect(finish_delete)
+        message_box.open()
 
 
 class ReceiptImportPreviewDialog(QDialog):
@@ -486,6 +576,8 @@ class ReceiptImportPreviewDialog(QDialog):
 
     def accept_if_not_empty(self) -> None:
         if not self.receipt_text().strip():
-            QMessageBox.information(self, "没有可导入的文本", "预览框为空，不能解析导入。")
+            QMessageBox.information(
+                self, "没有可导入的文本", "预览框为空，不能解析导入。"
+            )
             return
         self.accept()
