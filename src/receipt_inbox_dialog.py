@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -63,13 +62,10 @@ class ReceiptCard(QFrame):
         self.receipt_id = int(receipt["id"])
         self.expanded = False
         self.pending = receipt["status"] == "pending"
-        self._context_menu: QMenu | None = None
 
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
         self.setCursor(Qt.PointingHandCursor)
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.customContextMenuRequested.connect(self._open_context_menu)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -100,10 +96,19 @@ class ReceiptCard(QFrame):
         self.reject_button.clicked.connect(
             lambda: self.rejectRequested.emit(self.receipt_id)
         )
+        self.delete_button = QPushButton("删除")
+        self.delete_button.setObjectName("receiptRejectButton")
+        self.delete_button.setToolTip("删除回执")
+        self.delete_button.clicked.connect(
+            lambda: self.deleteRequested.emit(self.receipt_id)
+        )
+
         self.accept_button.setVisible(self.pending)
         self.reject_button.setVisible(self.pending)
+        self.delete_button.setVisible(receipt["status"] == "rejected")
         top.addWidget(self.accept_button)
         top.addWidget(self.reject_button)
+        top.addWidget(self.delete_button)
         layout.addLayout(top)
 
         self.details = QWidget()
@@ -234,29 +239,6 @@ class ReceiptCard(QFrame):
         if event.button() == Qt.LeftButton:
             self.toggleRequested.emit(self.receipt_id)
         super().mouseReleaseEvent(event)
-
-    def _open_context_menu(self, position) -> None:
-        menu = QMenu(self.window())
-        delete_action = menu.addAction("删除")
-        delete_action.setEnabled(self.receipt["status"] in {"pending", "rejected"})
-        receipt_id = self.receipt_id
-
-        def request_delete() -> None:
-            QTimer.singleShot(
-                0,
-                lambda target_id=receipt_id: self.deleteRequested.emit(target_id),
-            )
-
-        delete_action.triggered.connect(request_delete)
-        menu.aboutToHide.connect(self._release_context_menu)
-        self._context_menu = menu
-        menu.popup(self.mapToGlobal(position))
-
-    def _release_context_menu(self) -> None:
-        menu = self._context_menu
-        self._context_menu = None
-        if menu is not None:
-            menu.deleteLater()
 
 
 class ReceiptInboxDialog(QWidget):
