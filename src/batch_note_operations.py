@@ -5,8 +5,6 @@ from pathlib import Path
 
 from src.database import (
     DATABASE_PATH,
-    DEFAULT_SUB_CATEGORY,
-    DEFAULT_SUB_SUB_CATEGORY,
     _collect_descendant_directory_ids,
     _connect,
     _directory_depth,
@@ -18,71 +16,6 @@ from src.database import (
     _trash_group_ids_for_directories,
 )
 from src.time_utils import now_shanghai_iso
-
-
-def move_notes_to_directory(
-    note_ids: list[int],
-    target_directory_id: int,
-    database_path: Path = DATABASE_PATH,
-) -> dict:
-    unique_note_ids = list(dict.fromkeys(int(note_id) for note_id in note_ids))
-    timestamp = now_shanghai_iso()
-    with _connect(database_path) as connection:
-        target = connection.execute(
-            "SELECT id FROM directories WHERE id = ? AND is_deleted = 0",
-            (target_directory_id,),
-        ).fetchone()
-        if target is None:
-            raise ValueError("目标目录不存在")
-        main, sub, sub_sub = _categories_for_directory(connection, target_directory_id)
-        if not unique_note_ids:
-            return {
-                "moved_count": 0,
-                "unchanged_count": 0,
-                "note_ids": [],
-                "target_path": (main, sub, sub_sub),
-            }
-
-        placeholders = ",".join("?" for _ in unique_note_ids)
-        rows = connection.execute(
-            f"""
-            SELECT id, main_category, sub_category, sub_sub_category
-            FROM notes
-            WHERE is_deleted = 0 AND id IN ({placeholders})
-            """,
-            tuple(unique_note_ids),
-        ).fetchall()
-        valid_ids = {row["id"] for row in rows}
-        moved_ids = [
-            row["id"]
-            for row in rows
-            if (
-                row["main_category"],
-                row["sub_category"],
-                row["sub_sub_category"],
-            )
-            != (main, sub, sub_sub)
-        ]
-        if moved_ids:
-            destination_id = _ensure_directory_path(connection, main, sub, sub_sub)
-            connection.executemany(
-                """
-                UPDATE notes
-                SET directory_id = ?, main_category = ?, sub_category = ?,
-                    sub_sub_category = ?, updated_at = ?
-                WHERE id = ? AND is_deleted = 0
-                """,
-                [
-                    (destination_id, main, sub, sub_sub, timestamp, note_id)
-                    for note_id in moved_ids
-                ],
-            )
-    return {
-        "moved_count": len(moved_ids),
-        "unchanged_count": len(valid_ids) - len(moved_ids),
-        "note_ids": [note_id for note_id in unique_note_ids if note_id in valid_ids],
-        "target_path": (main, sub, sub_sub),
-    }
 
 
 def restore_trash_items(
@@ -147,19 +80,6 @@ def empty_trash(database_path: Path = DATABASE_PATH) -> dict:
         "directory_count": directory_count,
         "root_count": len(root_directory_ids) + len(independent_note_ids),
     }
-
-
-def _categories_for_directory(
-    connection: sqlite3.Connection, directory_id: int
-) -> tuple[str, str, str]:
-    path = _get_directory_path(connection, directory_id)
-    if not 1 <= len(path) <= 3:
-        raise ValueError("目标目录路径无效")
-    return (
-        path[0],
-        path[1] if len(path) >= 2 else DEFAULT_SUB_CATEGORY,
-        path[2] if len(path) >= 3 else DEFAULT_SUB_SUB_CATEGORY,
-    )
 
 
 def _normalize_trash_selection(

@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
 from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS
 from src.batch_note_operations import (
     empty_trash,
-    move_notes_to_directory,
     permanently_delete_trash_items,
     restore_trash_items,
 )
@@ -77,9 +76,7 @@ from src.floating_combo import FloatingComboBox
 from src.link_drawer import LinkDrawer
 from src.receipt_inbox_dialog import ReceiptInboxDialog
 from src.sidebar_interactions import (
-    SidebarTreeWidget,
-    configure_directory_item,
-    configure_note_item,
+    TrashTreeWidget,
     configure_trash_item,
     is_multi_select_click,
     item_data,
@@ -317,11 +314,11 @@ class MainWindow(QMainWindow):
         self.note_view = note_view
         self.sidebar_stack.addWidget(note_view)
 
-        self.directory_tree = SidebarTreeWidget(self.handle_notes_dropped)
-        self.directory_tree.itemClicked.connect(self.handle_tree_item_clicked)
+        self.directory_tree = TrashTreeWidget()
+        self.directory_tree.itemClicked.connect(self.handle_trash_item_clicked)
         self.directory_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.directory_tree.customContextMenuRequested.connect(
-            self.open_directory_context_menu
+            self.open_trash_item_context_menu
         )
         self.directory_tree.setObjectName("trashTree")
         self.directory_tree.setRootIsDecorated(False)
@@ -673,9 +670,6 @@ class MainWindow(QMainWindow):
     def refresh_directory_tree(
         self,
         selected_note_id: int | None = None,
-        *,
-        selected_note_ids: list[int] | None = None,
-        expanded_directory_id: int | None = None,
     ) -> None:
         self.set_sidebar_mode("directory")
         self.sidebar_stack.setCurrentWidget(self.note_view)
@@ -1002,8 +996,6 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.current_sidebar_mode = mode
         self.current_filter_value = value
-        if hasattr(self, "directory_tree"):
-            self.directory_tree.set_interaction_mode(mode)
         self.update_smart_tab_states()
 
     def update_smart_tab_states(self) -> None:
@@ -1033,135 +1025,12 @@ class MainWindow(QMainWindow):
             selected_note_id = None
         self.refresh_directory_tree(selected_note_id)
 
-    def add_directory_children(
-        self,
-        parent_item: QTreeWidgetItem,
-        parent_dir: dict,
-        notes: list[dict],
-        selected_note_id: int | None,
-    ) -> None:
-        path = self.item_path(parent_item)
-        for note in self.notes_for_path(notes, path):
-            note_item = QTreeWidgetItem([note["title"] or "未命名笔记"])
-            note_item.setData(0, Qt.UserRole, {"type": "note", "id": note["id"]})
-            configure_note_item(note_item, draggable=True)
-            updated_at = format_display_datetime(note["updated_at"])
-            note_item.setToolTip(0, f"更新于 {updated_at}")
-            parent_item.addChild(note_item)
-
-        for child_dir in self.display_children_for_directory(parent_dir["id"]):
-            child_item = self.create_directory_item(child_dir)
-            parent_item.addChild(child_item)
-            self.add_directory_children(child_item, child_dir, notes, selected_note_id)
-
-    def create_directory_item(self, directory: dict) -> QTreeWidgetItem:
-        item = QTreeWidgetItem([directory["name"]])
-        item.setData(
-            0,
-            Qt.UserRole,
-            {"type": "directory", "id": directory["id"], "parent_id": directory["parent_id"]},
-        )
-        configure_directory_item(item, droppable=True)
-        return item
-
-    def ancestor_directory_ids(self, directory_id: int) -> set[int]:
-        lookup = {row["id"]: row for row in self.directory_rows}
-        result: set[int] = set()
-        current_id: int | None = directory_id
-        while current_id is not None and current_id in lookup:
-            result.add(current_id)
-            current_id = lookup[current_id]["parent_id"]
-        return result
-
-    def apply_directory_expansion(
-        self, item: QTreeWidgetItem, expanded_directory_ids: set[int]
-    ) -> None:
-        data = item.data(0, Qt.UserRole)
-        if data and data.get("type") == "directory":
-            item.setExpanded(data["id"] in expanded_directory_ids)
-        for index in range(item.childCount()):
-            self.apply_directory_expansion(item.child(index), expanded_directory_ids)
-
-    def expanded_directory_ids_for_note(self, note: dict | None) -> set[int]:
-        if note is None:
-            return set()
-        path = [note["main_category"], note["sub_category"], note["sub_sub_category"]]
-        expanded_ids: set[int] = set()
-        parent_id = None
-        for name in path:
-            directory = self.find_directory_by_name(name, parent_id)
-            if directory is None:
-                break
-            expanded_ids.add(directory["id"])
-            parent_id = directory["id"]
-        return expanded_ids
-
-    def find_note_item(
-        self, item: QTreeWidgetItem, note_id: int
-    ) -> QTreeWidgetItem | None:
-        data = item.data(0, Qt.UserRole)
-        if data and data.get("type") == "note" and data["id"] == note_id:
-            return item
-        for index in range(item.childCount()):
-            found = self.find_note_item(item.child(index), note_id)
-            if found is not None:
-                return found
-        return None
-
-    def notes_for_path(self, notes: list[dict], path: tuple[str, ...]) -> list[dict]:
-        if len(path) == 1:
-            return [
-                note
-                for note in notes
-                if note["main_category"] == path[0]
-                and note["sub_category"] == DEFAULT_SUB_CATEGORY
-                and note["sub_sub_category"] == DEFAULT_SUB_SUB_CATEGORY
-            ]
-        if len(path) == 2:
-            return [
-                note
-                for note in notes
-                if note["main_category"] == path[0]
-                and note["sub_category"] == path[1]
-                and note["sub_sub_category"] == DEFAULT_SUB_SUB_CATEGORY
-            ]
-        if len(path) != 3:
-            return []
-        return [
-            note
-            for note in notes
-            if (
-                note["main_category"],
-                note["sub_category"],
-                note["sub_sub_category"],
-            )
-            == path
-        ]
-
-    def item_path(self, item: QTreeWidgetItem) -> tuple[str, ...]:
-        names = []
-        current = item
-        while current is not None:
-            names.append(current.text(0))
-            current = current.parent()
-        return tuple(reversed(names))
-
-    def handle_tree_item_clicked(
+    def handle_trash_item_clicked(
         self, item: QTreeWidgetItem, column: int = 0
     ) -> None:
         data = item.data(0, Qt.UserRole)
         if not data:
             return
-        if data["type"] == "directory":
-            item.setExpanded(not item.isExpanded())
-            return
-        if data["type"] == "note":
-            if is_multi_select_click():
-                return
-            if not self.force_save_current_note(refresh_tree=False):
-                return
-            self.load_note(data["id"])
-            self.refresh_current_sidebar_view(data["id"])
         if data["type"] == "deleted_note":
             if is_multi_select_click():
                 return
@@ -1308,49 +1177,6 @@ class MainWindow(QMainWindow):
         self.load_note(note_id)
         self.refresh_directory_tree(note_id)
         self.refresh_link_drawer()
-
-    def handle_notes_dropped(self, note_ids: list[int], directory_id: int) -> bool:
-        current_note_id = self.current_note["id"] if self.current_note else None
-        if current_note_id in note_ids and not self.force_save_current_note(refresh_tree=False):
-            return False
-        try:
-            result = move_notes_to_directory(note_ids, directory_id)
-        except Exception as error:
-            QMessageBox.warning(self, "移动笔记失败", str(error))
-            return False
-
-        if current_note_id in result["note_ids"]:
-            moved_current_note = get_note(current_note_id)
-            if moved_current_note is not None:
-                self.current_note = moved_current_note
-                self.populate_category_controls(moved_current_note)
-        self.refresh_directory_tree(
-            current_note_id,
-            selected_note_ids=result["note_ids"],
-            expanded_directory_id=directory_id,
-        )
-        self.refresh_link_drawer()
-        target_label = " / ".join(result["target_path"])
-        if result["moved_count"]:
-            self.status_label.setText(
-                f"已移动 {result['moved_count']} 条笔记到 {target_label}"
-            )
-        else:
-            self.status_label.setText("所选笔记已在该目录")
-        return True
-
-    def category_tuple_for_path(self, path: tuple[str, ...]) -> tuple[str, str, str]:
-        if len(path) == 1:
-            return (path[0], DEFAULT_SUB_CATEGORY, DEFAULT_SUB_SUB_CATEGORY)
-        if len(path) == 2:
-            return (path[0], path[1], DEFAULT_SUB_SUB_CATEGORY)
-        if len(path) >= 3:
-            return (path[0], path[1], path[2])
-        return (
-            DEFAULT_MAIN_CATEGORY,
-            DEFAULT_SUB_CATEGORY,
-            DEFAULT_SUB_SUB_CATEGORY,
-        )
 
     def load_note(self, note_id: int) -> None:
         note = get_note(note_id)
@@ -1670,61 +1496,27 @@ class MainWindow(QMainWindow):
         else:
             self.refresh_directory_tree(selected_note_id)
 
-    def open_directory_context_menu(self, position) -> None:
+    def open_trash_item_context_menu(self, position) -> None:
         item = self.directory_tree.itemAt(position)
         data = item.data(0, Qt.UserRole) if item is not None else None
         menu = QMenu(self)
 
-        if self.current_sidebar_mode == "trash":
-            if data:
-                selected_roots = selected_items_without_selected_ancestors(
-                    self.directory_tree.selectedItems()
-                )
-                selected_count = len(selected_roots)
-                if selected_count:
-                    menu.addAction(
-                        f"恢复所选（{selected_count}）",
-                        self.restore_selected_trash_items,
-                    )
-                    menu.addAction(
-                        f"永久删除所选（{selected_count}）",
-                        self.confirm_permanent_delete_selected_trash_items,
-                    )
-                    menu.addSeparator()
-            self.add_empty_trash_action(menu)
-        elif not data:
-            menu.addAction("新增主分类", lambda: self.prompt_create_directory(None))
-        elif data.get("type") == "note":
-            note_id = data["id"]
-            selected_note_count = len(self.directory_tree.selected_note_ids())
-            if selected_note_count > 1:
-                action = menu.addAction(f"已选择 {selected_note_count} 条笔记")
-                action.setEnabled(False)
-            else:
-                note = get_note(note_id)
-                if note and note["is_pinned"]:
-                    menu.addAction("取消固定", lambda: self.toggle_note_pinned(note_id, False))
-                else:
-                    menu.addAction("固定笔记", lambda: self.toggle_note_pinned(note_id, True))
-                menu.addAction("重命名笔记", lambda: self.prompt_rename_note(note_id))
-                menu.addAction("删除笔记", lambda: self.confirm_delete_note(note_id))
-        elif data.get("type") == "directory":
-            directory_id = data["id"]
-            depth = len(self.item_path(item))
-            menu.addAction(
-                "新增笔记",
-                lambda: self.create_note_at_path(self.item_path(item)),
+        if data:
+            selected_roots = selected_items_without_selected_ancestors(
+                self.directory_tree.selectedItems()
             )
-            if depth == 1:
+            selected_count = len(selected_roots)
+            if selected_count:
                 menu.addAction(
-                    "新增子分类", lambda: self.prompt_create_directory(directory_id)
+                    f"恢复所选（{selected_count}）",
+                    self.restore_selected_trash_items,
                 )
-            elif depth == 2:
                 menu.addAction(
-                    "新增子子分类", lambda: self.prompt_create_directory(directory_id)
+                    f"永久删除所选（{selected_count}）",
+                    self.confirm_permanent_delete_selected_trash_items,
                 )
-            menu.addAction("重命名", lambda: self.prompt_rename_directory(directory_id))
-            menu.addAction("删除", lambda: self.confirm_delete_directory(directory_id))
+                menu.addSeparator()
+        self.add_empty_trash_action(menu)
 
         menu.exec(self.directory_tree.viewport().mapToGlobal(position))
 
@@ -1829,13 +1621,6 @@ class MainWindow(QMainWindow):
             self.clear_editor()
         self.show_trash()
         self.status_label.setText(f"已永久删除 {result['processed_count']} 个项目")
-
-    def create_note_at_path(self, path: tuple[str, ...]) -> None:
-        if not self.force_save_current_note(refresh_tree=False):
-            return
-        note = create_note_in_directory(*self.category_tuple_for_path(path))
-        self.load_note(note["id"])
-        self.refresh_directory_tree(note["id"])
 
     def prompt_create_directory(self, parent_id: int | None) -> None:
         name, accepted = QInputDialog.getText(self, "新增目录", "目录名称")
