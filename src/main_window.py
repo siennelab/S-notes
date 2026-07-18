@@ -33,7 +33,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS
+from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS, visibility_display
+from src.ai_center_dialog import AiCenterDialog
 from src.batch_note_operations import (
     empty_trash,
     permanently_delete_trash_items,
@@ -50,6 +51,7 @@ from src.database import (
     get_note,
     get_note_ai_targets,
     get_note_tags,
+    list_ai_receipt_inbox_items,
     list_directories,
     list_deleted_notes,
     list_notes,
@@ -75,7 +77,6 @@ from src.editor_toolbar import EditorToolbar
 from src.export_center import ExportCenterDialog, ExportContext
 from src.floating_combo import FloatingComboBox
 from src.link_drawer import LinkDrawer
-from src.receipt_inbox_dialog import ReceiptInboxDialog
 from src.sidebar_interactions import (
     TrashTreeWidget,
     configure_trash_item,
@@ -183,7 +184,7 @@ class MainWindow(QMainWindow):
         self.link_drawer_visible = False
         self.filter_controls_loading = False
         self.note_id_before_trash: int | None = None
-        self.receipt_inbox_dialog: ReceiptInboxDialog | None = None
+        self.receipt_inbox_dialog: AiCenterDialog | None = None
         self.save_timer = QTimer(self)
         self.save_timer.setInterval(1000)
         self.save_timer.setSingleShot(True)
@@ -401,10 +402,10 @@ class MainWindow(QMainWindow):
             button.setFixedHeight(28)
             smart_row.addWidget(button, stretch=1)
             self.smart_buttons[view_name] = button
-        self.receipt_inbox_button = QPushButton("待确认")
+        self.receipt_inbox_button = QPushButton("AI中心")
         self.receipt_inbox_button.setObjectName("smartTabButton")
         self.receipt_inbox_button.setFixedHeight(28)
-        self.receipt_inbox_button.setToolTip("打开 AI 待确认")
+        self.receipt_inbox_button.setToolTip("打开 AI中心")
         self.receipt_inbox_button.clicked.connect(self.open_receipt_inbox)
         smart_row.addWidget(self.receipt_inbox_button, stretch=1)
         layout.addLayout(smart_row)
@@ -514,6 +515,7 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.trash_button)
 
+        self.refresh_ai_center_badge()
         self._update_theme_button_states()
         self._refresh_theme_icons()
         return sidebar
@@ -1287,7 +1289,7 @@ class MainWindow(QMainWindow):
                 return
             except RuntimeError:
                 self.receipt_inbox_dialog = None
-        dialog = ReceiptInboxDialog(self)
+        dialog = AiCenterDialog(self)
         self.receipt_inbox_dialog = dialog
         dialog.finished.connect(
             lambda _result, target=dialog: self.handle_receipt_inbox_closed(target)
@@ -1299,15 +1301,16 @@ class MainWindow(QMainWindow):
         dialog.raise_()
         dialog.activateWindow()
 
-    def handle_receipt_inbox_closed(self, dialog: ReceiptInboxDialog) -> None:
+    def handle_receipt_inbox_closed(self, dialog: AiCenterDialog) -> None:
         if self.receipt_inbox_dialog is dialog:
             self.receipt_inbox_dialog = None
         self.refresh_current_sidebar_view(
             self.current_note["id"] if self.current_note else None
         )
+        self.refresh_ai_center_badge()
 
     def clear_receipt_inbox_reference(
-        self, dialog: ReceiptInboxDialog | None = None
+        self, dialog: AiCenterDialog | None = None
     ) -> None:
         if dialog is not None and self.receipt_inbox_dialog is not dialog:
             return
@@ -1319,6 +1322,14 @@ class MainWindow(QMainWindow):
             self.receipt_inbox_button.style().polish(self.receipt_inbox_button)
         except RuntimeError:
             pass
+
+    def refresh_ai_center_badge(self) -> None:
+        if not hasattr(self, "receipt_inbox_button"):
+            return
+        pending_count = len(list_ai_receipt_inbox_items(status="pending"))
+        self.receipt_inbox_button.setText(
+            f"AI中心 ({pending_count})" if pending_count else "AI中心"
+        )
 
     def toggle_link_drawer(self) -> None:
         self.link_drawer_visible = not self.link_drawer_visible
@@ -1498,7 +1509,7 @@ class MainWindow(QMainWindow):
 
     def set_ai_visibility_control(self, visibility: str) -> None:
         self.ai_visibility_combo.blockSignals(True)
-        index = self.ai_visibility_combo.findText(visibility)
+        index = self.ai_visibility_combo.findText(visibility_display(visibility))
         self.ai_visibility_combo.setCurrentIndex(index if index >= 0 else 0)
         self.ai_visibility_combo.blockSignals(False)
 

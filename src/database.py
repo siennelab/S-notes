@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import html
+import json
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from src.app_paths import DATABASE_PATH
 from src.ai_targets import (
     AI_TARGET_COMMON,
+    AI_TARGET_COMMON_ID,
+    AI_TARGET_DEFINITIONS,
+    AI_TARGET_DISPLAY_BY_ID,
     AI_TARGETS,
     AI_VISIBILITY_NO_EXPORT,
-    LEGACY_AI_TARGET_RENAMES,
+    LEGACY_AI_TARGET_IDS,
     normalize_ai_targets,
+    normalize_ai_visibility,
+    normalize_target_ids,
+    resolve_target_id,
+    target_display_name,
     validate_ai_visibility,
 )
 from src.tag_manager import normalize_tag, parse_tags
@@ -22,6 +31,7 @@ DEFAULT_MAIN_CATEGORY = "临时"
 DEFAULT_SUB_CATEGORY = "无"
 DEFAULT_SUB_SUB_CATEGORY = "无"
 DEFAULT_AI_VISIBILITY = AI_VISIBILITY_NO_EXPORT
+AI_SCHEMA_VERSION = 1
 INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "备忘", "终端指令")
 
 
@@ -48,7 +58,7 @@ CREATE TABLE IF NOT EXISTS notes (
     sub_category TEXT NOT NULL DEFAULT '无',
     sub_sub_category TEXT NOT NULL DEFAULT '无',
     tags TEXT NOT NULL DEFAULT '',
-    ai_visibility TEXT NOT NULL DEFAULT '不导出给 AI',
+    ai_visibility TEXT NOT NULL DEFAULT 'hidden',
     is_pinned INTEGER NOT NULL DEFAULT 0,
     is_deleted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -69,11 +79,22 @@ CREATE TABLE IF NOT EXISTS note_tags (
     PRIMARY KEY (note_id, tag_id)
 );
 
+CREATE TABLE IF NOT EXISTS ai_targets (
+    target_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL UNIQUE,
+    is_system INTEGER NOT NULL DEFAULT 0,
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS note_ai_targets (
     id INTEGER PRIMARY KEY,
     note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    target_name TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    target_id TEXT NOT NULL REFERENCES ai_targets(target_id),
+    created_at TEXT NOT NULL,
+    UNIQUE(note_id, target_id)
 );
 
 CREATE TABLE IF NOT EXISTS memory_receipts (
@@ -95,14 +116,80 @@ CREATE TABLE IF NOT EXISTS ai_receipt_inbox (
     sub_category TEXT NOT NULL DEFAULT '无',
     sub_sub_category TEXT NOT NULL DEFAULT '无',
     tags TEXT NOT NULL DEFAULT '',
-    ai_visibility TEXT NOT NULL DEFAULT '不导出给 AI',
+    ai_visibility TEXT NOT NULL DEFAULT 'hidden',
     ai_targets TEXT NOT NULL DEFAULT '',
     body TEXT NOT NULL DEFAULT '',
     note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     decided_at TEXT,
-    parse_error TEXT
+    parse_error TEXT,
+    request_id TEXT,
+    actor_target_id TEXT,
+    operation_type TEXT,
+    target_note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
+    expected_updated_at TEXT,
+    operation_payload TEXT NOT NULL DEFAULT '',
+    result_status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_note_history (
+    id INTEGER PRIMARY KEY,
+    note_id INTEGER NOT NULL,
+    note_title TEXT NOT NULL,
+    modification_type TEXT NOT NULL,
+    actor_target_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    modified_at TEXT NOT NULL,
+    before_snapshot TEXT NOT NULL,
+    after_updated_at TEXT NOT NULL,
+    handling_mode TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_call_logs (
+    id INTEGER PRIMARY KEY,
+    called_at TEXT NOT NULL,
+    actor_target_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    note_id INTEGER,
+    summary TEXT NOT NULL DEFAULT '',
+    result_count INTEGER NOT NULL DEFAULT 0,
+    handling_mode TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    failure_reason TEXT NOT NULL DEFAULT '',
+    is_duplicate INTEGER NOT NULL DEFAULT 0,
+    entered_confirmation INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS ai_operations (
+    request_id TEXT PRIMARY KEY,
+    actor_target_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_migration_issues (
+    id INTEGER PRIMARY KEY,
+    issue_type TEXT NOT NULL,
+    source_value TEXT NOT NULL,
+    note_id INTEGER,
+    recorded_at TEXT NOT NULL,
+    UNIQUE(issue_type, source_value, note_id)
+);
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+    meta_key TEXT PRIMARY KEY,
+    meta_value TEXT NOT NULL
 );
 """
 
@@ -113,7 +200,7 @@ NOTE_COLUMNS = {
     "sub_category": "TEXT NOT NULL DEFAULT '无'",
     "sub_sub_category": "TEXT NOT NULL DEFAULT '无'",
     "tags": "TEXT NOT NULL DEFAULT ''",
-    "ai_visibility": "TEXT NOT NULL DEFAULT '不导出给 AI'",
+    "ai_visibility": "TEXT NOT NULL DEFAULT 'hidden'",
     "is_pinned": "INTEGER NOT NULL DEFAULT 0",
     "is_deleted": "INTEGER NOT NULL DEFAULT 0",
     "trash_group_id": "TEXT",
@@ -136,7 +223,7 @@ AI_RECEIPT_INBOX_COLUMNS = {
     "sub_category": "TEXT NOT NULL DEFAULT '无'",
     "sub_sub_category": "TEXT NOT NULL DEFAULT '无'",
     "tags": "TEXT NOT NULL DEFAULT ''",
-    "ai_visibility": "TEXT NOT NULL DEFAULT '不导出给 AI'",
+    "ai_visibility": "TEXT NOT NULL DEFAULT 'hidden'",
     "ai_targets": "TEXT NOT NULL DEFAULT ''",
     "body": "TEXT NOT NULL DEFAULT ''",
     "note_id": "INTEGER REFERENCES notes(id) ON DELETE SET NULL",
@@ -144,27 +231,137 @@ AI_RECEIPT_INBOX_COLUMNS = {
     "updated_at": "TEXT NOT NULL DEFAULT ''",
     "decided_at": "TEXT",
     "parse_error": "TEXT",
+    "request_id": "TEXT",
+    "actor_target_id": "TEXT",
+    "operation_type": "TEXT",
+    "target_note_id": "INTEGER REFERENCES notes(id) ON DELETE SET NULL",
+    "expected_updated_at": "TEXT",
+    "operation_payload": "TEXT NOT NULL DEFAULT ''",
+    "result_status": "TEXT",
 }
 
 
 def _connect(database_path: Path = DATABASE_PATH) -> sqlite3.Connection:
-    connection = sqlite3.connect(database_path)
+    connection = sqlite3.connect(database_path, timeout=5.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
     return connection
 
 
+LAST_MIGRATION_REPORT: dict | None = None
+
+
 def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
+    global LAST_MIGRATION_REPORT
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    with _connect(database_path) as connection:
-        connection.executescript(SCHEMA_SQL)
+    existed = database_path.exists() and database_path.stat().st_size > 0
+    needs_foundation = existed and _database_needs_ai_foundation(database_path)
+    backup_path = _backup_database_for_migration(database_path) if needs_foundation else None
+    connection = _connect(database_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _execute_schema(connection)
         _migrate_notes_table(connection)
         _migrate_directories_table(connection)
-        _migrate_note_ai_targets_table(connection)
         _migrate_ai_receipt_inbox_table(connection)
+        _seed_ai_targets(connection)
+        before = _migration_counts(connection)
+        unknown_visibilities = _migrate_ai_visibility_values(connection)
+        unknown_targets = _migrate_note_ai_targets_table(connection)
+        _seed_ai_settings(connection)
         _seed_initial_categories(connection)
         _ensure_directory_paths_for_notes(connection)
+        after = _migration_counts(connection)
+        report = {
+            "schema_version": AI_SCHEMA_VERSION,
+            "migrated_at": now_shanghai_iso(),
+            "database_path": str(database_path),
+            "backup_path": str(backup_path) if backup_path else "",
+            "before": before,
+            "after": after,
+            "unknown_visibility_values": sorted(unknown_visibilities),
+            "unknown_target_values": sorted(unknown_targets),
+        }
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(meta_key, meta_value) VALUES (?, ?)",
+            ("ai_foundation_version", str(AI_SCHEMA_VERSION)),
+        )
+        prior_report = connection.execute(
+            "SELECT meta_value FROM schema_meta WHERE meta_key=?",
+            ("task13a_last_migration_report",),
+        ).fetchone()
+        if needs_foundation or prior_report is None:
+            connection.execute(
+                "INSERT OR REPLACE INTO schema_meta(meta_key, meta_value) VALUES (?, ?)",
+                ("task13a_last_migration_report", json.dumps(report, ensure_ascii=False)),
+            )
+            retained_report = report
+        else:
+            retained_report = json.loads(prior_report["meta_value"])
+        connection.commit()
+        LAST_MIGRATION_REPORT = retained_report
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
     return database_path
+
+
+def get_last_migration_report(database_path: Path = DATABASE_PATH) -> dict | None:
+    if LAST_MIGRATION_REPORT and LAST_MIGRATION_REPORT.get("database_path") == str(database_path):
+        return dict(LAST_MIGRATION_REPORT)
+    if not database_path.exists():
+        return None
+    with _connect(database_path) as connection:
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_meta'"
+        ).fetchone()
+        if table is None:
+            return None
+        row = connection.execute(
+            "SELECT meta_value FROM schema_meta WHERE meta_key = ?",
+            ("task13a_last_migration_report",),
+        ).fetchone()
+    return json.loads(row["meta_value"]) if row else None
+
+
+def _execute_schema(connection: sqlite3.Connection) -> None:
+    for statement in SCHEMA_SQL.split(";"):
+        if statement.strip():
+            connection.execute(statement)
+
+
+def _database_needs_ai_foundation(database_path: Path) -> bool:
+    try:
+        with _connect(database_path) as connection:
+            meta_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_meta'"
+            ).fetchone()
+            if meta_exists is None:
+                return True
+            row = connection.execute(
+                "SELECT meta_value FROM schema_meta WHERE meta_key='ai_foundation_version'"
+            ).fetchone()
+            return row is None or int(row["meta_value"]) < AI_SCHEMA_VERSION
+    except (sqlite3.DatabaseError, ValueError):
+        return True
+
+
+def _backup_database_for_migration(database_path: Path) -> Path:
+    backup_dir = database_path.parent / "backups" / "migrations"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = backup_dir / f"s_notes_pre_task13a_{timestamp}.db"
+    source = _connect(database_path)
+    destination = sqlite3.connect(backup_path)
+    try:
+        source.backup(destination)
+    finally:
+        destination.close()
+        source.close()
+    return backup_path
 
 
 def _migrate_notes_table(connection: sqlite3.Connection) -> None:
@@ -201,32 +398,153 @@ def _migrate_ai_receipt_inbox_table(connection: sqlite3.Connection) -> None:
             )
 
 
-def _migrate_note_ai_targets_table(connection: sqlite3.Connection) -> None:
-    for old_name, new_name in LEGACY_AI_TARGET_RENAMES.items():
+def _seed_ai_targets(connection: sqlite3.Connection) -> None:
+    timestamp = now_shanghai_iso()
+    for item in AI_TARGET_DEFINITIONS:
         connection.execute(
             """
-            UPDATE note_ai_targets
-            SET target_name = ?
-            WHERE target_name = ?
+            INSERT INTO ai_targets (
+                target_id, display_name, slug, is_system, is_enabled,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(target_id) DO UPDATE SET
+                display_name=excluded.display_name,
+                slug=excluded.slug,
+                is_system=excluded.is_system,
+                updated_at=excluded.updated_at
             """,
-            (new_name, old_name),
+            (
+                item.target_id,
+                item.display_name,
+                item.slug,
+                1 if item.system else 0,
+                timestamp,
+                timestamp,
+            ),
+        )
+
+
+def _migrate_ai_visibility_values(connection: sqlite3.Connection) -> set[str]:
+    unknown: set[str] = set()
+    timestamp = now_shanghai_iso()
+    rows = connection.execute("SELECT id, ai_visibility FROM notes").fetchall()
+    for row in rows:
+        raw = str(row["ai_visibility"] or "")
+        normalized = normalize_ai_visibility(raw)
+        if raw.strip() not in {
+            "hidden", "full", "redacted", "AI不可见", "AI完整可见",
+            "AI脱敏后可见", "不导出给 AI", "可直接给 AI", "脱敏后给 AI",
+        }:
+            unknown.add(raw)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ai_migration_issues
+                    (issue_type, source_value, note_id, recorded_at)
+                VALUES ('visibility', ?, ?, ?)
+                """,
+                (raw, row["id"], timestamp),
+            )
+        connection.execute(
+            "UPDATE notes SET ai_visibility=? WHERE id=?",
+            (normalized, row["id"]),
         )
     connection.execute(
         """
-        DELETE FROM note_ai_targets
-        WHERE id NOT IN (
-            SELECT MIN(id)
-            FROM note_ai_targets
-            GROUP BY note_id, target_name
+        UPDATE ai_receipt_inbox
+        SET ai_visibility = CASE ai_visibility
+            WHEN '可直接给 AI' THEN 'full'
+            WHEN '脱敏后给 AI' THEN 'redacted'
+            WHEN 'AI完整可见' THEN 'full'
+            WHEN 'AI脱敏后可见' THEN 'redacted'
+            WHEN 'full' THEN 'full'
+            WHEN 'redacted' THEN 'redacted'
+            ELSE 'hidden'
+        END
+        """
+    )
+    return unknown
+
+
+def _migrate_note_ai_targets_table(connection: sqlite3.Connection) -> set[str]:
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(note_ai_targets)")
+    }
+    unknown: set[str] = set()
+    if "target_name" not in columns:
+        rows = connection.execute(
+            "SELECT id, note_id, target_id FROM note_ai_targets"
+        ).fetchall()
+        for row in rows:
+            if resolve_target_id(row["target_id"]) is None:
+                unknown.add(str(row["target_id"] or ""))
+                connection.execute("DELETE FROM note_ai_targets WHERE id=?", (row["id"],))
+        return unknown
+
+    legacy_rows = connection.execute(
+        "SELECT id, note_id, target_name, created_at FROM note_ai_targets ORDER BY id"
+    ).fetchall()
+    connection.execute("ALTER TABLE note_ai_targets RENAME TO note_ai_targets_legacy")
+    connection.execute(
+        """
+        CREATE TABLE note_ai_targets (
+            id INTEGER PRIMARY KEY,
+            note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+            target_id TEXT NOT NULL REFERENCES ai_targets(target_id),
+            created_at TEXT NOT NULL,
+            UNIQUE(note_id, target_id)
         )
         """
     )
-    connection.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_note_ai_targets_note_target
-        ON note_ai_targets(note_id, target_name)
-        """
-    )
+    timestamp = now_shanghai_iso()
+    for row in legacy_rows:
+        target_id = resolve_target_id(row["target_name"])
+        if target_id is None:
+            value = str(row["target_name"] or "")
+            unknown.add(value)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ai_migration_issues
+                    (issue_type, source_value, note_id, recorded_at)
+                VALUES ('target', ?, ?, ?)
+                """,
+                (value, row["note_id"], timestamp),
+            )
+            continue
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO note_ai_targets(note_id, target_id, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (row["note_id"], target_id, row["created_at"] or timestamp),
+        )
+    connection.execute("DROP TABLE note_ai_targets_legacy")
+    return unknown
+
+
+def _seed_ai_settings(connection: sqlite3.Connection) -> None:
+    timestamp = now_shanghai_iso()
+    for key, value in (
+        ("ai_create_requires_confirmation", "0"),
+        ("ai_modify_requires_confirmation", "1"),
+    ):
+        connection.execute(
+            "INSERT OR IGNORE INTO app_settings(setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+            (key, value, timestamp),
+        )
+
+
+def _migration_counts(connection: sqlite3.Connection) -> dict:
+    visibility_rows = connection.execute(
+        "SELECT ai_visibility, COUNT(*) AS count FROM notes GROUP BY ai_visibility"
+    ).fetchall()
+    target_count = connection.execute(
+        "SELECT COUNT(*) FROM note_ai_targets"
+    ).fetchone()[0]
+    return {
+        "notes": connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0],
+        "visibility": {str(row["ai_visibility"]): row["count"] for row in visibility_rows},
+        "target_relations": target_count,
+    }
 
 
 def _seed_initial_categories(connection: sqlite3.Connection) -> None:
@@ -476,11 +794,11 @@ def list_notes_for_link_drawer(database_path: Path = DATABASE_PATH) -> list[dict
         ).fetchall()
         target_rows = connection.execute(
             """
-            SELECT notes.id AS note_id, note_ai_targets.target_name
+            SELECT notes.id AS note_id, note_ai_targets.target_id
             FROM notes
             JOIN note_ai_targets ON note_ai_targets.note_id = notes.id
             WHERE notes.is_deleted = 0
-            ORDER BY note_ai_targets.target_name COLLATE NOCASE ASC
+            ORDER BY note_ai_targets.target_id COLLATE NOCASE ASC
             """
         ).fetchall()
 
@@ -490,7 +808,9 @@ def list_notes_for_link_drawer(database_path: Path = DATABASE_PATH) -> list[dict
 
     targets_by_note: dict[int, list[str]] = {}
     for row in target_rows:
-        targets_by_note.setdefault(row["note_id"], []).append(row["target_name"])
+        display_name = AI_TARGET_DISPLAY_BY_ID.get(row["target_id"])
+        if display_name:
+            targets_by_note.setdefault(row["note_id"], []).append(display_name)
 
     notes = [dict(row) for row in note_rows]
     for note in notes:
@@ -971,7 +1291,7 @@ def set_note_ai_visibility(
 def set_note_ai_targets(
     note_id: int, targets: list[str], database_path: Path = DATABASE_PATH
 ) -> list[str]:
-    normalized_targets = normalize_ai_targets(targets)
+    normalized_target_ids = normalize_target_ids(targets)
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
         note_exists = connection.execute(
@@ -981,25 +1301,25 @@ def set_note_ai_targets(
         if note_exists is None:
             raise ValueError(f"笔记不存在或已删除: {note_id}")
         _set_note_ai_targets_with_connection(
-            connection, note_id, normalized_targets, timestamp
+            connection, note_id, normalized_target_ids, timestamp
         )
-    return normalized_targets
+    return [AI_TARGET_DISPLAY_BY_ID[target_id] for target_id in normalized_target_ids]
 
 
 def _set_note_ai_targets_with_connection(
     connection: sqlite3.Connection,
     note_id: int,
-    normalized_targets: list[str],
+    normalized_target_ids: list[str],
     timestamp: str,
 ) -> None:
     connection.execute("DELETE FROM note_ai_targets WHERE note_id = ?", (note_id,))
-    for target in normalized_targets:
+    for target_id in normalized_target_ids:
         connection.execute(
             """
-            INSERT OR IGNORE INTO note_ai_targets (note_id, target_name, created_at)
+            INSERT OR IGNORE INTO note_ai_targets (note_id, target_id, created_at)
             VALUES (?, ?, ?)
             """,
-            (note_id, target, timestamp),
+            (note_id, target_id, timestamp),
         )
     connection.execute(
         "UPDATE notes SET updated_at = ? WHERE id = ?",
@@ -1013,15 +1333,19 @@ def get_note_ai_targets(
     with _connect(database_path) as connection:
         rows = connection.execute(
             """
-            SELECT target_name
+            SELECT target_id
             FROM note_ai_targets
             WHERE note_id = ?
-            ORDER BY target_name COLLATE NOCASE ASC
+            ORDER BY target_id COLLATE NOCASE ASC
             """,
             (note_id,),
         ).fetchall()
-    target_set = {row["target_name"] for row in rows}
-    return [target for target in AI_TARGETS if target in target_set]
+    target_set = {row["target_id"] for row in rows}
+    return [
+        item.display_name
+        for item in AI_TARGET_DEFINITIONS
+        if item.target_id in target_set
+    ]
 
 
 def create_ai_receipt_inbox_item(
@@ -1035,9 +1359,12 @@ def create_ai_receipt_inbox_item(
                 raw_text, parse_status, status, source, action, title,
                 main_category, sub_category, sub_sub_category, tags,
                 ai_visibility, ai_targets, body, created_at, updated_at,
-                parse_error
+                parse_error, request_id, actor_target_id, operation_type,
+                target_note_id, expected_updated_at, operation_payload,
+                result_status
             )
-            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 receipt.get("raw_text", ""),
@@ -1055,6 +1382,13 @@ def create_ai_receipt_inbox_item(
                 timestamp,
                 timestamp,
                 receipt.get("parse_error", ""),
+                receipt.get("request_id"),
+                receipt.get("actor_target_id"),
+                receipt.get("operation_type"),
+                receipt.get("target_note_id"),
+                receipt.get("expected_updated_at"),
+                receipt.get("operation_payload", ""),
+                receipt.get("result_status"),
             ),
         )
         inbox_id = cursor.lastrowid
@@ -1079,7 +1413,9 @@ def list_ai_receipt_inbox_items(
             SELECT id, parse_status, status, source, action, title,
                    main_category, sub_category, sub_sub_category, tags,
                    ai_visibility, ai_targets, note_id, created_at,
-                   updated_at, decided_at, parse_error
+                   updated_at, decided_at, parse_error, request_id,
+                   actor_target_id, operation_type, target_note_id,
+                   expected_updated_at, result_status
             FROM ai_receipt_inbox
             {status_clause}
             ORDER BY
@@ -1106,7 +1442,9 @@ def get_ai_receipt_inbox_item(
             SELECT id, raw_text, parse_status, status, source, action, title,
                    main_category, sub_category, sub_sub_category, tags,
                    ai_visibility, ai_targets, body, note_id, created_at,
-                   updated_at, decided_at, parse_error
+                   updated_at, decided_at, parse_error, request_id,
+                   actor_target_id, operation_type, target_note_id,
+                   expected_updated_at, operation_payload, result_status
             FROM ai_receipt_inbox
             WHERE id = ?
             """,
@@ -1209,11 +1547,13 @@ def accept_ai_receipt_inbox_item(
             key: str(fields.get(key, receipt[key]) or "") for key in allowed_fields
         }
         values["ai_visibility"] = validate_ai_visibility(values["ai_visibility"])
-        normalized_targets = normalize_ai_targets(
+        normalized_target_ids = normalize_target_ids(
             _split_ai_target_text(values["ai_targets"])
         )
         normalized_tags = _normalize_note_tags(parse_tags(values["tags"]))
-        values["ai_targets"] = ", ".join(normalized_targets)
+        values["ai_targets"] = ", ".join(
+            AI_TARGET_DISPLAY_BY_ID[target_id] for target_id in normalized_target_ids
+        )
         values["tags"] = ", ".join(normalized_tags)
 
         if receipt["parse_status"] != "parsed" and allow_failed_parse:
@@ -1283,7 +1623,7 @@ def accept_ai_receipt_inbox_item(
             connection, note_id, normalized_tags, timestamp
         )
         _set_note_ai_targets_with_connection(
-            connection, note_id, normalized_targets, timestamp
+            connection, note_id, normalized_target_ids, timestamp
         )
 
         accepted_cursor = connection.execute(
@@ -1557,10 +1897,10 @@ def list_ai_visible_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
             SELECT id, title, main_category, sub_category, sub_sub_category, tags,
                    ai_visibility, is_pinned, created_at, updated_at
             FROM notes
-            WHERE is_deleted = 0 AND ai_visibility != ?
+            WHERE is_deleted = 0
+              AND ai_visibility IN ('full', 'redacted', '可直接给 AI', '脱敏后给 AI', 'AI完整可见', 'AI脱敏后可见')
             ORDER BY updated_at DESC, created_at DESC, id DESC
-            """,
-            (DEFAULT_AI_VISIBILITY,),
+            """
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1568,10 +1908,9 @@ def list_ai_visible_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
 def list_ai_safe_notes_for_target(
     target_name: str, database_path: Path = DATABASE_PATH
 ) -> list[dict]:
-    targets = normalize_ai_targets([target_name])
-    target = targets[0]
-    target_filter = [AI_TARGET_COMMON] if target == AI_TARGET_COMMON else [
-        AI_TARGET_COMMON,
+    target = normalize_target_ids([target_name])[0]
+    target_filter = [AI_TARGET_COMMON_ID] if target == AI_TARGET_COMMON_ID else [
+        AI_TARGET_COMMON_ID,
         target,
     ]
     placeholders = ",".join("?" for _ in target_filter)
@@ -1593,11 +1932,11 @@ def list_ai_safe_notes_for_target(
             FROM notes
             JOIN note_ai_targets ON note_ai_targets.note_id = notes.id
             WHERE notes.is_deleted = 0
-              AND notes.ai_visibility != ?
-              AND note_ai_targets.target_name IN ({placeholders})
+              AND notes.ai_visibility IN ('full', 'redacted', '可直接给 AI', '脱敏后给 AI', 'AI完整可见', 'AI脱敏后可见')
+              AND note_ai_targets.target_id IN ({placeholders})
             ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
             """,
-            (DEFAULT_AI_VISIBILITY, *target_filter),
+            tuple(target_filter),
         ).fetchall()
     return [dict(row) for row in rows]
 

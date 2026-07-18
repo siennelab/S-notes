@@ -15,11 +15,11 @@ Expected structure:
 
 ```text
 S-notes/
-  data/
-    s_notes.db
+  s_notes.db
+  backups/
+    migrations/
   exports/
     ai_readbox/
-    backups/
     json/
     markdown/
   imports/
@@ -32,7 +32,7 @@ S-notes/
 The live SQLite database belongs under:
 
 ```text
-~/Library/Application Support/S-notes/data/s_notes.db
+~/Library/Application Support/S-notes/s_notes.db
 ```
 
 The repository may contain placeholder directories, but it must not contain the
@@ -43,11 +43,15 @@ live user database.
 SQLite backups belong under:
 
 ```text
-~/Library/Application Support/S-notes/exports/backups/
+~/Library/Application Support/S-notes/backups/
 ```
 
 The project currently has SQLite backup support and code-level restore
 hardening. A complete user-facing restore flow is still a later task.
+
+Before a Task 13A schema migration, S-notes creates a timestamped full SQLite
+backup under `backups/migrations/`. The schema/value migration then runs in one
+transaction and records before/after counts plus unknown permission values.
 
 ## Regular Exports
 

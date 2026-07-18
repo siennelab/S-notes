@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS
+from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS, visibility_display
 from src.database import (
     _connect,
     accept_ai_receipt_inbox_item,
@@ -35,6 +35,7 @@ from src.memory_receipt_importer import parse_ai_targets_text, parse_memory_rece
 from src.tag_manager import format_tags, parse_tags
 from src.time_utils import format_display_datetime
 from src.theme import repolish
+from src.services.ai_access_service import accept_ai_proposal, reject_ai_proposal
 
 
 class ReceiptElidedLabel(QLabel):
@@ -162,7 +163,9 @@ class ReceiptCard(QFrame):
         self.ai_visibility_combo = FloatingComboBox()
         self.ai_visibility_combo.addItems(AI_VISIBILITY_OPTIONS)
         self.ai_visibility_combo.configure_popup(220)
-        index = self.ai_visibility_combo.findText(receipt["ai_visibility"])
+        index = self.ai_visibility_combo.findText(
+            visibility_display(receipt["ai_visibility"])
+        )
         self.ai_visibility_combo.setCurrentIndex(index if index >= 0 else 0)
         ai_row.addWidget(self.ai_visibility_combo, stretch=1)
         details_layout.addLayout(ai_row)
@@ -276,8 +279,9 @@ class ReceiptCard(QFrame):
 class ReceiptInboxDialog(QWidget):
     finished = Signal(int)
 
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent, Qt.Window)
+    def __init__(self, parent=None, *, embedded: bool = False) -> None:
+        super().__init__(parent) if embedded else super().__init__(parent, Qt.Window)
+        self.embedded = embedded
         self.list_filter = "pending"
         self.expanded_receipt_id: int | None = None
         self.cards: dict[int, ReceiptCard] = {}
@@ -287,17 +291,18 @@ class ReceiptInboxDialog(QWidget):
         self._delete_message_box: QMessageBox | None = None
 
         self.setWindowTitle("AI 待确认收件箱")
-        self.setWindowModality(Qt.NonModal)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.resize(600, 700)
-        self.setMinimumSize(520, 420)
+        if not embedded:
+            self.setWindowModality(Qt.NonModal)
+            self.setAttribute(Qt.WA_DeleteOnClose, True)
+            self.resize(600, 700)
+            self.setMinimumSize(520, 420)
         self.setObjectName("receiptInboxDialog")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        title = QLabel("AI 待确认收件箱")
+        title = QLabel("待确认" if embedded else "AI 待确认收件箱")
         title.setObjectName("receiptInboxTitle")
         layout.addWidget(title)
 
@@ -337,6 +342,7 @@ class ReceiptInboxDialog(QWidget):
         self.close_button.clicked.connect(self.close)
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
+        self.close_button.setVisible(not embedded)
 
         self.refresh_receipt_list()
 
@@ -495,11 +501,14 @@ class ReceiptInboxDialog(QWidget):
                 return
             allow_failed_parse = True
         try:
-            accept_ai_receipt_inbox_item(
-                receipt_id,
-                card.form_fields(),
-                allow_failed_parse=allow_failed_parse,
-            )
+            if card.receipt.get("request_id"):
+                accept_ai_proposal(receipt_id, card.form_fields())
+            else:
+                accept_ai_receipt_inbox_item(
+                    receipt_id,
+                    card.form_fields(),
+                    allow_failed_parse=allow_failed_parse,
+                )
         except Exception as error:
             QMessageBox.warning(self, "确认入库失败", str(error))
             self.refresh_receipt_list()
@@ -524,7 +533,11 @@ class ReceiptInboxDialog(QWidget):
 
     def reject_receipt(self, receipt_id: int) -> None:
         try:
-            reject_ai_receipt_inbox_item(receipt_id)
+            receipt = get_ai_receipt_inbox_item(receipt_id)
+            if receipt and receipt.get("request_id"):
+                reject_ai_proposal(receipt_id)
+            else:
+                reject_ai_receipt_inbox_item(receipt_id)
         except Exception as error:
             QMessageBox.warning(self, "拒绝失败", str(error))
             self.refresh_receipt_list()

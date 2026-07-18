@@ -3,7 +3,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from src.ai_targets import normalize_ai_targets, validate_ai_visibility
+from src.ai_targets import (
+    AI_VISIBILITY_DIRECT,
+    AI_VISIBILITY_REDACTED,
+    normalize_ai_targets,
+    validate_ai_visibility,
+)
 from src.database import (
     DEFAULT_AI_VISIBILITY,
     DEFAULT_MAIN_CATEGORY,
@@ -204,9 +209,9 @@ def _normalize_ai_visibility(value: str) -> str:
     if compact in {"不导出", "不给AI", "不导出给AI"}:
         return DEFAULT_AI_VISIBILITY
     if compact in {"可直接给AI", "直接给AI"}:
-        return "可直接给 AI"
+        return AI_VISIBILITY_DIRECT
     if compact in {"脱敏", "脱敏后给AI"}:
-        return "脱敏后给 AI"
+        return AI_VISIBILITY_REDACTED
     try:
         return validate_ai_visibility(value.strip())
     except ValueError:

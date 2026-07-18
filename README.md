@@ -12,6 +12,10 @@ notes stay in the user's Application Support directory instead of the repository
 - Regular export and AI-safe export flows.
 - AI memory receipt import through a confirm-first inbox.
 - Related-notes drawer and local backup support.
+- AI中心 with confirmation proposals, modification history, call logs, and
+  persistent AI write settings.
+- A single local AI safety service with stable permissions and safe search,
+  prepared for a later MCP adapter without installing MCP components.
 
 ## User Data
 
@@ -53,4 +57,5 @@ created integrated terminals activate that environment automatically.
 - [Project status](docs/PROJECT_STATUS.md)
 - [Design boundaries](docs/DESIGN.md)
 - [Data and backup](docs/DATA_AND_BACKUP.md)
+- [MCP R1 foundation design](docs/MCP_R1_DESIGN.md)
 - [Release notes](docs/RELEASE.md)

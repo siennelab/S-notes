@@ -33,7 +33,21 @@ handoff text.
 
 ## Registered Next Mainline
 
-- Task 13: Local MCP interface R1.
+- Task 13A: MCP R1 Foundation / S-notes application and permission foundation.
+  Code-level implementation is on `task13-mcp-r1-foundation` and awaits S's
+  real UI acceptance. It covers stable visibility codes, stable target IDs,
+  AI中心, one safety service over the existing SQLite database, safe local
+  search, controlled create/prepend/append/metadata writes, request
+  deduplication, conflict detection, modification history, call logs, and two
+  persistent confirmation settings.
+
+## Task 13 Deferred
+
+- R1.1 ChatGPT interactive panels.
+- AI-material filtering/grouping by target.
+- Search aliases and semantic expansion.
+- Mac resident-service inventory and health checks.
+- MCP Server, tunnel, runtime key, and ChatGPT App connection.
 
 ## Later Confirmed Work
 
@@ -46,5 +60,5 @@ handoff text.
 - Do not infer unrecorded implementation promises from this task ledger.
 - UI work must not change stored data meaning.
 - UI work follows [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md).
-- AI and MCP work must preserve the safety boundaries in
-  [DESIGN.md](DESIGN.md).
+- AI and MCP work must preserve [DESIGN.md](DESIGN.md) and the detailed
+  [MCP_R1_DESIGN.md](MCP_R1_DESIGN.md) contract.

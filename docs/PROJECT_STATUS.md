@@ -62,6 +62,8 @@ but it is not a public notarized distribution.
 - AI visibility levels are hard privacy boundaries.
 - AI writeback must go through the confirm-first receipt inbox.
 - MCP work must not expose arbitrary SQL.
+- Future MCP adapters must use the single local AI safety service and must not
+  maintain a second copy of note/search content.
 
 ## Confirmed Mainline
 
@@ -70,7 +72,12 @@ but it is not a public notarized distribution.
   legacy rich-text readability, and conservative Markdown marker cleanup. S
   completed real interactive App acceptance, including the approximately
   100px / 50px wide-window editor gaps and narrow-window behavior.
-- Task 13: Local MCP interface R1.
+- Task 13A: MCP R1 Foundation is implemented on the dedicated
+  `task13-mcp-r1-foundation` branch and awaits S's real UI acceptance before any
+  commit, merge, push, package build, or App replacement. It introduces stable
+  visibility codes and target IDs, AI中心, the unique safety service, local
+  search, controlled writes, history, settings, and call logs. It does not
+  install or run MCP/tunnel components.
 
 The UI R2 visual contract is recorded in
 [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md). Task 12 does not alter stored data,
@@ -88,6 +95,11 @@ autosave, AI visibility, export safety, deletion, or related-note semantics.
 - Intel or universal macOS build.
 - Automatic update strategy.
 - More import/export formats after the R1 safety boundaries remain stable.
+- Task 13 R1.1 ChatGPT interactive panels.
+- AI-material grouping by target and later search alias/semantic expansion.
+- Mac resident-service inventory and health checks.
+- MCP Server, tunnel, and ChatGPT App connection after the foundation is
+  accepted.
 
 ## Not In Current Todo
 

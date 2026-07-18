@@ -9,7 +9,9 @@ from src.app_paths import AI_READBOX_DIR
 from src.ai_targets import (
     AI_TARGET_COMMON,
     AI_VISIBILITY_REDACTED,
+    normalize_ai_visibility,
     target_slug,
+    visibility_display,
 )
 from src.database import (
     DATABASE_PATH,
@@ -78,7 +80,8 @@ class AiSafePackageExporter:
     def build_plan(self, target: str) -> AiSafeExportPlan:
         notes = list_ai_safe_notes_for_target(target, self.database_path)
         has_redacted_notes = any(
-            note.get("ai_visibility") == AI_VISIBILITY_REDACTED for note in notes
+            normalize_ai_visibility(note.get("ai_visibility")) == AI_VISIBILITY_REDACTED
+            for note in notes
         )
         redaction_rules = (
             load_redaction_rules(self.redaction_rules_path)
@@ -94,7 +97,10 @@ class AiSafePackageExporter:
         for index, note in enumerate(notes, start=1):
             targets = get_note_ai_targets(note["id"], self.database_path)
             markdown = self._note_to_ai_markdown(note, targets)
-            redacted = note.get("ai_visibility") == AI_VISIBILITY_REDACTED
+            redacted = (
+                normalize_ai_visibility(note.get("ai_visibility"))
+                == AI_VISIBILITY_REDACTED
+            )
             redaction_count = 0
             if redacted:
                 markdown, redaction_count = apply_redactions(
@@ -171,7 +177,7 @@ class AiSafePackageExporter:
                 "",
                 f"- 目录：{directory}",
                 f"- 标签：{tag_text}",
-                f"- AI 可见性：{note.get('ai_visibility', '')}",
+                f"- AI 可见性：{visibility_display(note.get('ai_visibility', ''))}",
                 f"- AI 适用对象：{target_text}",
                 f"- 创建时间：{format_display_datetime(note.get('created_at', ''))}",
                 f"- 更新时间：{format_display_datetime(note.get('updated_at', ''))}",
@@ -201,6 +207,7 @@ class AiSafePackageExporter:
                     "title": rendered.note["title"],
                     "file": f"notes/{rendered.filename}",
                     "ai_visibility": rendered.note["ai_visibility"],
+                    "ai_visibility_display": visibility_display(rendered.note["ai_visibility"]),
                     "ai_targets": rendered.targets,
                     "redacted": rendered.redacted,
                     "redaction_count": rendered.redaction_count,

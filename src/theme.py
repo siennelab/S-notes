@@ -177,8 +177,10 @@ QMainWindow,
 QDialog,
 QMessageBox,
 QInputDialog,
-QWidget#receiptInboxDialog {{
+QWidget#receiptInboxDialog,
+QWidget#aiCenterDialog {{
     background: {t.window};
+    color: {t.text};
 }}
 QWidget {{
     color: {t.text};
@@ -238,6 +240,17 @@ QToolButton:disabled {{ color: {t.disabled}; background: transparent; }}
 QCheckBox {{ spacing: 8px; color: {t.text_muted}; }}
 QCheckBox:hover {{ color: {t.text}; }}
 QCheckBox:focus {{ color: {t.focus}; }}
+QTabWidget::pane {{ border: 0; background: {t.window}; top: -1px; }}
+QTabBar::tab {{
+    border: 0;
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-right: 4px;
+    background: transparent;
+    color: {t.text_muted};
+}}
+QTabBar::tab:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+QTabBar::tab:selected {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}
 QMenu {{
     border: 0;
     border-radius: 10px;
@@ -449,6 +462,47 @@ QHeaderView::section {{
 #categoryManagerClose {{ padding: 4px 12px; }}
 #exportTitle,
 #receiptInboxTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#aiCenterDialog {{ background: {t.window}; color: {t.text}; }}
+QTabWidget#aiCenterTabs {{ background: transparent; color: {t.text}; }}
+QTabWidget#aiCenterTabs::pane {{
+    border: 1px solid {t.sidebar_separator};
+    border-radius: 8px;
+    background: {t.window};
+    top: -1px;
+}}
+QTabWidget#aiCenterTabs QTabBar {{ background: transparent; }}
+QTabWidget#aiCenterTabs QTabBar::tab {{
+    border: 0;
+    border-radius: 6px;
+    margin: 0;
+    padding: 7px 0;
+    background: transparent;
+    color: {t.text_muted};
+    text-align: center;
+}}
+QTabWidget#aiCenterTabs QTabBar::tab:hover {{
+    background: {t.surface_hover};
+    color: {t.text};
+}}
+QTabWidget#aiCenterTabs QTabBar::tab:selected {{
+    background: {t.surface_selected};
+    color: {t.text};
+    font-weight: 600;
+}}
+QTabWidget#aiCenterTabs QTabBar::tab:disabled {{
+    background: transparent;
+    color: {t.disabled};
+}}
+#aiCenterCloseButton {{
+    border: 1px solid transparent;
+    background: transparent;
+    color: {t.text_muted};
+    padding: 5px 12px;
+}}
+#aiCenterCloseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#aiCenterCloseButton:pressed {{ background: {t.surface_selected}; color: {t.text}; }}
+#aiCenterCloseButton:focus {{ border-color: {t.focus}; color: {t.text}; }}
+#aiCenterCloseButton:disabled {{ background: transparent; color: {t.disabled}; }}
 #exportSectionTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
 #exportInfoLabel {{ color: {t.text_muted}; padding: 12px; }}
 #exportSelectionTree {{ border: 0; border-radius: 8px; background: {t.surface}; color: {t.text}; padding: 4px; outline: 0; }}
