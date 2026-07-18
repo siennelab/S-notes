@@ -73,11 +73,21 @@ but it is not a public notarized distribution.
   completed real interactive App acceptance, including the approximately
   100px / 50px wide-window editor gaps and narrow-window behavior.
 - Task 13A: MCP R1 Foundation is implemented on the dedicated
-  `task13-mcp-r1-foundation` branch and awaits S's real UI acceptance before any
-  commit, merge, push, package build, or App replacement. It introduces stable
+  `task13-mcp-r1-foundation` branch and was formally accepted and sealed at
+  commit `899bfac49c8c8fd00fa53ad53a79b55174a2b1d7`. It introduced stable
   visibility codes and target IDs, AI中心, the unique safety service, local
-  search, controlled writes, history, settings, and call logs. It does not
-  install or run MCP/tunnel components.
+  search, controlled writes, history, settings, and call logs.
+- Task 13B: Local MCP Server was formally accepted by S through Inspector
+  0.22.0 on 2026-07-18. It adds the separate MCP 1.28.1 / Python 3.12.13 runtime
+  declaration, fail-closed doctor, fixed-actor headless stdio server, exactly
+  nine approved tools, and temporary-database protocol/security/concurrency
+  tests. The first manual pass exposed a presentation-sensitive `updated_at`
+  round-trip conflict; the repaired server provides a preferred opaque
+  `version`, normalized legacy ISO-time comparison, and protocol regression
+  coverage. Repeat acceptance proved a valid append, a changed revision token,
+  a stale-version conflict under a new request ID, and no rejected content in
+  the final note. Task 13B does not package the desktop App or connect a Tunnel
+  or ChatGPT.
 
 The UI R2 visual contract is recorded in
 [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md). Task 12 does not alter stored data,
@@ -95,11 +105,13 @@ autosave, AI visibility, export safety, deletion, or related-note semantics.
 - Intel or universal macOS build.
 - Automatic update strategy.
 - More import/export formats after the R1 safety boundaries remain stable.
-- Task 13 R1.1 ChatGPT interactive panels.
+- Task 13 R1.1 ChatGPT interactive panels (still deferred).
 - AI-material grouping by target and later search alias/semantic expansion.
 - Mac resident-service inventory and health checks.
-- MCP Server, tunnel, and ChatGPT App connection after the foundation is
+- Task 13C Secure MCP Tunnel and ChatGPT App connection after Task 13B is
   accepted.
+- Python runtime unification as a separate later task; Task 13B keeps the
+  accepted desktop and MCP environments separate.
 
 ## Not In Current Todo
 

@@ -33,13 +33,22 @@ handoff text.
 
 ## Registered Next Mainline
 
-- Task 13A: MCP R1 Foundation / S-notes application and permission foundation.
-  Code-level implementation is on `task13-mcp-r1-foundation` and awaits S's
-  real UI acceptance. It covers stable visibility codes, stable target IDs,
-  AI中心, one safety service over the existing SQLite database, safe local
-  search, controlled create/prepend/append/metadata writes, request
-  deduplication, conflict detection, modification history, call logs, and two
-  persistent confirmation settings.
+- Task 13A: Completed and sealed at
+  `899bfac49c8c8fd00fa53ad53a79b55174a2b1d7`. MCP R1 Foundation covers stable
+  visibility codes, stable target IDs, AI中心, one safety service over the
+  existing SQLite database, safe local search, controlled
+  create/prepend/append/metadata writes, request deduplication, conflict
+  detection, modification history, call logs, and two persistent confirmation
+  settings.
+- Task 13B: Local MCP Server was formally accepted by S through MCP Inspector
+  on 2026-07-18. It is stdio-only, fixes the Gale stable target ID outside tool
+  inputs, exposes exactly nine approved tools, and has dedicated
+  temporary-database protocol tests. Its first Inspector pass found an
+  `updated_at` round-trip conflict; the sealed repair adds an opaque `version`
+  credential plus normalized legacy timestamp comparison. Repeat acceptance
+  proved create/get/version append, revision change, stale-version conflict,
+  and unchanged formal content after the rejected write. Task 13C, App builds,
+  Tunnel, and ChatGPT connection remain outside this task.
 
 ## Task 13 Deferred
 
@@ -47,7 +56,9 @@ handoff text.
 - AI-material filtering/grouping by target.
 - Search aliases and semantic expansion.
 - Mac resident-service inventory and health checks.
-- MCP Server, tunnel, runtime key, and ChatGPT App connection.
+- Task 13C Secure MCP Tunnel, runtime key, and ChatGPT App connection.
+- Python runtime unification; it is a separate later task and is not part of
+  Task 13B.
 
 ## Later Confirmed Work
 

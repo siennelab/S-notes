@@ -1,8 +1,12 @@
-# MCP R1 Foundation Design
+# MCP R1 Design
 
 Task 13A prepares the S-notes application and its permission boundary for a
 future MCP adapter. It does not install an MCP SDK, run a server, open a public
 port, connect a tunnel, or connect ChatGPT.
+
+Task 13B adds the local headless adapter. It uses the dedicated Python 3.12 MCP
+environment and stdio only. It does not connect a tunnel, ChatGPT, or any
+internet service and does not change the packaged desktop App.
 
 ## One Database, One Safety Service
 
@@ -107,11 +111,47 @@ of the current note, so restoration is itself reversible.
 
 ## Deferred Work
 
-Task 13A deliberately defers:
+Task 13A/13B deliberately defer:
 
 - R1.1 ChatGPT interactive panels;
 - AI-material filtering and grouping by target;
 - search aliases and semantic expansion;
 - a Mac resident-service inventory and health checks;
-- MCP Server, tunnel, runtime key, and ChatGPT App integration;
+- Secure MCP Tunnel, runtime key, and ChatGPT App integration (Task 13C);
 - vector, Ollama, sqlite-vec, and cloud search.
+
+## Task 13B Local Server Boundary
+
+- `src/mcp_server/` is a thin MCP adapter. Its tool layer imports only the
+  Task 13A safety service and never imports a SQLite connection.
+- The formal transport is stdio. stdout is protocol-only; safe process
+  diagnostics use stderr.
+- Startup fixes one stable actor target ID from user-local configuration or an
+  explicit launch environment. Actor, database path, and permission controls
+  are absent from every tool schema.
+- Startup performs a read-only fail-closed health check for database existence,
+  `quick_check`, schema version, foreign keys, and enabled actor target. The
+  server does not initialize or migrate a database.
+- The exact tools are `search_notes`, `get_note`, `list_directories`,
+  `list_tags`, `create_note`, `prepend_note`, `append_note`,
+  `update_note_metadata`, and `get_operation_status`.
+- Inputs reject unknown fields and bound page/content sizes. Writes accept
+  plain text, use stable request IDs, and retain Task 13A confirmation,
+  idempotency, conflict, history, and aggregate-log behavior.
+- `get_note` exposes an opaque per-revision `version` as the preferred
+  round-trip conflict credential. All three modification tools use the same
+  validator; the legacy `updated_at` credential remains strict but compares
+  normalized ISO 8601 instants instead of presentation strings. Transactional
+  rechecks still reject every stale revision.
+- There are no resources, prompts, deletion, full-body overwrite, arbitrary
+  update, SQL, permission, target, filesystem, shell, network, or HTTP tools.
+- Inspector is a disposable localhost acceptance harness only. It does not
+  change the formal stdio transport.
+- S completed the disposable Inspector acceptance on 2026-07-18, including a
+  successful opaque-version write followed by a new-request stale-version
+  conflict with no rejected content entering the note.
+- The complete operational contract is in
+  [MCP_SERVER_RUNBOOK.md](MCP_SERVER_RUNBOOK.md).
+
+Python runtime unification remains a later independent task. R1.1 interactive
+panels also remain deferred.
