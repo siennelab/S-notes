@@ -14,6 +14,12 @@ from PySide6.QtGui import QColor, QTextCursor, QTextFormat
 from PySide6.QtWidgets import QApplication
 
 from src.editor import NotesEditor
+from src.main_window import (
+    EDITOR_ACCEPTED_MAX_WIDTH,
+    EDITOR_BASELINE_MAX_WIDTH,
+    EDITOR_TARGET_MAX_WIDTH,
+    editor_horizontal_metrics,
+)
 from src.theme import (
     ICON_DIR,
     THEMES,
@@ -78,6 +84,95 @@ class ThemeSystemTest(unittest.TestCase):
                 4.5,
                 tokens.name,
             )
+
+    def test_light_slate_sidebar_roles_have_clear_visual_levels(self) -> None:
+        tokens = THEMES["light-slate"]
+        self.assertLess(
+            QColor(tokens.sidebar_control).lightnessF(),
+            QColor(tokens.sidebar).lightnessF(),
+        )
+        self.assertGreater(
+            QColor(tokens.sidebar_hover).lightnessF(),
+            QColor(tokens.sidebar).lightnessF(),
+        )
+        self.assertGreater(
+            QColor(tokens.sidebar_selected).lightnessF(),
+            QColor(tokens.sidebar_hover).lightnessF(),
+        )
+        self.assertEqual(tokens.sidebar_selected, tokens.editor)
+
+        style = build_app_style(tokens.name)
+        self.assertIn(
+            f"#themeSwitch {{ background: {tokens.sidebar_control};",
+            style,
+        )
+        self.assertIn(
+            f"#mainSplitter::handle {{ background: {tokens.sidebar_separator}; }}",
+            style,
+        )
+        self.assertIn(
+            f"#noteTable::item:hover {{ background: {tokens.sidebar_hover};",
+            style,
+        )
+        self.assertIn(
+            f"#noteTable::item:selected {{ background: {tokens.sidebar_selected};",
+            style,
+        )
+
+    def test_editor_wide_gap_is_twice_the_preserved_right_gap(self) -> None:
+        editor_root_width = 1139
+        left_margin, right_margin, leading_space = editor_horizontal_metrics(
+            editor_root_width
+        )
+        accepted_outer_margin = 48
+        accepted_right_margin = 40
+        baseline_available_width = editor_root_width - (accepted_outer_margin * 2)
+        baseline_width = min(
+            EDITOR_BASELINE_MAX_WIDTH,
+            baseline_available_width,
+        )
+        accepted_leading_space = (
+            baseline_available_width - baseline_width
+        ) // 2
+        accepted_left_gap = accepted_outer_margin + accepted_leading_space
+        accepted_width = min(
+            EDITOR_ACCEPTED_MAX_WIDTH,
+            editor_root_width - accepted_left_gap - accepted_right_margin,
+        )
+        accepted_right_gap = (
+            editor_root_width - accepted_left_gap - accepted_width
+        )
+        target_width = min(
+            EDITOR_TARGET_MAX_WIDTH,
+            editor_root_width - left_margin - right_margin - leading_space,
+        )
+
+        self.assertEqual(right_margin, accepted_right_gap)
+        self.assertEqual(left_margin + leading_space, right_margin * 2)
+        self.assertEqual(
+            left_margin + leading_space + target_width,
+            accepted_left_gap + accepted_width,
+        )
+        self.assertGreater(target_width, EDITOR_ACCEPTED_MAX_WIDTH)
+
+    def test_editor_narrow_margins_do_not_overflow(self) -> None:
+        widths_and_margins = ((896, 48), (895, 24), (640, 24), (639, 16))
+        for editor_root_width, expected_margin in widths_and_margins:
+            left_margin, right_margin, leading_space = editor_horizontal_metrics(
+                editor_root_width
+            )
+            available_width = editor_root_width - left_margin - right_margin
+            target_width = min(
+                EDITOR_TARGET_MAX_WIDTH,
+                available_width - leading_space,
+            )
+            self.assertEqual(left_margin, expected_margin)
+            self.assertEqual(
+                right_margin,
+                40 if expected_margin == 48 else expected_margin,
+            )
+            self.assertGreaterEqual(target_width, 0)
+            self.assertLessEqual(leading_space + target_width, available_width)
 
     def test_theme_preference_round_trips_through_application_support_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

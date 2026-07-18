@@ -23,9 +23,13 @@ handoff text.
 - Task 11.2: Completed. Internal release handoff baseline for
   v1.0.0-build.1.
 - Task 12: Completed. UI R2 adds the persistent night / slate / clay theme
-  system, 800px editor layout, legacy rich-text readability, shared themed
-  controls and icons, and conservative Markdown marker cleanup with one-step
-  undo. S completed real App acceptance.
+  system, stronger light-slate sidebar contrast with separate control, hover,
+  and divider roles, and a white selected-note row with a narrow accent marker
+  and no shadow. The wider editor keeps title, metadata, toolbar, and body on
+  one left axis, with accepted wide-window gaps of approximately 100px / 50px
+  and adaptive narrow-window behavior. Legacy rich-text readability, shared
+  themed controls and icons, and conservative Markdown marker cleanup retain
+  their existing behavior. S completed real interactive App acceptance.
 
 ## Registered Next Mainline
 

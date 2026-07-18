@@ -41,14 +41,17 @@ allowed outside the token definitions.
 ## Layout Relationships
 
 - The left sidebar uses the `sidebar` layer, with `sidebar_hover` and
-  `sidebar_selected` for interaction states.
+  `sidebar_selected` for interaction states. Embedded sidebar controls use
+  `sidebar_control`, and the editor boundary uses `sidebar_separator`.
 - The editor uses the `editor` layer. Toolbars and metadata controls use
   `surface` levels and spacing instead of borders or shadows.
 - The related-notes drawer uses the same sidebar layer and interaction language
   as the left sidebar. It must not become a white editor-like island.
 - The left sidebar starts at a 280px baseline and remains user-resizable.
-- The centered editor sheet has a final maximum width of 800px. Horizontal
-  margins prefer 48px and reduce to 24px or 16px when space is limited.
+- The wide editor sheet preserves the accepted 920px layout's measured right
+  boundary, then sets the white left gap to twice that right gap. Space released
+  from the left expands the sheet up to 1000px without widening the accepted
+  right gap. Narrower layouts retain the 48px, 24px, and 16px adaptive rules.
 - Note-list rows have a maximum height of 32px, with title left aligned and date
   right aligned.
 

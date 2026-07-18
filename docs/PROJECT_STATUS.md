@@ -23,6 +23,12 @@ This is the current repository handoff for S-notes R1.
 - Related-notes drawer.
 - UI R2 with persistent night, slate, and clay themes across the main window,
   dialogs, menus, and related-notes surfaces.
+- UI R2.1 strengthens the light-slate sidebar hierarchy with separate control,
+  hover, and divider roles plus a white selected-note row, narrow accent marker,
+  and no shadow.
+- The wider editor keeps title, metadata, toolbar, and body on one left axis.
+  Its accepted wide-window gaps are approximately 100px left / 50px right,
+  while narrow windows retain the adaptive layout without horizontal clipping.
 - Theme-aware rich-text display, including readable legacy foreground and code
   background handling without storing theme colors in note HTML.
 - Conservative Markdown source-marker cleanup for the current selection or the
@@ -60,8 +66,10 @@ but it is not a public notarized distribution.
 ## Confirmed Mainline
 
 - Task 12: Completed. UI R2 delivers the persistent night / slate / clay
-  three-theme system, the 800px editor layout, legacy rich-text readability,
-  and conservative Markdown marker cleanup. S completed real App acceptance.
+  three-theme system, the accepted R2.1 slate contrast and wider editor layout,
+  legacy rich-text readability, and conservative Markdown marker cleanup. S
+  completed real interactive App acceptance, including the approximately
+  100px / 50px wide-window editor gaps and narrow-window behavior.
 - Task 13: Local MCP interface R1.
 
 The UI R2 visual contract is recorded in

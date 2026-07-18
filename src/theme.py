@@ -17,6 +17,8 @@ class ThemeTokens:
     name: str
     window: str
     sidebar: str
+    sidebar_control: str
+    sidebar_separator: str
     sidebar_hover: str
     sidebar_selected: str
     editor: str
@@ -57,6 +59,8 @@ THEMES: dict[str, ThemeTokens] = {
         name="dark",
         window="#171819",
         sidebar="#202224",
+        sidebar_control="#292C2E",
+        sidebar_separator="#292C2E",
         sidebar_hover="#292C2E",
         sidebar_selected="#303438",
         editor="#1B1D1E",
@@ -78,9 +82,11 @@ THEMES: dict[str, ThemeTokens] = {
     "light-slate": ThemeTokens(
         name="light-slate",
         window="#E7EAED",
-        sidebar="#F1F4F6",
-        sidebar_hover="#E7ECEF",
-        sidebar_selected="#DCE5EB",
+        sidebar="#DCE2EA",
+        sidebar_control="#CAD2DD",
+        sidebar_separator="#C3CCD7",
+        sidebar_hover="#E8ECF1",
+        sidebar_selected="#FFFFFF",
         editor="#FFFFFF",
         surface="#F6F8F9",
         surface_hover="#EAF0F3",
@@ -88,12 +94,12 @@ THEMES: dict[str, ThemeTokens] = {
         text="#23292E",
         text_muted="#68737C",
         text_subtle="#929CA4",
-        accent="#4A6B88",
+        accent="#3E5C76",
         accent_soft="#D9E4EC",
         accent_text="#FFFFFF",
         warning="#9A6A22",
         danger="#A34444",
-        focus="#4A6B88",
+        focus="#3E5C76",
         scrollbar="#B8C0C6",
         disabled="#AAB2B8",
     ),
@@ -101,6 +107,8 @@ THEMES: dict[str, ThemeTokens] = {
         name="light-clay",
         window="#E8E6E2",
         sidebar="#F3F2EF",
+        sidebar_control="#EAE7E3",
+        sidebar_separator="#EAE7E3",
         sidebar_hover="#EAE7E3",
         sidebar_selected="#E2DDD7",
         editor="#FFFFFF",
@@ -274,7 +282,7 @@ QHeaderView::section {{
 #mainContentArea {{ background: {t.editor}; }}
 #sidebar {{ background: {t.sidebar}; }}
 #sidebarTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
-#themeSwitch {{ background: {t.sidebar_hover}; border-radius: 8px; }}
+#themeSwitch {{ background: {t.sidebar_control}; border-radius: 8px; }}
 #themeButton {{
     color: {t.text_muted};
     font-size: 11px;
@@ -287,11 +295,11 @@ QHeaderView::section {{
 #newNoteButton:hover {{ background: {t.focus}; }}
 #newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
 #sidebarSearch,
-#categoryFilter {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#categoryFilter {{ background: {t.sidebar_control}; color: {t.text}; }}
 #sidebarSearch:hover,
-#categoryFilter:hover {{ background: {t.sidebar_selected}; }}
+#categoryFilter:hover {{ background: {t.sidebar_hover}; }}
 #sidebarSearch:focus,
-#categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_hover}; }}
+#categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
 #sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 0; }}
 #smartTabButton,
 #categoryManagerButton {{ color: {t.text_muted}; font-size: 11px; }}
@@ -317,7 +325,7 @@ QHeaderView::section {{
 #sidebarComboPopupView::item:selected,
 #comboPopupView::item:selected {{ background: transparent; color: {t.text}; }}
 #floatingComboPopup {{ background: transparent; border: 0; }}
-#mainSplitter::handle {{ background: {t.sidebar_hover}; }}
+#mainSplitter::handle {{ background: {t.sidebar_separator}; }}
 #mainSplitter::handle:hover {{ background: {t.accent}; }}
 #noteTable {{
     border: 0;

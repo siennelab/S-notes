@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QStackedWidget,
     QSplitter,
+    QSpacerItem,
     QSizePolicy,
     QStyle,
     QStyledItemDelegate,
@@ -107,7 +108,7 @@ class NoteTableDelegate(QStyledItemDelegate):
             painter.save()
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(current_theme().accent))
-            marker = option.rect.adjusted(0, 8, -(option.rect.width() - 2), -8)
+            marker = option.rect.adjusted(0, 8, -(option.rect.width() - 3), -8)
             painter.drawRect(marker)
             painter.restore()
 
@@ -128,12 +129,40 @@ class EditorSheet(QWidget):
         return QSize(0, hint.height())
 
 
+EDITOR_BASELINE_MAX_WIDTH = 800
+EDITOR_ACCEPTED_MAX_WIDTH = 920
+EDITOR_TARGET_MAX_WIDTH = 1000
+EDITOR_WIDE_RATIO_MIN_WIDTH = 960
+
+
+def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
+    left_margin = 48 if width >= 896 else 24 if width >= 640 else 16
+    right_margin = 40 if left_margin == 48 else left_margin
+    baseline_available_width = max(0, width - (left_margin * 2))
+    baseline_width = min(EDITOR_BASELINE_MAX_WIDTH, baseline_available_width)
+    leading_space = max(0, (baseline_available_width - baseline_width) // 2)
+
+    if width >= EDITOR_WIDE_RATIO_MIN_WIDTH:
+        accepted_left_gap = left_margin + leading_space
+        accepted_sheet_width = min(
+            EDITOR_ACCEPTED_MAX_WIDTH,
+            max(0, width - accepted_left_gap - right_margin),
+        )
+        accepted_right_gap = max(
+            right_margin,
+            width - accepted_left_gap - accepted_sheet_width,
+        )
+        return accepted_right_gap * 2, accepted_right_gap, 0
+
+    return left_margin, right_margin, leading_space
+
+
 class MainWindow(QMainWindow):
     DEFAULT_SIDEBAR_WIDTH = 280
     MIN_SIDEBAR_WIDTH = 280
     MAX_SIDEBAR_WIDTH = 480
     SIDEBAR_WIDTH_SETTING = "ui/sidebar_width"
-    EDITOR_MAX_WIDTH = 800
+    EDITOR_MAX_WIDTH = EDITOR_TARGET_MAX_WIDTH
 
     def __init__(self) -> None:
         super().__init__()
@@ -291,8 +320,21 @@ class MainWindow(QMainWindow):
     def _update_editor_margins(self, width: int) -> None:
         if not hasattr(self, "editor_outer_layout"):
             return
-        margin = 48 if width >= 896 else 24 if width >= 640 else 16
-        self.editor_outer_layout.setContentsMargins(margin, 0, margin, 0)
+        left_margin, right_margin, leading_space = editor_horizontal_metrics(width)
+        self.editor_outer_layout.setContentsMargins(
+            left_margin,
+            0,
+            right_margin,
+            0,
+        )
+        if hasattr(self, "editor_leading_spacer"):
+            self.editor_leading_spacer.changeSize(
+                leading_space,
+                0,
+                QSizePolicy.Fixed,
+                QSizePolicy.Minimum,
+            )
+            self.editor_outer_layout.invalidate()
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
@@ -493,7 +535,13 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(editor_sheet)
         layout.setContentsMargins(0, 32, 0, 24)
         layout.setSpacing(0)
-        outer_layout.addStretch(1)
+        self.editor_leading_spacer = QSpacerItem(
+            0,
+            0,
+            QSizePolicy.Fixed,
+            QSizePolicy.Minimum,
+        )
+        outer_layout.addSpacerItem(self.editor_leading_spacer)
         outer_layout.addWidget(editor_sheet)
         outer_layout.addStretch(1)
 
