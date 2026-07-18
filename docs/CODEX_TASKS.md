@@ -22,10 +22,13 @@ handoff text.
 - Task 11: Completed. macOS app packaging for internal arm64 build.
 - Task 11.2: Completed. Internal release handoff baseline for
   v1.0.0-build.1.
+- Task 12: Completed. UI R2 adds the persistent night / slate / clay theme
+  system, 800px editor layout, legacy rich-text readability, shared themed
+  controls and icons, and conservative Markdown marker cleanup with one-step
+  undo. S completed real App acceptance.
 
 ## Registered Next Mainline
 
-- Task 12: UI R2, complete day/night dual-theme pass.
 - Task 13: Local MCP interface R1.
 
 ## Later Confirmed Work
@@ -38,5 +41,6 @@ handoff text.
 
 - Do not infer unrecorded implementation promises from this task ledger.
 - UI work must not change stored data meaning.
+- UI work follows [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md).
 - AI and MCP work must preserve the safety boundaries in
   [DESIGN.md](DESIGN.md).

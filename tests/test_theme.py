@@ -1,0 +1,229 @@
+from __future__ import annotations
+
+import os
+import re
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QTextCursor, QTextFormat
+from PySide6.QtWidgets import QApplication
+
+from src.editor import NotesEditor
+from src.theme import (
+    ICON_DIR,
+    THEMES,
+    THEME_SETTINGS_PATH,
+    apply_theme,
+    build_app_style,
+    load_saved_theme,
+    save_theme,
+)
+
+
+def contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(color: str) -> float:
+        channels = QColor(color).getRgbF()[:3]
+        linear = [
+            channel / 12.92
+            if channel <= 0.04045
+            else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in channels
+        ]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    lighter, darker = sorted(
+        (luminance(foreground), luminance(background)), reverse=True
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def rendered_foreground(editor: NotesEditor, position: int) -> str | None:
+    for selection in reversed(editor.extraSelections()):
+        if selection.cursor.selectionStart() <= position < selection.cursor.selectionEnd():
+            brush = selection.format.foreground()
+            if brush.style() != Qt.NoBrush:
+                return brush.color().name().upper()
+    return None
+
+
+def qt_text_position(text: str, substring: str) -> int:
+    prefix = text[: text.index(substring)]
+    return len(prefix.encode("utf-16-le")) // 2
+
+
+class ThemeSystemTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_three_registered_themes_share_the_same_token_shape(self) -> None:
+        self.assertEqual(set(THEMES), {"dark", "light-slate", "light-clay"})
+        token_fields = set(THEMES["dark"].__dataclass_fields__)
+        for tokens in THEMES.values():
+            self.assertEqual(set(tokens.__dataclass_fields__), token_fields)
+
+    def test_document_theme_roles_are_token_backed_and_readable(self) -> None:
+        for tokens in THEMES.values():
+            self.assertEqual(tokens.document_text, tokens.text)
+            self.assertEqual(tokens.document_secondary, tokens.text_muted)
+            self.assertEqual(tokens.document_link, tokens.accent)
+            self.assertEqual(tokens.document_code, tokens.text)
+            self.assertGreaterEqual(
+                contrast_ratio(tokens.document_text, tokens.editor),
+                4.5,
+                tokens.name,
+            )
+
+    def test_theme_preference_round_trips_through_application_support_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            settings_path = Path(temporary_directory) / "config" / "ui_settings.ini"
+            with patch("src.theme.THEME_SETTINGS_PATH", settings_path):
+                self.assertEqual(save_theme("light-clay"), "light-clay")
+                self.assertEqual(load_saved_theme(), "light-clay")
+                self.assertTrue(settings_path.is_file())
+        self.assertNotEqual(THEME_SETTINGS_PATH, settings_path)
+
+    def test_theme_switch_preserves_editor_content_selection_and_html(self) -> None:
+        apply_theme(self.app, "light-slate")
+        editor = NotesEditor()
+        editor.show()
+        self.app.processEvents()
+        editor.setPlainText("alpha beta gamma")
+        cursor = editor.textCursor()
+        cursor.setPosition(2)
+        cursor.setPosition(10, QTextCursor.KeepAnchor)
+        editor.setTextCursor(cursor)
+        before_text = editor.toPlainText()
+        before_html = editor.toHtml()
+        before_selection = editor.textCursor().selectedText()
+        editor.document().setModified(False)
+        text_change_events = []
+        editor.textChanged.connect(lambda: text_change_events.append(True))
+
+        for theme_name in ("dark", "light-clay", "light-slate"):
+            apply_theme(self.app, theme_name)
+            editor.apply_theme()
+            self.app.processEvents()
+            self.assertEqual(editor.toPlainText(), before_text)
+            self.assertEqual(editor.toHtml(), before_html)
+            self.assertEqual(editor.textCursor().selectedText(), before_selection)
+            self.assertFalse(editor.document().isModified())
+            self.assertEqual(text_change_events, [])
+        editor.hide()
+
+    def test_legacy_foreground_is_overridden_without_rewriting_rich_text(self) -> None:
+        apply_theme(self.app, "light-slate")
+        editor = NotesEditor()
+        legacy_html = """
+        <h2><span style="color:#333333">旧标题</span></h2>
+        <p><span style="color:#333333; font-weight:600; font-style:italic">
+        旧正文 mixed 中文 😀</span>
+        <a href="https://example.com" style="color:#333333">链接</a></p>
+        """
+        editor.set_note_content(legacy_html)
+        self.assertFalse(editor.document().isModified())
+        before_text = editor.toPlainText()
+        before_html = editor.toHtml()
+        self.assertNotIn("#333333", before_html.lower())
+        body_position = qt_text_position(before_text, "旧正文")
+        link_position = qt_text_position(before_text, "链接")
+
+        for theme_name, tokens in THEMES.items():
+            apply_theme(self.app, theme_name)
+            editor.apply_theme()
+            self.app.processEvents()
+            self.assertEqual(
+                rendered_foreground(editor, body_position),
+                tokens.document_text.upper(),
+            )
+            self.assertEqual(
+                rendered_foreground(editor, link_position),
+                tokens.document_link.upper(),
+            )
+            self.assertEqual(editor.toPlainText(), before_text)
+            self.assertEqual(editor.toHtml(), before_html)
+            self.assertFalse(editor.document().isModified())
+
+        body_cursor = QTextCursor(editor.document())
+        body_cursor.setPosition(body_position)
+        body_format = body_cursor.charFormat()
+        self.assertGreater(body_format.fontWeight(), 400)
+        self.assertTrue(body_format.fontItalic())
+
+    def test_new_input_uses_theme_display_color_without_storing_it(self) -> None:
+        apply_theme(self.app, "dark")
+        editor = NotesEditor()
+        editor.set_note_content(
+            '<p><span style="color:#333333">旧正文</span></p>'
+        )
+        cursor = editor.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        editor.setTextCursor(cursor)
+        editor.insertPlainText(" 新输入")
+        self.app.processEvents()
+
+        inserted_position = editor.toPlainText().index("新输入")
+        inserted_cursor = QTextCursor(editor.document())
+        inserted_cursor.setPosition(inserted_position)
+        self.assertFalse(
+            inserted_cursor.charFormat().hasProperty(QTextFormat.ForegroundBrush)
+        )
+        self.assertEqual(
+            rendered_foreground(editor, inserted_position),
+            THEMES["dark"].document_text.upper(),
+        )
+        self.assertNotIn(THEMES["dark"].document_text.lower(), editor.toHtml().lower())
+
+    def test_legacy_code_background_is_replaced_by_theme_overlay(self) -> None:
+        apply_theme(self.app, "dark")
+        editor = NotesEditor()
+        editor.set_note_content(
+            """
+            <pre style="margin-left:16px; margin-right:8px; margin-top:8px;
+                        margin-bottom:8px; background-color:#f0f0f0">
+            <span style="font-family:'SF Mono'; color:#333333">def hello():</span>
+            </pre>
+            """
+        )
+        code_position = qt_text_position(editor.toPlainText(), "def hello")
+        code_block = editor.document().findBlock(code_position)
+        self.assertFalse(
+            code_block.blockFormat().hasProperty(QTextFormat.BackgroundBrush)
+        )
+        self.assertNotIn("#f0f0f0", editor.toHtml().lower())
+
+        backgrounds = [
+            selection.format.background().color().name().upper()
+            for selection in editor.extraSelections()
+            if selection.cursor.selectionStart()
+            <= code_position
+            < selection.cursor.selectionEnd()
+            and selection.format.hasProperty(QTextFormat.BackgroundBrush)
+        ]
+        self.assertIn(THEMES["dark"].surface.upper(), backgrounds)
+
+    def test_shared_qss_avoids_shadow_and_rgba_layering(self) -> None:
+        for theme_name in THEMES:
+            style = build_app_style(theme_name)
+            self.assertNotIn("box-shadow", style)
+            self.assertNotIn("rgba(", style)
+            self.assertIn("#linkDrawer", style)
+            self.assertIn("#sidebar", style)
+
+    def test_repository_icons_are_lucide_sized_and_token_colored(self) -> None:
+        for icon_path in ICON_DIR.glob("*.svg"):
+            source = icon_path.read_text(encoding="utf-8")
+            self.assertIn('width="14"', source, icon_path.name)
+            self.assertIn('height="14"', source, icon_path.name)
+            self.assertIn('stroke-width="2"', source, icon_path.name)
+            self.assertIn("currentColor", source, icon_path.name)
+            self.assertIsNone(re.search(r"#[0-9A-Fa-f]{3,8}", source), icon_path.name)
+
+
+if __name__ == "__main__":
+    unittest.main()

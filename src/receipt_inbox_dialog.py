@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QCloseEvent, QPainter
+from PySide6.QtGui import QCloseEvent, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -34,6 +34,7 @@ from src.floating_combo import FloatingComboBox
 from src.memory_receipt_importer import parse_ai_targets_text, parse_memory_receipt
 from src.tag_manager import format_tags, parse_tags
 from src.time_utils import format_display_datetime
+from src.theme import repolish
 
 
 class ReceiptElidedLabel(QLabel):
@@ -66,16 +67,18 @@ class ReceiptCard(QFrame):
 
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
+        self.setProperty("pressed", False)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(7)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
 
         top = QHBoxLayout()
         top.setSpacing(8)
         title_area = QVBoxLayout()
-        title_area.setSpacing(3)
+        title_area.setSpacing(4)
         self.title_label = ReceiptElidedLabel(receipt["title"] or "未命名回执")
         self.title_label.setObjectName("receiptCardTitle")
         title_area.addWidget(self.title_label)
@@ -119,8 +122,8 @@ class ReceiptCard(QFrame):
         self.details = QWidget()
         self.details.setObjectName("receiptCardDetails")
         details_layout = QVBoxLayout(self.details)
-        details_layout.setContentsMargins(0, 6, 0, 0)
-        details_layout.setSpacing(7)
+        details_layout.setContentsMargins(0, 8, 0, 0)
+        details_layout.setSpacing(8)
 
         if self.parse_failed:
             parse_error = QLabel(
@@ -134,7 +137,7 @@ class ReceiptCard(QFrame):
         details_layout.addWidget(self._row("标题", self.title_input))
 
         category_row = QHBoxLayout()
-        category_row.setSpacing(6)
+        category_row.setSpacing(8)
         self.main_input = QLineEdit(receipt["main_category"])
         self.sub_input = QLineEdit(receipt["sub_category"])
         self.sub_sub_input = QLineEdit(receipt["sub_sub_category"])
@@ -219,7 +222,7 @@ class ReceiptCard(QFrame):
         row_layout.setSpacing(8)
         text = QLabel(label)
         text.setObjectName("receiptFieldLabel")
-        text.setFixedWidth(42)
+        text.setFixedWidth(40)
         row_layout.addWidget(text)
         row_layout.addWidget(widget, stretch=1)
         return row
@@ -250,9 +253,24 @@ class ReceiptCard(QFrame):
         }
 
     def mouseReleaseEvent(self, event) -> None:
+        self.setProperty("pressed", False)
+        repolish(self)
         if event.button() == Qt.LeftButton:
             self.toggleRequested.emit(self.receipt_id)
         super().mouseReleaseEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.setProperty("pressed", True)
+            repolish(self)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in {Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space}:
+            self.toggleRequested.emit(self.receipt_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class ReceiptInboxDialog(QWidget):
@@ -276,7 +294,7 @@ class ReceiptInboxDialog(QWidget):
         self.setObjectName("receiptInboxDialog")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
         title = QLabel("AI 待确认收件箱")
@@ -284,7 +302,7 @@ class ReceiptInboxDialog(QWidget):
         layout.addWidget(title)
 
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
+        toolbar.setSpacing(8)
         self.pending_filter_button = QPushButton("待确认（0）")
         self.pending_filter_button.setObjectName("receiptTabButton")
         self.pending_filter_button.clicked.connect(
@@ -572,8 +590,8 @@ class ReceiptImportPreviewDialog(QDialog):
         self.resize(720, 520)
         self.setMinimumSize(640, 420)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
 
         title = QLabel("导入剪贴板回执")
         title.setObjectName("exportTitle")

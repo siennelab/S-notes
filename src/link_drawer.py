@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from html.parser import HTMLParser
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QKeyEvent, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from src.ai_targets import AI_TARGETS
 from src.database import list_notes_for_link_drawer
 from src.tag_manager import parse_tags
+from src.theme import repolish, themed_icon
 from src.time_utils import format_display_datetime
 
 
@@ -318,10 +319,12 @@ class LinkResultWidget(QFrame):
         self.result = result
         self.setObjectName("linkResult")
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setProperty("pressed", False)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 9, 10, 9)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
 
         title = ElidedLabel(result.title)
         title.setObjectName("linkResultTitle")
@@ -352,9 +355,24 @@ class LinkResultWidget(QFrame):
         layout.addWidget(updated)
 
     def mouseReleaseEvent(self, event) -> None:
+        self.setProperty("pressed", False)
+        repolish(self)
         if event.button() == Qt.LeftButton:
             self.noteSelected.emit(self.result.note_id)
         super().mouseReleaseEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.setProperty("pressed", True)
+            repolish(self)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in {Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space}:
+            self.noteSelected.emit(self.result.note_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class LinkDrawer(QWidget):
@@ -365,23 +383,24 @@ class LinkDrawer(QWidget):
         super().__init__(parent)
         self.setObjectName("linkDrawer")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedWidth(340)
+        self.setFixedWidth(320)
         self.cards: list[LinkResultWidget] = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
         header = QHBoxLayout()
         title = QLabel("关联")
         title.setObjectName("linkDrawerTitle")
         header.addWidget(title, stretch=1)
-        close_button = QPushButton("×")
-        close_button.setObjectName("linkDrawerCloseButton")
-        close_button.setToolTip("关闭关联抽屉")
-        close_button.setFixedSize(24, 22)
-        close_button.clicked.connect(self.closeRequested)
-        header.addWidget(close_button)
+        self.close_button = QPushButton()
+        self.close_button.setObjectName("linkDrawerCloseButton")
+        self.close_button.setToolTip("关闭关联抽屉")
+        self.close_button.setFixedSize(28, 28)
+        self.close_button.setIconSize(QSize(14, 14))
+        self.close_button.clicked.connect(self.closeRequested)
+        header.addWidget(self.close_button)
         layout.addLayout(header)
 
         self.summary = QLabel("共 0 篇关联笔记")
@@ -406,6 +425,12 @@ class LinkDrawer(QWidget):
         self.cards_layout.addStretch(1)
         self.scroll.setWidget(content)
         layout.addWidget(self.scroll, stretch=1)
+        self.refresh_theme()
+
+    def refresh_theme(self) -> None:
+        self.close_button.setIcon(themed_icon("x.svg", "text_muted"))
+        for card in self.cards:
+            repolish(card)
 
     def refresh(self, current_note_id: int | None) -> None:
         data = build_link_drawer_data(current_note_id)

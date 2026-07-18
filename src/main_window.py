@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSettings, QSize, QTimer, Qt
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -24,6 +22,8 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSplitter,
     QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -84,19 +84,64 @@ from src.sidebar_interactions import (
 )
 from src.smart_views import SMART_VIEWS, get_smart_view_notes
 from src.tag_manager import format_tags, parse_tags
-from src.theme import APP_STYLE
+from src.theme import (
+    THEME_LABELS,
+    apply_theme,
+    current_theme,
+    load_saved_theme,
+    normalize_theme_name,
+    repolish,
+    save_theme,
+    themed_icon,
+)
 from src.time_utils import format_display_datetime
 
 
+class NoteTableDelegate(QStyledItemDelegate):
+    def paint(self, painter: QPainter, option, index) -> None:
+        selected = bool(option.state & QStyle.State_Selected)
+        if selected and index.column() == 0:
+            option.font.setWeight(QFont.DemiBold)
+        super().paint(painter, option, index)
+        if selected and index.column() == 0:
+            painter.save()
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(current_theme().accent))
+            marker = option.rect.adjusted(0, 8, -(option.rect.width() - 2), -8)
+            painter.drawRect(marker)
+            painter.restore()
+
+
+class EditorSheet(QWidget):
+    def __init__(self, preferred_width: int, parent=None) -> None:
+        super().__init__(parent)
+        self.preferred_width = preferred_width
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(preferred_width)
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(self.preferred_width, hint.height())
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
+
+
 class MainWindow(QMainWindow):
-    DEFAULT_SIDEBAR_WIDTH = 320
-    MIN_SIDEBAR_WIDTH = 320
-    MAX_SIDEBAR_WIDTH = 520
+    DEFAULT_SIDEBAR_WIDTH = 280
+    MIN_SIDEBAR_WIDTH = 280
+    MAX_SIDEBAR_WIDTH = 480
     SIDEBAR_WIDTH_SETTING = "ui/sidebar_width"
+    EDITOR_MAX_WIDTH = 800
 
     def __init__(self) -> None:
         super().__init__()
         self.settings = QSettings("S-notes", "S-notes")
+        self.current_theme_name = load_saved_theme()
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, self.current_theme_name)
         self.current_note: dict | None = None
         self.is_loading_note = False
         self.has_unsaved_changes = False
@@ -136,7 +181,6 @@ class MainWindow(QMainWindow):
         sidebar = self._build_sidebar()
         sidebar.setMinimumWidth(self.MIN_SIDEBAR_WIDTH)
         sidebar.setMaximumWidth(self.MAX_SIDEBAR_WIDTH)
-        sidebar.installEventFilter(self)
 
         content = QWidget()
         content.setObjectName("mainContentArea")
@@ -152,7 +196,7 @@ class MainWindow(QMainWindow):
 
         self.main_splitter = QSplitter(Qt.Horizontal)
         self.main_splitter.setObjectName("mainSplitter")
-        self.main_splitter.setHandleWidth(2)
+        self.main_splitter.setHandleWidth(4)
         self.main_splitter.setChildrenCollapsible(False)
         self.main_splitter.setOpaqueResize(True)
         self.main_splitter.addWidget(sidebar)
@@ -183,54 +227,123 @@ class MainWindow(QMainWindow):
         )
         self.settings.setValue(self.SIDEBAR_WIDTH_SETTING, width)
 
+    def set_theme(self, name: str) -> None:
+        theme_name = normalize_theme_name(name)
+        if theme_name == self.current_theme_name:
+            return
+        sidebar_width = self.sidebar.width() if hasattr(self, "sidebar") else None
+        self.current_theme_name = theme_name
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, theme_name)
+        save_theme(theme_name)
+        self._update_theme_button_states()
+        self._refresh_theme_icons()
+        if sidebar_width is not None:
+            self._restore_sidebar_width(sidebar_width)
+            QTimer.singleShot(0, lambda width=sidebar_width: self._restore_sidebar_width(width))
+
+    def _restore_sidebar_width(self, width: int) -> None:
+        if not hasattr(self, "main_splitter"):
+            return
+        safe_width = max(self.MIN_SIDEBAR_WIDTH, min(self.MAX_SIDEBAR_WIDTH, width))
+        self.main_splitter.setSizes([safe_width, max(1, self.main_splitter.width() - safe_width)])
+
+    def _update_theme_button_states(self) -> None:
+        for theme_name, button in getattr(self, "theme_buttons", {}).items():
+            button.setProperty("active", theme_name == self.current_theme_name)
+            repolish(button)
+
+    def _refresh_theme_icons(self) -> None:
+        if hasattr(self, "new_note_button"):
+            self.new_note_button.setIcon(themed_icon("plus.svg", "accent_text"))
+        if getattr(self, "search_clear_button", None) is not None:
+            self.search_clear_button.setIcon(themed_icon("x.svg", "text_muted"))
+        if hasattr(self, "trash_close_button"):
+            self.trash_close_button.setIcon(themed_icon("x.svg", "text_muted"))
+        if hasattr(self, "metadata_collapse_button"):
+            self.metadata_collapse_button.setIcon(themed_icon("chevron-up.svg"))
+        for button in (
+            getattr(self, "pin_button", None),
+            getattr(self, "link_drawer_button", None),
+            getattr(self, "export_button", None),
+            getattr(self, "delete_note_button", None),
+        ):
+            if button is not None and button.property("iconFile"):
+                button.setIcon(themed_icon(str(button.property("iconFile"))))
+        if hasattr(self, "editor_toolbar"):
+            self.editor_toolbar.refresh_theme()
+        if hasattr(self, "link_drawer"):
+            self.link_drawer.refresh_theme()
+        if hasattr(self, "note_table"):
+            pin_icon = themed_icon("pin.svg", "accent")
+            for row in range(self.note_table.rowCount()):
+                item = self.note_table.item(row, 0)
+                if item is not None and not item.icon().isNull():
+                    item.setIcon(pin_icon)
+            self.note_table.viewport().update()
+
     def eventFilter(self, watched, event) -> bool:
-        if watched is getattr(self, "sidebar", None) and event.type() == QEvent.Resize:
-            self._position_new_note_fab()
+        if watched is getattr(self, "editor_root", None) and event.type() == QEvent.Resize:
+            self._update_editor_margins(event.size().width())
         return super().eventFilter(watched, event)
 
-    def _position_new_note_fab(self) -> None:
-        if not hasattr(self, "new_note_button"):
+    def _update_editor_margins(self, width: int) -> None:
+        if not hasattr(self, "editor_outer_layout"):
             return
-        self.new_note_button.move(
-            self.sidebar.width() - 20 - self.new_note_button.width(), 15
-        )
+        margin = 48 if width >= 896 else 24 if width >= 640 else 16
+        self.editor_outer_layout.setContentsMargins(margin, 0, margin, 0)
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         self.sidebar = sidebar
         sidebar.setObjectName("sidebar")
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(16, 14, 16, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
 
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(4)
         title = QLabel("S-notes")
         title.setObjectName("sidebarTitle")
         title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        title.setFixedHeight(46)
-        layout.addWidget(title)
+        title.setFixedHeight(32)
+        header.addWidget(title)
+        header.addStretch(1)
 
-        self.new_note_button = QPushButton(sidebar)
-        self.new_note_button.setObjectName("newNoteFab")
-        self.new_note_button.setIcon(
-            QIcon(str(Path(__file__).with_name("icons") / "plus-fab.svg"))
-        )
-        self.new_note_button.setIconSize(QSize(21, 21))
-        self.new_note_button.setFixedSize(44, 44)
+        theme_switch = QWidget()
+        theme_switch.setObjectName("themeSwitch")
+        theme_layout = QHBoxLayout(theme_switch)
+        theme_layout.setContentsMargins(4, 4, 4, 4)
+        theme_layout.setSpacing(0)
+        self.theme_buttons: dict[str, QPushButton] = {}
+        for theme_name, label in THEME_LABELS:
+            button = QPushButton(label)
+            button.setObjectName("themeButton")
+            button.setFixedSize(40, 24)
+            button.clicked.connect(
+                lambda checked=False, name=theme_name: self.set_theme(name)
+            )
+            theme_layout.addWidget(button)
+            self.theme_buttons[theme_name] = button
+        header.addWidget(theme_switch)
+
+        self.new_note_button = QPushButton()
+        self.new_note_button.setObjectName("newNoteButton")
+        self.new_note_button.setIconSize(QSize(14, 14))
+        self.new_note_button.setFixedSize(28, 28)
         self.new_note_button.setToolTip("新建笔记")
         self.new_note_button.clicked.connect(self.handle_create_note)
-        self._position_new_note_fab()
-        self.new_note_button.raise_()
+        header.addWidget(self.new_note_button)
+        layout.addLayout(header)
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("sidebarSearch")
         self.search_input.setPlaceholderText("搜索笔记或 #标签")
-        self.search_input.setFixedHeight(34)
+        self.search_input.setFixedHeight(32)
         self.search_input.setClearButtonEnabled(True)
-        clear_button = self.search_input.findChild(QToolButton)
-        if clear_button is not None:
-            clear_button.setIcon(
-                QIcon(str(Path(__file__).with_name("icons") / "search-clear.svg"))
-            )
+        self.search_clear_button = self.search_input.findChild(QToolButton)
         self.search_input.textChanged.connect(self.handle_search_text_changed)
         layout.addWidget(self.search_input)
 
@@ -243,63 +356,69 @@ class MainWindow(QMainWindow):
             button.setProperty("active", False)
             button.clicked.connect(lambda checked=False, name=view_name: self.show_smart_view(name))
             button.setCheckable(True)
-            button.setFixedHeight(30)
+            button.setFixedHeight(28)
             smart_row.addWidget(button, stretch=1)
             self.smart_buttons[view_name] = button
         self.receipt_inbox_button = QPushButton("待确认")
         self.receipt_inbox_button.setObjectName("smartTabButton")
-        self.receipt_inbox_button.setFixedHeight(30)
+        self.receipt_inbox_button.setFixedHeight(28)
         self.receipt_inbox_button.setToolTip("打开 AI 待确认")
         self.receipt_inbox_button.clicked.connect(self.open_receipt_inbox)
         smart_row.addWidget(self.receipt_inbox_button, stretch=1)
         layout.addLayout(smart_row)
 
-        filters = QHBoxLayout()
-        filters.setSpacing(6)
+        filters = QGridLayout()
+        filters.setContentsMargins(0, 0, 0, 0)
+        filters.setHorizontalSpacing(4)
+        filters.setVerticalSpacing(4)
         self.main_filter_combo = FloatingComboBox(popup_theme="dark")
         self.sub_filter_combo = FloatingComboBox(popup_theme="dark")
         self.sub_sub_filter_combo = FloatingComboBox(popup_theme="dark")
-        for combo, width, stretch in (
-            (self.main_filter_combo, 106, 3),
-            (self.sub_filter_combo, 82, 2),
-            (self.sub_sub_filter_combo, 82, 2),
+        for combo, width in (
+            (self.main_filter_combo, 160),
+            (self.sub_filter_combo, 120),
+            (self.sub_sub_filter_combo, 120),
         ):
             combo.setObjectName("categoryFilter")
             combo.setFixedHeight(32)
             combo.setMinimumWidth(0)
             combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             self.configure_combo_popup(combo, width)
-            filters.addWidget(combo, stretch=stretch)
         self.category_manager_button = QPushButton("管理")
         self.category_manager_button.setObjectName("categoryManagerButton")
         self.category_manager_button.setToolTip("分类管理")
-        self.category_manager_button.setFixedSize(58, 32)
+        self.category_manager_button.setFixedSize(48, 32)
         self.category_manager_button.clicked.connect(self.open_category_manager)
-        filters.addWidget(self.category_manager_button)
+        filters.addWidget(self.main_filter_combo, 0, 0, 1, 2)
+        filters.addWidget(self.category_manager_button, 0, 2)
+        filters.addWidget(self.sub_filter_combo, 1, 0)
+        filters.addWidget(self.sub_sub_filter_combo, 1, 1, 1, 2)
+        filters.setColumnStretch(0, 1)
+        filters.setColumnStretch(1, 1)
+        filters.setColumnStretch(2, 0)
         self.main_filter_combo.currentTextChanged.connect(self.handle_main_filter_changed)
         self.sub_filter_combo.currentTextChanged.connect(self.handle_sub_filter_changed)
         self.sub_sub_filter_combo.currentTextChanged.connect(self.apply_category_filters)
         layout.addLayout(filters)
 
-        self.note_table = QTableWidget(0, 5)
+        self.note_table = QTableWidget(0, 2)
         self.note_table.setObjectName("noteTable")
-        self.note_table.setHorizontalHeaderLabels(["日期", "标题", "主分类", "子分类", "子子分类"])
+        self.note_table.setHorizontalHeaderLabels(["标题", "日期"])
         self.note_table.verticalHeader().hide()
+        self.note_table.horizontalHeader().hide()
         self.note_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.note_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.note_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.note_table.setShowGrid(False)
         self.note_table.setTextElideMode(Qt.ElideRight)
-        self.note_table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        self.note_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.note_table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
         header = self.note_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.resizeSection(0, 72)
-        header.resizeSection(1, 200)
-        header.resizeSection(2, 78)
-        header.resizeSection(3, 78)
-        header.resizeSection(4, 88)
-        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.resizeSection(1, 64)
+        self.note_table.verticalHeader().setDefaultSectionSize(32)
+        self.note_table.setItemDelegate(NoteTableDelegate(self.note_table))
         self.note_table.cellClicked.connect(self.handle_note_table_clicked)
         self.note_table.itemSelectionChanged.connect(self.update_delete_button_state)
         self.note_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -330,10 +449,11 @@ class MainWindow(QMainWindow):
         trash_title = QLabel("回收站")
         trash_title.setObjectName("trashTitle")
         trash_header.addWidget(trash_title, stretch=1)
-        self.trash_close_button = QPushButton("×")
+        self.trash_close_button = QPushButton()
         self.trash_close_button.setObjectName("trashCloseButton")
         self.trash_close_button.setToolTip("退出回收站")
         self.trash_close_button.setFixedSize(28, 28)
+        self.trash_close_button.setIconSize(QSize(14, 14))
         self.trash_close_button.clicked.connect(self.exit_trash)
         trash_header.addWidget(self.trash_close_button)
         trash_view_layout.addLayout(trash_header)
@@ -342,13 +462,9 @@ class MainWindow(QMainWindow):
         self.sidebar_stack.addWidget(trash_view)
         layout.addWidget(self.sidebar_stack, stretch=1)
 
-        trash_divider = QFrame()
-        trash_divider.setObjectName("trashDivider")
-        trash_divider.setFrameShape(QFrame.HLine)
-        layout.addWidget(trash_divider)
-
         self.trash_button = QPushButton("回收站")
         self.trash_button.setObjectName("trashButton")
+        self.trash_button.setFixedHeight(32)
         self.trash_button.clicked.connect(self.show_trash)
         self.trash_button.setContextMenuPolicy(Qt.CustomContextMenu)
         self.trash_button.customContextMenuRequested.connect(
@@ -356,21 +472,30 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.trash_button)
 
+        self._update_theme_button_states()
+        self._refresh_theme_icons()
         return sidebar
 
     def _build_editor(self) -> QWidget:
         editor = QWidget()
+        self.editor_root = editor
         editor.setObjectName("editor")
         outer_layout = QHBoxLayout(editor)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
+        self.editor_outer_layout = outer_layout
+        outer_layout.setContentsMargins(48, 0, 48, 0)
         outer_layout.setSpacing(0)
+        editor.installEventFilter(self)
 
-        editor_sheet = QWidget()
+        editor_sheet = EditorSheet(self.EDITOR_MAX_WIDTH)
+        self.editor_sheet = editor_sheet
         editor_sheet.setObjectName("editorSheet")
+        editor_sheet.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(editor_sheet)
-        layout.setContentsMargins(36, 26, 36, 18)
+        layout.setContentsMargins(0, 32, 0, 24)
         layout.setSpacing(0)
-        outer_layout.addWidget(editor_sheet, stretch=1)
+        outer_layout.addStretch(1)
+        outer_layout.addWidget(editor_sheet)
+        outer_layout.addStretch(1)
 
         self.title_band = QWidget()
         self.title_band.setObjectName("titleBand")
@@ -388,45 +513,39 @@ class MainWindow(QMainWindow):
         title_band_layout.addWidget(self.title_input, 0, 0, alignment=Qt.AlignBottom)
         self.editor_action_bar = QWidget()
         self.editor_action_bar.setObjectName("editorActionBar")
-        self.editor_action_bar.setFixedHeight(44)
+        self.editor_action_bar.setFixedHeight(36)
         action_bar_layout = QHBoxLayout(self.editor_action_bar)
         action_bar_layout.setContentsMargins(4, 4, 4, 4)
-        action_bar_layout.setSpacing(3)
+        action_bar_layout.setSpacing(4)
         self.pin_button = self._icon_button(
             "pin.svg",
             "固定笔记",
             self.toggle_current_note_pinned,
             object_name="actionBarButton",
-            button_size=36,
-            icon_size=19,
+            button_size=28,
+            icon_size=14,
         )
         self.link_drawer_button = self._icon_button(
             "link.svg",
             "打开关联",
             self.toggle_link_drawer,
             object_name="actionBarButton",
-            button_size=36,
-            icon_size=19,
+            button_size=28,
+            icon_size=14,
         )
         self.export_button = self._icon_button(
             "export.svg",
             "导出笔记",
             self.open_export_center,
             object_name="actionBarButton",
-            button_size=36,
-            icon_size=19,
+            button_size=28,
+            icon_size=14,
         )
         action_bar_layout.addWidget(self.pin_button)
         action_bar_layout.addWidget(self.link_drawer_button)
         action_bar_layout.addWidget(self.export_button)
 
-        title_divider = QFrame()
-        title_divider.setObjectName("titleDivider")
-        title_divider.setFixedHeight(2)
-        title_band_layout.addWidget(title_divider, 1, 0)
-        title_band_layout.addWidget(
-            self.editor_action_bar, 0, 1, 2, 1, Qt.AlignRight | Qt.AlignBottom
-        )
+        title_band_layout.addWidget(self.editor_action_bar, 0, 1, Qt.AlignRight | Qt.AlignBottom)
         layout.addWidget(self.title_band)
 
         self.metadata_section = QWidget()
@@ -444,7 +563,7 @@ class MainWindow(QMainWindow):
         self.metadata_panel.setObjectName("metadataPanel")
         metadata_panel_layout = QVBoxLayout(self.metadata_panel)
         metadata_panel_layout.setSizeConstraint(QLayout.SetNoConstraint)
-        metadata_panel_layout.setContentsMargins(14, 10, 14, 10)
+        metadata_panel_layout.setContentsMargins(12, 12, 12, 12)
         metadata_panel_layout.setSpacing(8)
 
         metadata_top_row = QHBoxLayout()
@@ -458,7 +577,7 @@ class MainWindow(QMainWindow):
         self.configure_combo_popup(self.main_category_combo, 180)
         self.main_category_combo.setMinimumWidth(0)
         self.main_category_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.main_category_combo.setFixedHeight(26)
+        self.main_category_combo.setFixedHeight(28)
         self.main_category_combo.currentTextChanged.connect(
             self.handle_main_category_changed
         )
@@ -472,7 +591,7 @@ class MainWindow(QMainWindow):
         self.configure_combo_popup(self.sub_category_combo, 190)
         self.sub_category_combo.setMinimumWidth(0)
         self.sub_category_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.sub_category_combo.setFixedHeight(26)
+        self.sub_category_combo.setFixedHeight(28)
         self.sub_category_combo.currentTextChanged.connect(
             self.handle_sub_category_changed
         )
@@ -486,7 +605,7 @@ class MainWindow(QMainWindow):
         self.configure_combo_popup(self.sub_sub_category_combo, 180)
         self.sub_sub_category_combo.setMinimumWidth(0)
         self.sub_sub_category_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.sub_sub_category_combo.setFixedHeight(26)
+        self.sub_sub_category_combo.setFixedHeight(28)
         self.sub_sub_category_combo.currentTextChanged.connect(
             self.handle_sub_sub_category_changed
         )
@@ -501,7 +620,7 @@ class MainWindow(QMainWindow):
         tags_label.setObjectName("metadataFieldLabel")
         tags_label.setAlignment(Qt.AlignVCenter)
         self.tags_input = QLineEdit()
-        self.tags_input.setFixedHeight(26)
+        self.tags_input.setFixedHeight(28)
         self.tags_input.setPlaceholderText("todo, vps, ai-ok")
         self.tags_input.textChanged.connect(self.handle_tags_text_changed)
         metadata_tags_row.addWidget(tags_label)
@@ -512,16 +631,17 @@ class MainWindow(QMainWindow):
         self.ai_visibility_combo = FloatingComboBox()
         self.configure_combo_popup(self.ai_visibility_combo, 210)
         self.ai_visibility_combo.addItems(AI_VISIBILITY_OPTIONS)
-        self.ai_visibility_combo.setFixedWidth(210)
-        self.ai_visibility_combo.setFixedHeight(26)
+        self.ai_visibility_combo.setFixedWidth(200)
+        self.ai_visibility_combo.setFixedHeight(28)
         self.ai_visibility_combo.currentTextChanged.connect(
             self.handle_ai_visibility_changed
         )
         metadata_tags_row.addWidget(ai_label)
         metadata_tags_row.addWidget(self.ai_visibility_combo)
-        self.metadata_collapse_button = QPushButton("▲")
+        self.metadata_collapse_button = QPushButton()
         self.metadata_collapse_button.setObjectName("metadataCollapseButton")
-        self.metadata_collapse_button.setFixedHeight(24)
+        self.metadata_collapse_button.setFixedSize(28, 28)
+        self.metadata_collapse_button.setIconSize(QSize(14, 14))
         self.metadata_collapse_button.clicked.connect(
             lambda: self.set_metadata_expanded(False)
         )
@@ -546,7 +666,7 @@ class MainWindow(QMainWindow):
         for target_name in AI_TARGETS:
             checkbox = QCheckBox(target_name)
             checkbox.setObjectName("aiTargetCheck")
-            checkbox.setFixedHeight(22)
+            checkbox.setFixedHeight(24)
             checkbox.setMinimumWidth(0)
             checkbox.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             checkbox.stateChanged.connect(self.handle_ai_targets_changed)
@@ -562,7 +682,7 @@ class MainWindow(QMainWindow):
         self.body_section = QWidget()
         self.body_section.setObjectName("bodySection")
         body_section_layout = QVBoxLayout(self.body_section)
-        body_section_layout.setContentsMargins(0, 0, 0, 10)
+        body_section_layout.setContentsMargins(0, 0, 0, 8)
         body_section_layout.setSpacing(8)
         self.body_edit = NotesEditor()
         self.body_edit.setObjectName("bodyEdit")
@@ -579,14 +699,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.empty_editor_label, stretch=1)
 
         status_row = QHBoxLayout()
-        status_row.setSpacing(14)
+        status_row.setSpacing(12)
         self.delete_note_button = QPushButton()
         self.delete_note_button.setObjectName("deleteNoteButton")
-        self.delete_note_button.setIcon(
-            QIcon(str(Path(__file__).with_name("icons") / "trash.svg"))
-        )
-        self.delete_note_button.setIconSize(QSize(18, 18))
-        self.delete_note_button.setFixedSize(36, 36)
+        self.delete_note_button.setProperty("iconFile", "trash.svg")
+        self.delete_note_button.setIconSize(QSize(14, 14))
+        self.delete_note_button.setFixedSize(32, 32)
         self.delete_note_button.setToolTip("删除笔记")
         self.delete_note_button.clicked.connect(self.confirm_delete_selected_notes)
         status_row.addWidget(self.delete_note_button)
@@ -597,6 +715,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(status_row)
 
         self.set_editor_enabled(False)
+        self._refresh_theme_icons()
         return editor
 
     def _icon_button(
@@ -606,12 +725,13 @@ class MainWindow(QMainWindow):
         callback,
         *,
         object_name: str = "iconButton",
-        button_size: int = 30,
-        icon_size: int = 16,
+        button_size: int = 28,
+        icon_size: int = 14,
     ) -> QPushButton:
         button = QPushButton()
         button.setObjectName(object_name)
-        button.setIcon(QIcon(str(Path(__file__).with_name("icons") / filename)))
+        button.setProperty("iconFile", filename)
+        button.setIcon(themed_icon(filename))
         button.setIconSize(QSize(icon_size, icon_size))
         button.setFixedSize(button_size, button_size)
         button.setToolTip(tooltip)
@@ -640,8 +760,11 @@ class MainWindow(QMainWindow):
             self.tag_filter_row.addWidget(button)
 
         if len(tags) > 2:
-            more_button = QPushButton("…")
+            more_button = QPushButton()
             more_button.setObjectName("tagMoreButton")
+            more_button.setIcon(themed_icon("more-horizontal.svg"))
+            more_button.setIconSize(QSize(14, 14))
+            more_button.setFixedSize(28, 28)
             menu = QMenu(more_button)
             for tag in tags[2:]:
                 menu.addAction(
@@ -738,33 +861,40 @@ class MainWindow(QMainWindow):
             self.note_table.setRowCount(1)
             empty = QTableWidgetItem("这里还没有笔记")
             empty.setFlags(Qt.NoItemFlags)
-            self.note_table.setItem(0, 1, empty)
-            self.note_table.setRowHeight(0, 36)
+            self.note_table.setItem(0, 0, empty)
+            self.note_table.setRowHeight(0, 32)
             self.note_table.blockSignals(False)
             self.update_delete_button_state()
             return
-        pin_icon = QIcon(str(Path(__file__).with_name("icons") / "pin-sidebar.svg"))
+        pin_icon = themed_icon("pin.svg", "accent")
         selected_row = None
         for row, note in enumerate(notes):
             date_text = str(note["updated_at"])[5:10]
-            values = [date_text, note["title"] or "未命名笔记", note["main_category"], note["sub_category"], note["sub_sub_category"]]
+            values = [note["title"] or "未命名笔记", date_text]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.UserRole, note["id"])
-                if column == 0:
+                if column == 1:
                     item.setToolTip(
                         f"更新于 {format_display_datetime(note['updated_at'])}"
                     )
                 else:
-                    item.setToolTip(value)
-                if column == 1 and note.get("is_pinned"):
+                    path = " / ".join(
+                        part
+                        for part in (
+                            note["main_category"],
+                            note["sub_category"],
+                            note["sub_sub_category"],
+                        )
+                        if part and part != "无"
+                    )
+                    item.setToolTip(f"{value}\n{path}" if path else value)
+                if column == 0 and note.get("is_pinned"):
                     item.setIcon(pin_icon)
                 if column == 1:
-                    title_font = item.font()
-                    title_font.setWeight(QFont.Medium)
-                    item.setFont(title_font)
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.note_table.setItem(row, column, item)
-            self.note_table.setRowHeight(row, 36)
+            self.note_table.setRowHeight(row, 32)
             if note["id"] == selected_note_id:
                 selected_row = row
         if selected_row is not None:
@@ -1864,7 +1994,7 @@ class MainWindow(QMainWindow):
 
 def run_app() -> int:
     app = QApplication(sys.argv)
-    app.setStyleSheet(APP_STYLE)
+    apply_theme(app, load_saved_theme())
     window = MainWindow()
     window.show()
     return app.exec()

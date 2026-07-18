@@ -5,7 +5,7 @@ This is the current repository handoff for S-notes R1.
 ## Current Baseline
 
 - Repository: `aistacey2006/S-notes`
-- Main commit: `eb51af06fae29ce6ecf9aceca26dd91340113285`
+- Task 12 starting commit: `1091ff3c45e832f996fa4d549603a8d3ca719fa5`
 - App version: `1.0.0`
 - Build: `1`
 - Platform: macOS arm64
@@ -21,6 +21,12 @@ This is the current repository handoff for S-notes R1.
 - AI-safe export.
 - AI memory receipt import through a confirm-first inbox.
 - Related-notes drawer.
+- UI R2 with persistent night, slate, and clay themes across the main window,
+  dialogs, menus, and related-notes surfaces.
+- Theme-aware rich-text display, including readable legacy foreground and code
+  background handling without storing theme colors in note HTML.
+- Conservative Markdown source-marker cleanup for the current selection or the
+  full note, with one-step undo and URL preservation.
 - User-data relocation to Application Support.
 - SQLite backup support and code-level restore hardening.
 - Internal macOS arm64 app packaging.
@@ -53,8 +59,14 @@ but it is not a public notarized distribution.
 
 ## Confirmed Mainline
 
-- Task 12: UI R2, complete day/night dual-theme pass.
+- Task 12: Completed. UI R2 delivers the persistent night / slate / clay
+  three-theme system, the 800px editor layout, legacy rich-text readability,
+  and conservative Markdown marker cleanup. S completed real App acceptance.
 - Task 13: Local MCP interface R1.
+
+The UI R2 visual contract is recorded in
+[UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md). Task 12 does not alter stored data,
+autosave, AI visibility, export safety, deletion, or related-note semantics.
 
 ## Should Do
 

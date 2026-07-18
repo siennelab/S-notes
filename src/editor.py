@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import html
 import re
+from difflib import SequenceMatcher
 
-from PySide6.QtCore import QMimeData
+from PySide6.QtCore import QMimeData, QSignalBlocker, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -17,7 +18,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QTextEdit
 
-from src.theme import EDITOR_TEXT, SIDEBAR_TEXT, SUBTLE_BACKGROUND, TOOLBAR_ICON
+from src.theme import ThemeTokens, current_theme, editor_document_style
 
 
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -47,26 +48,234 @@ HTML_ATTRIBUTE_RE = re.compile(r"""(?is)\s(?:style|class|id|on\w+|href|src|data-
 MARKDOWN_SIGNAL_RE = re.compile(
     r"(?m)^(#{1,3}\s+|[-*]\s+|\d+\.\s+|>\s+|```)|(\*\*[^*\n]+\*\*)|(`[^`\n]+`)"
 )
+MARKDOWN_FENCE_RE = re.compile(
+    r"^[ \t]{0,3}(`{3,}|~{3,})(?:[ \t]*[A-Za-z0-9_+.-]+)?[ \t]*$"
+)
+MARKDOWN_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
+MARKDOWN_QUOTE_RE = re.compile(r"^([ \t]{0,3})>[ \t]?")
+MARKDOWN_TASK_RE = re.compile(r"^([ ]{0,3})[-+*][ \t]+\[[ xX]\][ \t]+")
+MARKDOWN_UNORDERED_RE = re.compile(r"^([ ]{0,3})[-+*][ \t]+")
+MARKDOWN_ORDERED_RE = re.compile(r"^([ ]{0,3})\d+[.)][ \t]+")
+MARKDOWN_HORIZONTAL_RULE_RE = re.compile(
+    r"^[ \t]{0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*$"
+)
+MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]\n]*)\]\(([^)\n]+)\)")
+MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)")
+MARKDOWN_AUTOLINK_RE = re.compile(r"<(https?://[^>\s]+)>")
+MARKDOWN_INLINE_CODE_RE = re.compile(r"(?<![\\`])`([^`\n]+)`(?!`)")
+MARKDOWN_STRONG_STAR_RE = re.compile(
+    r"(?<![\\*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?!\*)"
+)
+MARKDOWN_STRONG_UNDERSCORE_RE = re.compile(
+    r"(?<![\\\w])__(?=\S)(.+?)(?<=\S)__(?!\w)"
+)
+MARKDOWN_STRIKE_RE = re.compile(r"(?<![\\~])~~(?=\S)(.+?)(?<=\S)~~(?!~)")
+MARKDOWN_ITALIC_STAR_RE = re.compile(
+    r"(?<![\\\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])"
+)
+MARKDOWN_ITALIC_UNDERSCORE_RE = re.compile(
+    r"(?<![\\\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)"
+)
 QUOTE_BLOCK_PROPERTY = QTextFormat.UserProperty + 1
 CODE_BLOCK_PROPERTY = QTextFormat.UserProperty + 2
 ZERO_WIDTH_BLANK_CHARACTERS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
 
 
+def _line_body_and_ending(line: str) -> tuple[str, str]:
+    for ending in ("\r\n", "\n", "\r"):
+        if line.endswith(ending):
+            return line[: -len(ending)], ending
+    return line, ""
+
+
+def _is_matching_fence(line: str, marker: str) -> bool:
+    body, _ = _line_body_and_ending(line)
+    match = re.fullmatch(r"[ \t]{0,3}(`{3,}|~{3,})[ \t]*", body)
+    return bool(
+        match
+        and match.group(1)[0] == marker[0]
+        and len(match.group(1)) >= len(marker)
+    )
+
+
+def _strip_inline_markdown(text: str) -> str:
+    text = MARKDOWN_IMAGE_RE.sub(r"\1 (\2)", text)
+    text = MARKDOWN_LINK_RE.sub(r"\1 (\2)", text)
+    text = MARKDOWN_AUTOLINK_RE.sub(r"\1", text)
+    text = MARKDOWN_INLINE_CODE_RE.sub(r"\1", text)
+    text = MARKDOWN_STRONG_STAR_RE.sub(r"\1", text)
+    text = MARKDOWN_STRONG_UNDERSCORE_RE.sub(r"\1", text)
+    text = MARKDOWN_STRIKE_RE.sub(r"\1", text)
+    text = MARKDOWN_ITALIC_STAR_RE.sub(r"\1", text)
+    return MARKDOWN_ITALIC_UNDERSCORE_RE.sub(r"\1", text)
+
+
+def _strip_markdown_line(line: str) -> str:
+    body, ending = _line_body_and_ending(line)
+    if MARKDOWN_HORIZONTAL_RULE_RE.fullmatch(body):
+        return ""
+    body = MARKDOWN_HEADING_RE.sub("", body, count=1)
+    body = MARKDOWN_QUOTE_RE.sub(r"\1", body, count=1)
+    body = MARKDOWN_TASK_RE.sub(r"\1", body, count=1)
+    body = MARKDOWN_UNORDERED_RE.sub(r"\1", body, count=1)
+    body = MARKDOWN_ORDERED_RE.sub(r"\1", body, count=1)
+    return _strip_inline_markdown(body) + ending
+
+
+def strip_markdown_markup(text: str) -> str:
+    """Remove conservative Markdown source markers while preserving content."""
+
+    lines = text.splitlines(keepends=True)
+    converted: list[str] = []
+    index = 0
+    while index < len(lines):
+        body, _ = _line_body_and_ending(lines[index])
+        fence_match = MARKDOWN_FENCE_RE.fullmatch(body)
+        if fence_match:
+            marker = fence_match.group(1)
+            closing_index = index + 1
+            while closing_index < len(lines) and not _is_matching_fence(
+                lines[closing_index], marker
+            ):
+                closing_index += 1
+            if closing_index < len(lines):
+                converted.extend(lines[index + 1 : closing_index])
+                index = closing_index + 1
+                continue
+            converted.extend(lines[index:])
+            break
+        converted.append(_strip_markdown_line(lines[index]))
+        index += 1
+    return "".join(converted)
+
+
+def _qt_text_length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _python_index_from_qt_position(text: str, position: int) -> int:
+    qt_offset = 0
+    for index, character in enumerate(text):
+        next_offset = qt_offset + (2 if ord(character) > 0xFFFF else 1)
+        if next_offset > position:
+            return index
+        qt_offset = next_offset
+    return len(text)
+
+
+def _mapped_text_offset(source: str, converted: str, source_offset: int) -> int:
+    for tag, old_start, old_end, new_start, new_end in SequenceMatcher(
+        None, source, converted, autojunk=False
+    ).get_opcodes():
+        if source_offset < old_end or (source_offset == old_end and old_end == len(source)):
+            if tag == "equal":
+                return new_start + min(source_offset - old_start, new_end - new_start)
+            if tag == "insert":
+                continue
+            return new_start + min(max(source_offset - old_start, 0), new_end - new_start)
+    return len(converted)
+
+
+def editor_document_font() -> QFont:
+    font = QFont()
+    font.setFamilies(
+        [
+            "PingFang SC",
+            "SF Pro Text",
+            "-apple-system",
+            "Helvetica Neue",
+            "sans-serif",
+        ]
+    )
+    font.setPixelSize(15)
+    return font
+
+
+def apply_editor_document_theme(
+    editor: "NotesEditor", tokens: ThemeTokens | None = None
+) -> None:
+    """Refresh display-only document colors while preserving editor state."""
+
+    tokens = tokens or current_theme()
+    cursor = QTextCursor(editor.textCursor())
+    vertical_scroll = editor.verticalScrollBar().value()
+    horizontal_scroll = editor.horizontalScrollBar().value()
+    document = editor.document()
+    was_modified = document.isModified()
+    editor_blocker = QSignalBlocker(editor)
+    document_blocker = QSignalBlocker(document)
+    try:
+        editor._document_theme_tokens = tokens
+        document.setDefaultFont(editor_document_font())
+        editor.setTextCursor(cursor)
+        editor._normalize_current_input_format()
+        editor.verticalScrollBar().setValue(vertical_scroll)
+        editor.horizontalScrollBar().setValue(horizontal_scroll)
+        document.setModified(was_modified)
+    finally:
+        del document_blocker
+        del editor_blocker
+
+    editor._refresh_document_theme_overlays()
+    editor.viewport().update()
+
+
 class NotesEditor(QTextEdit):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.document().setDefaultStyleSheet(
-            f"""
-            body {{ color: {EDITOR_TEXT}; font-size: 15px; line-height: 180%; }}
-            p {{ margin: 0 0 12px 0; }}
-            h1 {{ font-size: 22pt; font-weight: 700; margin: 12px 0 8px 0; }}
-            h2 {{ font-size: 18pt; font-weight: 700; margin: 10px 0 6px 0; }}
-            h3 {{ font-size: 16pt; font-weight: 700; margin: 8px 0 6px 0; }}
-            blockquote {{ margin-left: 18px; color: {SIDEBAR_TEXT}; font-style: italic; }}
-            pre {{ font-family: 'SF Mono', Menlo, Monaco, monospace; font-size: 12pt; color: {TOOLBAR_ICON}; background: {SUBTLE_BACKGROUND}; padding: 8px; }}
-            code {{ font-family: 'SF Mono', Menlo, Monaco, monospace; color: {TOOLBAR_ICON}; background: {SUBTLE_BACKGROUND}; }}
-            """
-        )
+        self.setObjectName("bodyEdit")
+        self._document_reset_in_progress = False
+        self.document().setDefaultFont(editor_document_font())
+        self.document().setDefaultStyleSheet(editor_document_style())
+        apply_editor_document_theme(self)
+        self.textChanged.connect(self._refresh_document_theme_overlays)
+
+    def apply_theme(self) -> None:
+        apply_editor_document_theme(self)
+
+    @staticmethod
+    def _theme_neutral_char_format(char_format: QTextCharFormat) -> QTextCharFormat:
+        neutral_format = QTextCharFormat(char_format)
+        neutral_format.clearProperty(QTextFormat.ForegroundBrush)
+        return neutral_format
+
+    def _normalize_current_input_format(self) -> None:
+        if self._document_reset_in_progress or self.textCursor().hasSelection():
+            return
+        current_format = self.currentCharFormat()
+        if not current_format.hasProperty(QTextFormat.ForegroundBrush):
+            return
+        self.setCurrentCharFormat(self._theme_neutral_char_format(current_format))
+
+    def insertPlainText(self, text: str) -> None:
+        cursor = self.textCursor()
+        cursor.insertText(text, self._theme_neutral_char_format(cursor.charFormat()))
+        self.setTextCursor(cursor)
+
+    def insertHtml(self, text: str) -> None:
+        cursor = self.textCursor()
+        cursor.setCharFormat(self._theme_neutral_char_format(cursor.charFormat()))
+        cursor.insertHtml(text)
+        self.setTextCursor(cursor)
+
+    def keyPressEvent(self, event) -> None:
+        modifiers = event.modifiers()
+        command_modifiers = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier
+        if (
+            event.text()
+            and event.text() not in {"\r", "\n", "\t"}
+            and not modifiers & command_modifiers
+        ):
+            self.insertPlainText(event.text())
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def inputMethodEvent(self, event) -> None:
+        if event.commitString() and not self.textCursor().hasSelection():
+            self._normalize_current_input_format()
+        super().inputMethodEvent(event)
+        self._normalize_current_input_format()
 
     def insertFromMimeData(self, source: QMimeData) -> None:
         try:
@@ -95,12 +304,76 @@ class NotesEditor(QTextEdit):
         return QApplication.clipboard().text()
 
     def set_note_content(self, content: str) -> None:
-        if HTML_MARKER_RE.search(content or ""):
-            self.setHtml(content)
-            self._restore_quote_properties()
-            self._restore_code_block_properties()
-        else:
-            self.setPlainText(content or "")
+        self._document_reset_in_progress = True
+        try:
+            if HTML_MARKER_RE.search(content or ""):
+                self.setHtml(content)
+                self._normalize_legacy_document_colors()
+                self._restore_quote_properties()
+                self._restore_code_block_properties()
+            else:
+                self.setPlainText(content or "")
+        finally:
+            self._document_reset_in_progress = False
+        self.document().setModified(False)
+        apply_editor_document_theme(self)
+
+    def _normalize_legacy_document_colors(self) -> None:
+        document = self.document()
+        was_modified = document.isModified()
+        block_char_replacements: list[tuple[int, QTextCharFormat]] = []
+        replacements: list[tuple[int, int, QTextCharFormat]] = []
+        block = document.begin()
+        while block.isValid():
+            block_char_format = block.charFormat()
+            if block_char_format.hasProperty(
+                QTextFormat.ForegroundBrush
+            ) or block_char_format.hasProperty(QTextFormat.BackgroundBrush):
+                neutral_block_char_format = QTextCharFormat(block_char_format)
+                neutral_block_char_format.clearProperty(QTextFormat.ForegroundBrush)
+                neutral_block_char_format.clearProperty(QTextFormat.BackgroundBrush)
+                block_char_replacements.append(
+                    (block.position(), neutral_block_char_format)
+                )
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid():
+                    char_format = fragment.charFormat()
+                    if char_format.hasProperty(
+                        QTextFormat.ForegroundBrush
+                    ) or char_format.hasProperty(QTextFormat.BackgroundBrush):
+                        neutral_format = QTextCharFormat(char_format)
+                        neutral_format.clearProperty(QTextFormat.ForegroundBrush)
+                        neutral_format.clearProperty(QTextFormat.BackgroundBrush)
+                        replacements.append(
+                            (fragment.position(), fragment.length(), neutral_format)
+                        )
+                iterator += 1
+            block = block.next()
+
+        if not block_char_replacements and not replacements:
+            return
+
+        editor_blocker = QSignalBlocker(self)
+        document_blocker = QSignalBlocker(document)
+        cursor = QTextCursor(document)
+        cursor.beginEditBlock()
+        try:
+            for position, char_format in block_char_replacements:
+                block = document.findBlock(position)
+                if block.isValid():
+                    QTextCursor(block).setBlockCharFormat(char_format)
+            for start, length, char_format in replacements:
+                cursor.setPosition(start)
+                cursor.setPosition(start + length, QTextCursor.KeepAnchor)
+                cursor.setCharFormat(char_format)
+        finally:
+            cursor.endEditBlock()
+            document.setModified(was_modified)
+            document.clearUndoRedoStacks()
+            del document_blocker
+            del editor_blocker
 
     def note_content_html(self) -> str:
         return self.toHtml()
@@ -131,6 +404,62 @@ class NotesEditor(QTextEdit):
 
         text = self.toPlainText()
         self.setPlainText(self.sanitize_pasted_text(text))
+
+    def clear_markdown_markup(self) -> bool:
+        if self.isReadOnly() or not self.isEnabled():
+            return False
+
+        original_cursor = QTextCursor(self.textCursor())
+        has_selection = original_cursor.hasSelection()
+        source = (
+            original_cursor.selection().toPlainText()
+            if has_selection
+            else self.toPlainText()
+        )
+        converted = strip_markdown_markup(source)
+        if converted == source:
+            return False
+
+        start = original_cursor.selectionStart() if has_selection else 0
+        original_python_offset = _python_index_from_qt_position(
+            source,
+            original_cursor.position() - start,
+        )
+        vertical_scroll = self.verticalScrollBar().value()
+        horizontal_scroll = self.horizontalScrollBar().value()
+        edit_cursor = QTextCursor(original_cursor)
+        if not has_selection:
+            edit_cursor.select(QTextCursor.Document)
+
+        edit_cursor.beginEditBlock()
+        try:
+            edit_cursor.insertText(converted, self.clean_char_format())
+            if not has_selection:
+                self.normalize_format_range(0, _qt_text_length(converted))
+        finally:
+            edit_cursor.endEditBlock()
+
+        restored_cursor = QTextCursor(self.document())
+        if has_selection:
+            restored_cursor.setPosition(start)
+            restored_cursor.setPosition(
+                start + _qt_text_length(converted),
+                QTextCursor.KeepAnchor,
+            )
+        else:
+            converted_python_offset = _mapped_text_offset(
+                source,
+                converted,
+                original_python_offset,
+            )
+            restored_cursor.setPosition(
+                _qt_text_length(converted[:converted_python_offset])
+            )
+        self.setTextCursor(restored_cursor)
+        self.verticalScrollBar().setValue(vertical_scroll)
+        self.horizontalScrollBar().setValue(horizontal_scroll)
+        self._refresh_document_theme_overlays()
+        return True
 
     def compress_blank_paragraphs(self, keep_one: bool) -> int:
         if self.isReadOnly() or not self.isEnabled():
@@ -237,23 +566,23 @@ class NotesEditor(QTextEdit):
         char_format = QTextCharFormat()
         if level == 1:
             block_format.setHeadingLevel(1)
-            char_format.setFontPointSize(22)
+            char_format.setFontPixelSize(26)
             char_format.setFontWeight(QFont.Bold)
         elif level == 2:
             block_format.setHeadingLevel(2)
-            char_format.setFontPointSize(18)
+            char_format.setFontPixelSize(15)
             char_format.setFontWeight(QFont.Bold)
         else:
             block_format.setHeadingLevel(0)
-            char_format.setFontPointSize(14)
+            char_format.setFontPixelSize(15)
             char_format.setFontWeight(QFont.Normal)
         cursor.mergeBlockFormat(block_format)
         cursor.mergeCharFormat(char_format)
         self.mergeCurrentCharFormat(char_format)
 
-    def apply_font_size(self, point_size: int) -> None:
+    def apply_font_size(self, pixel_size: int) -> None:
         char_format = QTextCharFormat()
-        char_format.setFontPointSize(point_size)
+        char_format.setFontPixelSize(pixel_size)
         self.textCursor().mergeCharFormat(char_format)
         self.mergeCurrentCharFormat(char_format)
 
@@ -279,6 +608,7 @@ class NotesEditor(QTextEdit):
         finally:
             cursor.endEditBlock()
         self.setTextCursor(target_cursor)
+        self._refresh_document_theme_overlays()
 
     @staticmethod
     def _block_list_style(block):
@@ -378,13 +708,13 @@ class NotesEditor(QTextEdit):
         self, block_format: QTextBlockFormat, enabled: bool
     ) -> None:
         if self._is_code_block_format(block_format):
-            block_format.setLeftMargin(22 if enabled else 18)
+            block_format.setLeftMargin(24 if enabled else 16)
             return
         if enabled:
-            block_format.setLeftMargin(22)
+            block_format.setLeftMargin(24)
             block_format.setRightMargin(8)
-            block_format.setTopMargin(3)
-            block_format.setBottomMargin(3)
+            block_format.setTopMargin(4)
+            block_format.setBottomMargin(4)
             return
         block_format.setLeftMargin(0)
         block_format.setRightMargin(0)
@@ -404,7 +734,7 @@ class NotesEditor(QTextEdit):
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         painter = QPainter(self.viewport())
-        painter.setPen(QPen(QColor(SIDEBAR_TEXT), 3))
+        painter.setPen(QPen(QColor(current_theme().accent), 2))
         document_layout = self.document().documentLayout()
         horizontal_offset = self.horizontalScrollBar().value()
         vertical_offset = self.verticalScrollBar().value()
@@ -416,12 +746,12 @@ class NotesEditor(QTextEdit):
                     -horizontal_offset, -vertical_offset
                 )
                 if rect.bottom() >= 0 and rect.top() <= self.viewport().height():
-                    line_x = rect.left() + 7
+                    line_x = rect.left() + 8
                     painter.drawLine(
                         int(line_x),
-                        int(rect.top() + 3),
+                        int(rect.top() + 4),
                         int(line_x),
-                        int(rect.bottom() - 3),
+                        int(rect.bottom() - 4),
                     )
             block = block.next()
 
@@ -447,24 +777,21 @@ class NotesEditor(QTextEdit):
             cursor.endEditBlock()
         self.setTextCursor(target_cursor)
 
-    @staticmethod
-    def _apply_code_block_visuals(
-        block_format: QTextBlockFormat, enabled: bool
-    ) -> None:
+    def _apply_code_block_visuals(self, block_format: QTextBlockFormat, enabled: bool) -> None:
         quote_enabled = bool(block_format.property(QUOTE_BLOCK_PROPERTY))
         if enabled:
-            block_format.setBackground(QColor(SUBTLE_BACKGROUND))
-            block_format.setLeftMargin(22 if quote_enabled else 18)
+            block_format.clearBackground()
+            block_format.setLeftMargin(24 if quote_enabled else 16)
             block_format.setRightMargin(8)
-            block_format.setTopMargin(6)
-            block_format.setBottomMargin(6)
+            block_format.setTopMargin(8)
+            block_format.setBottomMargin(8)
             return
-        block_format.clearProperty(QTextFormat.BackgroundBrush)
+        block_format.clearBackground()
         if quote_enabled:
-            block_format.setLeftMargin(22)
+            block_format.setLeftMargin(24)
             block_format.setRightMargin(8)
-            block_format.setTopMargin(3)
-            block_format.setBottomMargin(3)
+            block_format.setTopMargin(4)
+            block_format.setBottomMargin(4)
             return
         block_format.setLeftMargin(0)
         block_format.setRightMargin(0)
@@ -475,21 +802,101 @@ class NotesEditor(QTextEdit):
     def _is_code_block_format(block_format: QTextBlockFormat) -> bool:
         if bool(block_format.property(CODE_BLOCK_PROPERTY)):
             return True
-        has_code_background = (
-            block_format.hasProperty(QTextFormat.BackgroundBrush)
-            and block_format.background().color() == QColor(SUBTLE_BACKGROUND)
+        active_geometry = (
+            block_format.leftMargin() in {16, 24}
+            and block_format.topMargin() == 8
+            and block_format.bottomMargin() == 8
         )
-        has_code_geometry = (
-            block_format.leftMargin() in {18, 22}
-            and block_format.topMargin() == 6
-            and block_format.bottomMargin() == 6
+        legacy_code_background = block_format.hasProperty(
+            QTextFormat.BackgroundBrush
+        ) and block_format.leftMargin() > 0
+        return active_geometry or (
+            legacy_code_background
         )
-        is_legacy_code_block = (
-            block_format.leftMargin() == 18
-            and has_code_geometry
-            and not bool(block_format.property(QUOTE_BLOCK_PROPERTY))
+
+    @staticmethod
+    def _is_inline_code_format(char_format: QTextCharFormat) -> bool:
+        if char_format.fontFixedPitch():
+            return True
+        return any(
+            marker in family.casefold()
+            for family in (char_format.fontFamilies() or [])
+            for marker in ("mono", "menlo", "monaco")
         )
-        return (has_code_background and has_code_geometry) or is_legacy_code_block
+
+    @staticmethod
+    def _foreground_selection(
+        cursor: QTextCursor, color: str
+    ) -> QTextEdit.ExtraSelection:
+        selection = QTextEdit.ExtraSelection()
+        selection.cursor = cursor
+        selection.format.setForeground(QColor(color))
+        return selection
+
+    def _refresh_document_theme_overlays(self) -> None:
+        tokens = getattr(self, "_document_theme_tokens", current_theme())
+        selections: list[QTextEdit.ExtraSelection] = []
+        if self.document().characterCount() > 1:
+            document_cursor = QTextCursor(self.document())
+            document_cursor.setPosition(0)
+            document_cursor.setPosition(
+                self.document().characterCount() - 1,
+                QTextCursor.KeepAnchor,
+            )
+            selections.append(
+                self._foreground_selection(document_cursor, tokens.document_text)
+            )
+
+        block = self.document().begin()
+        while block.isValid():
+            block_cursor = QTextCursor(block)
+            block_cursor.setPosition(block.position())
+            block_cursor.setPosition(
+                block.position() + block.length() - 1,
+                QTextCursor.KeepAnchor,
+            )
+            block_format = block.blockFormat()
+            if self._is_code_block_format(block_format):
+                code_selection = self._foreground_selection(
+                    block_cursor, tokens.document_code
+                )
+                code_selection.format.setBackground(QColor(tokens.surface))
+                code_selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+                selections.append(code_selection)
+            elif bool(block_format.property(QUOTE_BLOCK_PROPERTY)):
+                selections.append(
+                    self._foreground_selection(
+                        block_cursor, tokens.document_secondary
+                    )
+                )
+
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid():
+                    char_format = fragment.charFormat()
+                    if char_format.isAnchor():
+                        color = tokens.document_link
+                    elif self._is_inline_code_format(char_format):
+                        color = tokens.document_code
+                    else:
+                        iterator += 1
+                        continue
+                    fragment_cursor = QTextCursor(self.document())
+                    fragment_cursor.setPosition(fragment.position())
+                    fragment_cursor.setPosition(
+                        fragment.position() + fragment.length(),
+                        QTextCursor.KeepAnchor,
+                    )
+                    selections.append(
+                        self._foreground_selection(fragment_cursor, color)
+                    )
+                iterator += 1
+            block = block.next()
+        self.setExtraSelections(selections)
+
+    def _refresh_code_highlights(self) -> None:
+        self._refresh_document_theme_overlays()
 
     def _restore_code_block_properties(self) -> None:
         block = self.document().begin()
@@ -497,6 +904,7 @@ class NotesEditor(QTextEdit):
             block_format = block.blockFormat()
             if self._is_code_block_format(block_format):
                 block_format.setProperty(CODE_BLOCK_PROPERTY, True)
+                self._apply_code_block_visuals(block_format, True)
                 QTextCursor(block).setBlockFormat(block_format)
             block = block.next()
         self.document().clearUndoRedoStacks()
@@ -524,12 +932,12 @@ class NotesEditor(QTextEdit):
         char_format.clearProperty(QTextFormat.ForegroundBrush)
         char_format.clearProperty(QTextFormat.FontFamily)
         char_format.clearProperty(QTextFormat.FontPointSize)
+        char_format.clearProperty(QTextFormat.FontPixelSize)
         char_format.clearProperty(QTextFormat.FontWeight)
         char_format.clearProperty(QTextFormat.FontItalic)
         char_format.clearProperty(QTextFormat.FontUnderline)
         char_format.clearProperty(QTextFormat.FontStrikeOut)
-        char_format.setForeground(QColor(EDITOR_TEXT))
-        char_format.setFontPointSize(15)
+        char_format.setProperty(QTextFormat.FontPixelSize, 15)
         char_format.setFontWeight(QFont.Normal)
         char_format.setFontItalic(False)
         char_format.setFontStrikeOut(False)

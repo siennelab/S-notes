@@ -38,8 +38,24 @@ local machine.
 - UI redesigns may improve layout, theme, navigation, and affordances.
 - UI redesigns must not change database meaning, visibility semantics, import
   semantics, export semantics, or deletion semantics as a side effect.
-- Task 12 is the next UI mainline and is limited to a full day/night dual-theme
-  pass unless the task is explicitly expanded.
+- Task 12 provides exactly three explicit themes: night, slate, and clay. Theme
+  selection is presentation state and must not rewrite note content.
+- All UI colors come from the centralized `ThemeTokens` source. Shared QSS is
+  generated from those tokens instead of copied per theme.
+- Rich-text theme colors are display state. Legacy fixed foreground and code
+  backgrounds are normalized at load time, while current theme colors are
+  applied through display-only editor selections and are not stored in note
+  HTML.
+- Markdown marker cleanup is an editor command over the current selection or
+  full note. It preserves content and URLs, uses the existing undo and autosave
+  paths, and does not create a second note storage format.
+- The related-notes drawer uses the same background hierarchy as the left
+  sidebar. The editor remains a distinct reading surface with an 800px maximum
+  content width.
+- UI hierarchy uses background levels, spacing, and typography rather than
+  visual-layer borders or shadows.
+- Detailed UI rules and the preflight checklist live in
+  [UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md).
 
 ## MCP Boundary
 

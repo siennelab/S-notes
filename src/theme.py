@@ -1,523 +1,533 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
+from PySide6.QtCore import QByteArray, QRectF, QSettings, Qt
+from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QApplication, QWidget
 
-SIDEBAR_BACKGROUND = "#1C1C1E"
-SIDEBAR_SURFACE = "#2C2C2E"
-SIDEBAR_TEXT = "#8E8E93"
-NOTE_LIST_TEXT = "#A6A6AB"
-LINK_DRAWER_BACKGROUND = "#44403C"
-SELECTED_BACKGROUND = "#E1D8CC"
-SELECTED_TEXT = "#1C1C1E"
-
-EDITOR_BACKGROUND = "#F9F9FB"
-EDITOR_TEXT = "#333333"
-TOOLBAR_ICON = "#555555"
-SUBTLE_BACKGROUND = "#F0F0F0"
-
-DARK_DIVIDER = "#3A3A3C"
-LIGHT_DIVIDER = "#E5E5EA"
-
-ICON_DIR = Path(__file__).with_name("icons").as_posix()
+from src.app_paths import CONFIG_DIR
 
 
-APP_STYLE = f"""
+@dataclass(frozen=True)
+class ThemeTokens:
+    name: str
+    window: str
+    sidebar: str
+    sidebar_hover: str
+    sidebar_selected: str
+    editor: str
+    surface: str
+    surface_hover: str
+    surface_selected: str
+    text: str
+    text_muted: str
+    text_subtle: str
+    accent: str
+    accent_soft: str
+    accent_text: str
+    warning: str
+    danger: str
+    focus: str
+    scrollbar: str
+    disabled: str
+
+    @property
+    def document_text(self) -> str:
+        return self.text
+
+    @property
+    def document_secondary(self) -> str:
+        return self.text_muted
+
+    @property
+    def document_link(self) -> str:
+        return self.accent
+
+    @property
+    def document_code(self) -> str:
+        return self.text
+
+
+THEMES: dict[str, ThemeTokens] = {
+    "dark": ThemeTokens(
+        name="dark",
+        window="#171819",
+        sidebar="#202224",
+        sidebar_hover="#292C2E",
+        sidebar_selected="#303438",
+        editor="#1B1D1E",
+        surface="#242729",
+        surface_hover="#2C3032",
+        surface_selected="#32383A",
+        text="#E7E9E8",
+        text_muted="#A4AAA7",
+        text_subtle="#707774",
+        accent="#48B981",
+        accent_soft="#253C32",
+        accent_text="#F5FBF8",
+        warning="#D8A45B",
+        danger="#D87171",
+        focus="#65C995",
+        scrollbar="#515855",
+        disabled="#5E6562",
+    ),
+    "light-slate": ThemeTokens(
+        name="light-slate",
+        window="#E7EAED",
+        sidebar="#F1F4F6",
+        sidebar_hover="#E7ECEF",
+        sidebar_selected="#DCE5EB",
+        editor="#FFFFFF",
+        surface="#F6F8F9",
+        surface_hover="#EAF0F3",
+        surface_selected="#DFE8EE",
+        text="#23292E",
+        text_muted="#68737C",
+        text_subtle="#929CA4",
+        accent="#4A6B88",
+        accent_soft="#D9E4EC",
+        accent_text="#FFFFFF",
+        warning="#9A6A22",
+        danger="#A34444",
+        focus="#4A6B88",
+        scrollbar="#B8C0C6",
+        disabled="#AAB2B8",
+    ),
+    "light-clay": ThemeTokens(
+        name="light-clay",
+        window="#E8E6E2",
+        sidebar="#F3F2EF",
+        sidebar_hover="#EAE7E3",
+        sidebar_selected="#E2DDD7",
+        editor="#FFFFFF",
+        surface="#F7F6F4",
+        surface_hover="#EEEAE6",
+        surface_selected="#E6E0DA",
+        text="#2A2723",
+        text_muted="#716C65",
+        text_subtle="#9B958C",
+        accent="#A84B2F",
+        accent_soft="#F0DDD6",
+        accent_text="#FFFFFF",
+        warning="#966A2B",
+        danger="#A23E37",
+        focus="#A84B2F",
+        scrollbar="#BBB5AD",
+        disabled="#AEA8A0",
+    ),
+}
+
+DEFAULT_THEME = "light-slate"
+THEME_SETTINGS_KEY = "theme"
+THEME_SETTINGS_PATH = CONFIG_DIR / "ui_settings.ini"
+THEME_LABELS = (
+    ("dark", "夜间"),
+    ("light-slate", "蓝灰"),
+    ("light-clay", "陶土"),
+)
+ICON_DIR = Path(__file__).with_name("icons")
+_current_theme_name = DEFAULT_THEME
+
+
+def normalize_theme_name(value: object) -> str:
+    name = str(value or "")
+    return name if name in THEMES else DEFAULT_THEME
+
+
+def set_current_theme(name: str) -> ThemeTokens:
+    global _current_theme_name
+    _current_theme_name = normalize_theme_name(name)
+    return THEMES[_current_theme_name]
+
+
+def current_theme() -> ThemeTokens:
+    return THEMES[_current_theme_name]
+
+
+def load_saved_theme() -> str:
+    settings = QSettings(str(THEME_SETTINGS_PATH), QSettings.IniFormat)
+    return normalize_theme_name(settings.value(THEME_SETTINGS_KEY, DEFAULT_THEME))
+
+
+def save_theme(name: str) -> str:
+    theme_name = normalize_theme_name(name)
+    THEME_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    settings = QSettings(str(THEME_SETTINGS_PATH), QSettings.IniFormat)
+    settings.setValue(THEME_SETTINGS_KEY, theme_name)
+    settings.sync()
+    return theme_name
+
+
+def build_app_style(name: str) -> str:
+    t = THEMES[normalize_theme_name(name)]
+    return f"""
 QMainWindow,
 QDialog,
 QMessageBox,
-QInputDialog {{
-    background: {EDITOR_BACKGROUND};
+QInputDialog,
+QWidget#receiptInboxDialog {{
+    background: {t.window};
 }}
 QWidget {{
-    color: {EDITOR_TEXT};
-    font-size: 14px;
+    color: {t.text};
+    font-size: 13px;
     font-family: 'PingFang SC', 'SF Pro Text', -apple-system, 'Helvetica Neue', sans-serif;
 }}
-QLineEdit {{
-    border: 0;
-    border-bottom: 1px solid {LIGHT_DIVIDER};
-    border-radius: 0;
-    padding: 6px 2px;
-    background: {EDITOR_BACKGROUND};
-    color: {EDITOR_TEXT};
-    selection-background-color: {SELECTED_BACKGROUND};
-    selection-color: {SELECTED_TEXT};
-    placeholder-text-color: {SIDEBAR_TEXT};
+QLabel {{ background: transparent; }}
+QLineEdit,
+QTextEdit,
+QPlainTextEdit,
+QComboBox {{
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 8px;
+    background: {t.surface};
+    color: {t.text};
+    selection-background-color: {t.accent_soft};
+    selection-color: {t.text};
+    placeholder-text-color: {t.text_subtle};
 }}
 QLineEdit:hover,
-QLineEdit:focus {{ border-bottom-color: {TOOLBAR_ICON}; }}
-QComboBox {{
-    border: 0;
-    border-bottom: 1px solid {LIGHT_DIVIDER};
-    border-radius: 0;
-    padding: 4px 18px 4px 2px;
-    background: {EDITOR_BACKGROUND};
-    color: {EDITOR_TEXT};
-    combobox-popup: 0;
+QTextEdit:hover,
+QPlainTextEdit:hover,
+QComboBox:hover {{ background: {t.surface_hover}; }}
+QLineEdit:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus,
+QComboBox:focus {{
+    border-color: {t.focus};
+    background: {t.surface};
 }}
-QComboBox:hover,
-QComboBox:focus {{ border-bottom-color: {TOOLBAR_ICON}; }}
-QComboBox:disabled {{ color: {SIDEBAR_TEXT}; }}
-QComboBox::drop-down {{ border: 0; width: 20px; }}
-QComboBox::down-arrow {{
-    image: url({ICON_DIR}/combo-chevron.svg);
-    width: 12px;
-    height: 12px;
-}}
-#categoryFilter::down-arrow {{ image: url({ICON_DIR}/combo-chevron-sidebar.svg); }}
-#floatingComboPopup {{ background: transparent; border: 0; }}
-#comboPopupView {{
-    border: 1px solid {LIGHT_DIVIDER};
-    border-radius: 8px;
-    background: {EDITOR_BACKGROUND};
-    color: {EDITOR_TEXT};
-    outline: 0;
-    padding: 0;
-    selection-background-color: transparent;
-    selection-color: {EDITOR_TEXT};
-}}
-#comboPopupView::item {{
-    min-height: 40px;
-    padding: 0;
-    background: transparent;
-    color: {EDITOR_TEXT};
-}}
-#comboPopupView::item:selected {{
-    background: transparent;
-    color: {EDITOR_TEXT};
-}}
-QPushButton {{
-    border: 0;
-    border-radius: 4px;
-    padding: 5px 8px;
-    background: transparent;
-    color: {EDITOR_TEXT};
-}}
-QPushButton:hover {{ background: {LIGHT_DIVIDER}; }}
-QPushButton:focus {{ outline: 0; }}
-QTextEdit {{
-    border: 0;
-    border-radius: 0;
-    background: {EDITOR_BACKGROUND};
-    padding: 0;
-    color: {EDITOR_TEXT};
-    font-size: 15px;
-    selection-background-color: {SELECTED_BACKGROUND};
-    selection-color: {SELECTED_TEXT};
-}}
-QTextEdit:focus {{ border: 0; }}
-QMenu {{
-    border: 1px solid {DARK_DIVIDER};
-    border-radius: 6px;
-    padding: 5px;
-    background: {SIDEBAR_SURFACE};
-    color: {SIDEBAR_TEXT};
-}}
-QMenu::separator {{
-    height: 1px;
-    background: {DARK_DIVIDER};
-    margin: 5px 6px;
-}}
-QMenu::item {{ border-radius: 4px; padding: 6px 22px 6px 10px; }}
-QMenu::item:selected {{
-    background: {SELECTED_BACKGROUND};
-    color: {SELECTED_TEXT};
-}}
-QMenu::item:disabled {{ color: {SIDEBAR_TEXT}; }}
-QToolTip {{
-    border: 1px solid {DARK_DIVIDER};
-    background: {SIDEBAR_SURFACE};
-    color: {EDITOR_BACKGROUND};
-    padding: 4px 6px;
-}}
-
-#sidebar {{
-    background: {SIDEBAR_BACKGROUND};
-    border-right: 1px solid {DARK_DIVIDER};
-}}
-#sidebarTitle {{ color: {EDITOR_BACKGROUND}; font-size: 26px; font-weight: 600; }}
-#sidebarSearch {{
-    border: 1px solid {DARK_DIVIDER};
-    border-radius: 7px;
-    background: {SIDEBAR_SURFACE};
-    color: {SIDEBAR_TEXT};
-    padding: 5px 9px;
-    selection-background-color: {SELECTED_BACKGROUND};
-    selection-color: {SELECTED_TEXT};
-    placeholder-text-color: {SIDEBAR_TEXT};
-}}
-#sidebarSearch:focus {{ border-color: {SIDEBAR_TEXT}; }}
-#sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 1px; }}
-#categoryFilter {{
-    border: 1px solid {DARK_DIVIDER};
-    border-radius: 7px;
-    background: {SIDEBAR_SURFACE};
-    color: {SIDEBAR_TEXT};
-    padding: 5px 18px 5px 9px;
-}}
-#categoryFilter:hover,
-#categoryFilter:focus {{ border-color: {SIDEBAR_TEXT}; }}
-#categoryFilter:disabled {{ color: {SIDEBAR_TEXT}; background: {SIDEBAR_SURFACE}; }}
-#sidebarComboPopupView {{
-    border: 1px solid {DARK_DIVIDER};
-    border-radius: 8px;
-    background: {SIDEBAR_SURFACE};
-    color: {SIDEBAR_TEXT};
-    outline: 0;
-    padding: 0;
-    selection-background-color: transparent;
-    selection-color: {SIDEBAR_TEXT};
-}}
-#sidebarComboPopupView::item {{
-    min-height: 40px;
-    padding: 0;
-    background: transparent;
-    color: {SIDEBAR_TEXT};
-}}
-#sidebarComboPopupView::item:selected {{
-    background: transparent;
-    color: {SIDEBAR_TEXT};
-}}
-#smartTabButton {{
-    border: 0;
+QLineEdit:disabled,
+QTextEdit:disabled,
+QPlainTextEdit:disabled,
+QComboBox:disabled {{ color: {t.disabled}; background: {t.surface}; }}
+QComboBox {{ padding-right: 24px; combobox-popup: 0; }}
+QComboBox::drop-down {{ border: 0; width: 24px; }}
+QComboBox::down-arrow {{ image: none; width: 0; height: 0; }}
+QPushButton,
+QToolButton {{
+    border: 1px solid transparent;
     border-radius: 6px;
     padding: 4px 8px;
     background: transparent;
-    color: {SIDEBAR_TEXT};
-    font-size: 11px;
+    color: {t.text};
 }}
-#smartTabButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
-#smartTabButton[active="true"] {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
-#categoryManagerButton {{
+QPushButton:hover,
+QToolButton:hover {{ background: {t.surface_hover}; }}
+QPushButton:pressed,
+QToolButton:pressed,
+QPushButton:checked,
+QToolButton:checked {{ background: {t.surface_selected}; color: {t.text}; }}
+QPushButton:focus,
+QToolButton:focus {{ border-color: {t.focus}; }}
+QPushButton:disabled,
+QToolButton:disabled {{ color: {t.disabled}; background: transparent; }}
+QCheckBox {{ spacing: 8px; color: {t.text_muted}; }}
+QCheckBox:hover {{ color: {t.text}; }}
+QCheckBox:focus {{ color: {t.focus}; }}
+QMenu {{
+    border: 0;
+    border-radius: 10px;
+    padding: 8px;
+    background: {t.sidebar};
+    color: {t.text};
+}}
+QMenu::separator {{ height: 4px; background: transparent; margin: 4px 0; }}
+QMenu::item {{ border-radius: 6px; padding: 8px 24px 8px 12px; }}
+QMenu::item:selected {{ background: {t.sidebar_selected}; color: {t.text}; }}
+QMenu::item:pressed {{ background: {t.accent_soft}; color: {t.text}; }}
+QMenu::item:disabled {{ color: {t.disabled}; }}
+QMenu::item:focus {{ border: 1px solid {t.focus}; }}
+QToolTip {{
     border: 0;
     border-radius: 6px;
-    color: {SIDEBAR_TEXT};
-    padding: 4px 6px;
+    padding: 4px 8px;
+    background: {t.sidebar_selected};
+    color: {t.text};
 }}
-#categoryManagerButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
-#mainSplitter::handle {{ background: {DARK_DIVIDER}; }}
-#mainSplitter::handle:hover {{ background: {SIDEBAR_TEXT}; }}
+QAbstractItemView {{
+    border: 0;
+    outline: 0;
+    background: {t.surface};
+    color: {t.text};
+    selection-background-color: {t.surface_selected};
+    selection-color: {t.text};
+}}
+QAbstractItemView::item {{ min-height: 32px; border: 0; border-radius: 6px; padding: 0 8px; }}
+QAbstractItemView::item:hover {{ background: {t.surface_hover}; }}
+QAbstractItemView::item:selected {{ background: {t.surface_selected}; color: {t.text}; }}
+QAbstractItemView:focus {{ border: 1px solid {t.focus}; border-radius: 6px; }}
+QHeaderView {{ border: 0; background: {t.surface}; }}
+QHeaderView::section {{
+    border: 0;
+    background: {t.surface};
+    color: {t.text_muted};
+    font-size: 11px;
+    padding: 4px 8px;
+}}
+
+#mainContentArea {{ background: {t.editor}; }}
+#sidebar {{ background: {t.sidebar}; }}
+#sidebarTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#themeSwitch {{ background: {t.sidebar_hover}; border-radius: 8px; }}
+#themeButton {{
+    color: {t.text_muted};
+    font-size: 11px;
+    padding: 4px 8px;
+}}
+#themeButton:hover {{ background: {t.sidebar_selected}; color: {t.text}; }}
+#themeButton:pressed {{ background: {t.accent_soft}; color: {t.text}; }}
+#themeButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.text}; font-weight: 600; }}
+#newNoteButton {{ background: {t.accent}; color: {t.accent_text}; padding: 0; }}
+#newNoteButton:hover {{ background: {t.focus}; }}
+#newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
+#sidebarSearch,
+#categoryFilter {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#sidebarSearch:hover,
+#categoryFilter:hover {{ background: {t.sidebar_selected}; }}
+#sidebarSearch:focus,
+#categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_hover}; }}
+#sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 0; }}
+#smartTabButton,
+#categoryManagerButton {{ color: {t.text_muted}; font-size: 11px; }}
+#smartTabButton:hover,
+#categoryManagerButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#smartTabButton:pressed,
+#categoryManagerButton:pressed {{ background: {t.accent_soft}; color: {t.text}; }}
+#smartTabButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.text}; font-weight: 600; }}
+#sidebarComboPopupView,
+#comboPopupView {{
+    border: 0;
+    border-radius: 10px;
+    background: {t.sidebar};
+    color: {t.text};
+    outline: 0;
+    padding: 4px;
+    selection-background-color: transparent;
+    selection-color: {t.text};
+}}
+#comboPopupView {{ background: {t.surface}; }}
+#sidebarComboPopupView::item,
+#comboPopupView::item {{ min-height: 32px; padding: 0; background: transparent; color: {t.text}; }}
+#sidebarComboPopupView::item:selected,
+#comboPopupView::item:selected {{ background: transparent; color: {t.text}; }}
+#floatingComboPopup {{ background: transparent; border: 0; }}
+#mainSplitter::handle {{ background: {t.sidebar_hover}; }}
+#mainSplitter::handle:hover {{ background: {t.accent}; }}
 #noteTable {{
     border: 0;
-    background: {SIDEBAR_BACKGROUND};
-    alternate-background-color: {SIDEBAR_BACKGROUND};
-    color: {NOTE_LIST_TEXT};
+    background: {t.sidebar};
+    alternate-background-color: {t.sidebar};
+    color: {t.text_muted};
     outline: 0;
     gridline-color: transparent;
-    selection-background-color: {SELECTED_BACKGROUND};
-    selection-color: {SELECTED_TEXT};
+    selection-background-color: {t.sidebar_selected};
+    selection-color: {t.text};
 }}
-#noteTable::item {{ border: 0; padding: 5px 6px; color: {NOTE_LIST_TEXT}; }}
-#noteTable::item:hover {{ background: {SIDEBAR_SURFACE}; color: {NOTE_LIST_TEXT}; }}
-#noteTable::item:selected,
-#noteTable::item:selected:active,
-#noteTable::item:selected:!active {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
-#noteTable QHeaderView {{ background: {SIDEBAR_BACKGROUND}; }}
-#noteTable QHeaderView::section {{
-    border: 0;
-    border-bottom: 1px solid {DARK_DIVIDER};
-    background: {SIDEBAR_BACKGROUND};
-    color: {SIDEBAR_TEXT};
-    padding: 6px;
-    font-size: 12px;
-    font-weight: 500;
-}}
-#trashDivider {{ background: {DARK_DIVIDER}; max-height: 1px; }}
-#trashTitle {{ color: {SIDEBAR_TEXT}; }}
-#trashButton {{
-    border: 0;
-    border-radius: 6px;
-    padding: 8px 12px;
-    background: transparent;
-    color: {SIDEBAR_TEXT};
-    text-align: left;
-}}
-#trashButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
-#trashCloseButton {{
-    border: 0;
-    border-radius: 6px;
-    padding: 0;
-    color: {SIDEBAR_TEXT};
-    background: transparent;
-    font-size: 15px;
-    outline: 0;
-}}
-#trashCloseButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
-#trashTree {{
-    border: 0;
-    outline: 0;
-    padding: 0;
-    background: {SIDEBAR_BACKGROUND};
-    color: {SIDEBAR_TEXT};
-}}
-#trashTree::item {{ border: 0; margin: 1px 0; padding: 7px 8px; color: {SIDEBAR_TEXT}; }}
-#trashTree::item:hover {{ background: {SIDEBAR_SURFACE}; }}
-#trashTree::item:selected,
-#trashTree::item:selected:active,
-#trashTree::item:selected:!active {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
+#noteTable::item {{ border: 0; border-radius: 6px; padding: 0 8px; color: {t.text_muted}; }}
+#noteTable::item:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#noteTable::item:selected {{ background: {t.sidebar_selected}; color: {t.text}; }}
+#trashTitle {{ color: {t.text_muted}; font-size: 12.5px; }}
+#trashButton {{ color: {t.text_muted}; text-align: left; padding: 4px 8px; }}
+#trashButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#trashButton:pressed {{ background: {t.sidebar_selected}; }}
+#trashCloseButton {{ color: {t.text_muted}; padding: 0; }}
+#trashCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#trashTree {{ border: 0; outline: 0; padding: 0; background: {t.sidebar}; color: {t.text_muted}; }}
+#trashTree::item {{ border: 0; margin: 0; padding: 0 8px; color: {t.text_muted}; }}
+#trashTree::item:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#trashTree::item:selected {{ background: {t.sidebar_selected}; color: {t.text}; }}
 #trashTree::branch {{ background: transparent; border: 0; }}
 
 #editor,
-#editorSheet {{ background: {EDITOR_BACKGROUND}; }}
+#editorSheet {{ background: {t.editor}; }}
 #titleInput {{
     border: 0;
-    background: {EDITOR_BACKGROUND};
-    color: {EDITOR_TEXT};
+    border-radius: 0;
+    background: {t.editor};
+    color: {t.text};
     font-size: 26px;
     font-weight: 600;
-    padding: 0 0 8px 0;
+    padding: 0;
 }}
-#titleDivider {{
-    min-height: 2px;
-    max-height: 2px;
-    background: {SIDEBAR_BACKGROUND};
-    border: 0;
-}}
+#titleInput:focus {{ border: 0; background: {t.editor}; }}
 #metadataSummaryButton {{
-    border: 0;
-    padding: 0 0 16px 0;
-    background: {EDITOR_BACKGROUND};
-    color: {SIDEBAR_TEXT};
-    font-size: 13px;
+    padding: 8px 0;
+    background: {t.editor};
+    color: {t.text_muted};
+    font-size: 12.5px;
     text-align: left;
 }}
-#metadataSummaryButton:hover {{ background: {EDITOR_BACKGROUND}; color: {TOOLBAR_ICON}; }}
-#bodyEdit,
-#bodyEdit:focus {{
-    border: 1px solid {LIGHT_DIVIDER};
-    border-radius: 8px;
-    background: {EDITOR_BACKGROUND};
-}}
-#metadataPanel {{
-    background: {SUBTLE_BACKGROUND};
-    color: {EDITOR_TEXT};
-    border-radius: 8px;
-    max-height: 175px;
-}}
-#metadataFieldLabel {{ color: {SIDEBAR_TEXT}; font-size: 12px; padding-top: 0; }}
-#metadataPanel QComboBox,
-#metadataPanel QLineEdit {{
-    min-height: 24px;
-    max-height: 26px;
-    background: {EDITOR_BACKGROUND};
-    color: {EDITOR_TEXT};
-    border-bottom-color: {LIGHT_DIVIDER};
-    padding-top: 2px;
-    padding-bottom: 2px;
-}}
-#metadataPanel #metadataLabel {{ min-height: 28px; max-height: 32px; padding-top: 6px; }}
-#aiTargetCheck {{ color: {TOOLBAR_ICON}; font-size: 12px; spacing: 6px; padding: 1px 0; }}
-#aiTargetCheck::indicator {{ width: 12px; height: 12px; }}
-#metadataCollapseButton {{ color: {SIDEBAR_TEXT}; font-size: 12px; padding: 1px 6px; }}
-#metadataCollapseButton:hover {{ background: {LIGHT_DIVIDER}; color: {EDITOR_TEXT}; }}
-#editorToolbar,
-#findPanel {{ background: {SUBTLE_BACKGROUND}; border-radius: 6px; }}
-#editorToolbar {{ padding: 2px 4px; }}
-#toolbarButton {{
-    border: 0;
-    border-radius: 4px;
-    padding: 3px 6px;
-    background: transparent;
-    color: {TOOLBAR_ICON};
-    font-size: 12px;
-}}
-#toolbarButton:hover {{ background: {LIGHT_DIVIDER}; color: {EDITOR_TEXT}; }}
-#toolbarButton::menu-indicator {{ image: none; width: 0; }}
-#toolbarSeparator {{
-    color: {LIGHT_DIVIDER};
-    background: {LIGHT_DIVIDER};
-    min-height: 16px;
-    max-height: 16px;
-    max-width: 1px;
-}}
-#toolbarInput {{
-    border: 0;
-    border-bottom: 1px solid {LIGHT_DIVIDER};
-    padding: 4px 2px;
-    background: {SUBTLE_BACKGROUND};
-    color: {EDITOR_TEXT};
-    font-size: 12px;
-    min-width: 80px;
-    placeholder-text-color: {SIDEBAR_TEXT};
-}}
-#toolbarInput:focus {{ border-bottom-color: {TOOLBAR_ICON}; }}
-#deleteNoteButton {{
-    border: 0;
-    border-radius: 8px;
-    padding: 0;
-    background: transparent;
-    color: {TOOLBAR_ICON};
-}}
-#deleteNoteButton:hover {{ background: {LIGHT_DIVIDER}; }}
-#deleteNoteButton:disabled {{ background: transparent; color: {SIDEBAR_TEXT}; }}
-#editorActionBar {{
-    background: {SUBTLE_BACKGROUND};
-    border: 1px solid {LIGHT_DIVIDER};
-    border-radius: 11px;
-}}
-#actionBarButton {{
-    border: 0;
-    border-radius: 8px;
-    padding: 0;
-    background: transparent;
-}}
-#actionBarButton:hover {{ background: {LIGHT_DIVIDER}; }}
-#actionBarButton:pressed {{ background: {SELECTED_BACKGROUND}; }}
-#actionBarButton[active="true"] {{ background: {SELECTED_BACKGROUND}; }}
-#actionBarButton:disabled {{ background: transparent; }}
-#newNoteFab {{
-    border: 0;
-    border-radius: 22px;
-    padding: 0;
-    background: {SELECTED_BACKGROUND};
-    color: {SELECTED_TEXT};
-}}
-#newNoteFab:hover {{ background: {LIGHT_DIVIDER}; }}
-#newNoteFab:pressed {{ background: {SIDEBAR_TEXT}; }}
-#editorEmptyState {{ color: {SIDEBAR_TEXT}; font-size: 15px; }}
-#statusLabel {{ background: transparent; color: {SIDEBAR_TEXT}; padding: 4px 6px; font-size: 12px; }}
+#metadataSummaryButton:hover {{ background: {t.editor}; color: {t.text}; }}
+#metadataSummaryButton:pressed {{ background: {t.surface}; }}
+#metadataPanel {{ background: {t.surface}; color: {t.text}; border-radius: 8px; }}
+#metadataFieldLabel,
 #metadataLabel,
 #sectionLabel,
-#filterLabel {{ color: {SIDEBAR_TEXT}; font-size: 12px; }}
+#filterLabel {{ color: {t.text_muted}; font-size: 12.5px; }}
+#metadataPanel QComboBox,
+#metadataPanel QLineEdit {{ background: {t.editor}; color: {t.text}; }}
+#aiTargetCheck {{ color: {t.text_muted}; font-size: 12.5px; spacing: 8px; padding: 0; }}
+#metadataCollapseButton {{ color: {t.text_muted}; padding: 0; }}
+#metadataCollapseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#editorToolbar,
+#findPanel,
+#editorActionBar {{ background: {t.surface}; border-radius: 8px; }}
+#editorToolbar {{ padding: 4px 8px; }}
+#toolbarButton {{ padding: 4px; color: {t.text_muted}; font-size: 12.5px; }}
+#toolbarButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#toolbarButton:pressed,
+#toolbarButton:checked {{ background: {t.surface_selected}; color: {t.text}; }}
+#toolbarButton:focus {{ border-color: {t.focus}; }}
+#toolbarButton::menu-indicator {{ image: none; width: 0; }}
+#toolbarInput {{ background: {t.editor}; color: {t.text}; font-size: 12.5px; min-width: 80px; }}
+#bodyEdit {{ border: 0; border-radius: 0; background: {t.editor}; padding: 0; color: {t.text}; font-size: 15px; }}
+#bodyEdit:hover {{ background: {t.editor}; }}
+#bodyEdit:focus {{ border: 0; background: {t.editor}; }}
+#deleteNoteButton,
+#actionBarButton {{ padding: 0; color: {t.text_muted}; }}
+#deleteNoteButton:hover,
+#actionBarButton:hover {{ background: {t.surface_hover}; }}
+#deleteNoteButton:pressed,
+#actionBarButton:pressed,
+#actionBarButton[active="true"] {{ background: {t.surface_selected}; }}
+#editorEmptyState {{ color: {t.text_subtle}; font-size: 15px; }}
+#statusLabel {{ color: {t.text_subtle}; padding: 4px 0; font-size: 12.5px; }}
 #tagChipButton,
-#tagMoreButton {{
-    border: 0;
-    border-radius: 6px;
-    padding: 2px 7px;
-    background: {SUBTLE_BACKGROUND};
-    color: {SIDEBAR_TEXT};
-    font-size: 11px;
-}}
+#tagMoreButton {{ background: {t.sidebar_hover}; color: {t.text_muted}; font-size: 11px; padding: 4px 8px; }}
 #tagChipButton:hover,
-#tagMoreButton:hover {{ background: {LIGHT_DIVIDER}; color: {EDITOR_TEXT}; }}
+#tagMoreButton:hover {{ background: {t.sidebar_selected}; color: {t.text}; }}
 #tagMoreButton::menu-indicator {{ image: none; width: 0; }}
 
-#linkDrawer {{
-    background: {LINK_DRAWER_BACKGROUND};
-    border-left: 1px solid {DARK_DIVIDER};
-}}
-#linkDrawerTitle {{ color: {EDITOR_BACKGROUND}; font-size: 15px; font-weight: 600; }}
-#linkDrawerCloseButton {{
-    border: 0;
-    border-radius: 6px;
-    padding: 0;
-    background: transparent;
-    color: {SIDEBAR_TEXT};
-    font-size: 14px;
-    outline: 0;
-}}
-#linkDrawerCloseButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
+#linkDrawer {{ background: {t.sidebar}; }}
+#linkDrawerTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#linkDrawerCloseButton {{ color: {t.text_muted}; padding: 0; }}
+#linkDrawerCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
 #linkDrawerEmptyState,
 #linkEmptyText,
-#linkDrawerSummary {{ color: {SIDEBAR_TEXT}; font-size: 12px; }}
+#linkDrawerSummary {{ color: {t.text_muted}; font-size: 12.5px; }}
 #linkDrawerScroll,
-#linkDrawerScroll QWidget {{ background: {LINK_DRAWER_BACKGROUND}; }}
-#linkSectionHeader {{
-    border: 0;
-    border-radius: 4px;
-    padding: 6px 4px;
-    background: transparent;
-    color: {SIDEBAR_TEXT};
-    font-size: 12px;
-    font-weight: 600;
-    text-align: left;
-}}
-#linkSectionHeader:hover {{ background: {SIDEBAR_SURFACE}; }}
-#linkResult {{ border: 0; border-radius: 4px; background: transparent; }}
-#linkResult:hover {{ background: {SIDEBAR_SURFACE}; }}
-#linkResultTitle {{ color: {EDITOR_BACKGROUND}; font-size: 13px; font-weight: 600; }}
+#linkDrawerScroll QWidget {{ background: {t.sidebar}; }}
+#linkSectionHeader {{ padding: 4px; background: transparent; color: {t.text_muted}; font-size: 12.5px; font-weight: 600; text-align: left; }}
+#linkSectionHeader:hover {{ background: {t.sidebar_hover}; }}
+#linkResult {{ border: 0; border-radius: 8px; background: {t.sidebar_hover}; }}
+#linkResult:hover {{ background: {t.sidebar_selected}; }}
+#linkResult[pressed="true"] {{ background: {t.accent_soft}; }}
+#linkResult:focus {{ border: 1px solid {t.focus}; }}
+#linkResultTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
 #linkResultPath,
-#linkResultUpdated {{ color: {SIDEBAR_TEXT}; font-size: 11px; }}
+#linkResultUpdated {{ color: {t.text_subtle}; font-size: 11px; }}
 #linkReasonTags {{ background: transparent; }}
-#linkReasonTag {{
-    border-radius: 7px;
-    padding: 2px 6px;
-    background: {SIDEBAR_SURFACE};
-    color: {SIDEBAR_TEXT};
-    font-size: 11px;
-}}
-#linkReasonTag[important="true"] {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
+#linkReasonTag {{ border-radius: 6px; padding: 4px 8px; background: {t.sidebar}; color: {t.text_muted}; font-size: 11px; }}
+#linkReasonTag[important="true"] {{ background: {t.accent_soft}; color: {t.accent}; }}
 
 #categoryManagerDialog,
-#exportDialog,
-#receiptInboxDialog {{ background: {EDITOR_BACKGROUND}; }}
+#exportDialog {{ background: {t.window}; }}
 #categoryColumn,
 #exportDynamicArea,
-#aiSafeExportSection {{ background: {SUBTLE_BACKGROUND}; border-radius: 8px; }}
-#categoryManagerTitle {{ color: {SIDEBAR_TEXT}; font-size: 12px; }}
-#categoryManagerList {{
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: {EDITOR_TEXT};
-    outline: 0;
-}}
-#categoryManagerList::item {{ padding: 7px 8px; }}
-#categoryManagerList::item:hover {{ background: {LIGHT_DIVIDER}; }}
-#categoryManagerList::item:selected {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
-#categoryNewButton {{ color: {TOOLBAR_ICON}; text-align: left; padding: 6px 7px; }}
-#categoryNewButton:hover {{ background: {LIGHT_DIVIDER}; }}
-#categoryNewButton:disabled {{ color: {SIDEBAR_TEXT}; background: transparent; }}
-#categoryManagerClose {{ padding: 5px 12px; }}
+#aiSafeExportSection {{ background: {t.surface}; border-radius: 8px; }}
+#categoryManagerTitle {{ color: {t.text_muted}; font-size: 12.5px; font-weight: 600; }}
+#categoryManagerList {{ border: 0; border-radius: 6px; background: transparent; color: {t.text}; outline: 0; }}
+#categoryManagerList::item {{ padding: 0 8px; }}
+#categoryManagerList::item:hover {{ background: {t.surface_hover}; }}
+#categoryManagerList::item:selected {{ background: {t.surface_selected}; color: {t.text}; }}
+#categoryNewButton {{ color: {t.text_muted}; text-align: left; padding: 4px 8px; }}
+#categoryNewButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#categoryManagerClose {{ padding: 4px 12px; }}
 #exportTitle,
-#receiptInboxTitle {{ color: {EDITOR_TEXT}; font-size: 18px; font-weight: 600; }}
-#exportSectionTitle {{ color: {EDITOR_TEXT}; font-size: 14px; font-weight: 600; }}
-#exportDialog QPushButton {{ min-height: 30px; }}
-#exportInfoLabel {{ color: {SIDEBAR_TEXT}; padding: 12px; }}
-#exportSelectionTree {{
-    border: 1px solid {LIGHT_DIVIDER};
-    border-radius: 8px;
-    background: {EDITOR_BACKGROUND};
-    color: {EDITOR_TEXT};
-    padding: 4px;
-    outline: 0;
-}}
-#exportSelectionTree::item {{ padding: 6px 8px; }}
-#exportSelectionTree::item:hover {{ background: {LIGHT_DIVIDER}; }}
-#exportSelectionTree::item:selected {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
-#receiptTabButton {{ border-radius: 7px; color: {SIDEBAR_TEXT}; padding: 5px 9px; }}
-#receiptTabButton:hover {{ background: {LIGHT_DIVIDER}; }}
-#receiptTabButton[active="true"] {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; }}
-#receiptImportButton {{ color: {TOOLBAR_ICON}; padding: 5px 8px; }}
-#receiptEmptyState {{ color: {SIDEBAR_TEXT}; font-size: 13px; }}
+#receiptInboxTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#exportSectionTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
+#exportInfoLabel {{ color: {t.text_muted}; padding: 12px; }}
+#exportSelectionTree {{ border: 0; border-radius: 8px; background: {t.surface}; color: {t.text}; padding: 4px; outline: 0; }}
+#exportSelectionTree::item {{ padding: 0 8px; }}
+#exportSelectionTree::item:hover {{ background: {t.surface_hover}; }}
+#exportSelectionTree::item:selected {{ background: {t.surface_selected}; color: {t.text}; }}
+#receiptTabButton {{ color: {t.text_muted}; padding: 4px 8px; }}
+#receiptTabButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#receiptTabButton:pressed {{ background: {t.accent_soft}; }}
+#receiptTabButton[active="true"] {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}
+#receiptImportButton {{ color: {t.text_muted}; padding: 4px 8px; }}
+#receiptEmptyState {{ color: {t.text_subtle}; font-size: 13px; }}
 #receiptScroll,
-#receiptScrollContent {{ border: 0; background: {EDITOR_BACKGROUND}; }}
-#receiptCard {{
-    border: 1px solid {LIGHT_DIVIDER};
-    border-radius: 8px;
-    background: {EDITOR_BACKGROUND};
-}}
+#receiptScrollContent {{ border: 0; background: {t.window}; }}
+#receiptCard {{ border: 0; border-radius: 8px; background: {t.surface}; }}
 #receiptCard[expanded="true"],
-#receiptCard:hover {{ background: {SUBTLE_BACKGROUND}; }}
-#receiptCard[expanded="true"] {{ border-color: {SELECTED_BACKGROUND}; }}
-#receiptCardTitle {{ color: {EDITOR_TEXT}; font-size: 14px; font-weight: 600; }}
+#receiptCard:hover {{ background: {t.surface_hover}; }}
+#receiptCard[pressed="true"] {{ background: {t.surface_selected}; }}
+#receiptCard:focus {{ border: 1px solid {t.focus}; }}
+#receiptCardTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
 #receiptCardSummary,
-#receiptFieldLabel {{ color: {SIDEBAR_TEXT}; font-size: 11px; }}
-#receiptParseErrorStatus {{ color: {TOOLBAR_ICON}; font-size: 11px; font-weight: 600; }}
-#receiptParseErrorDetail {{ color: {SIDEBAR_TEXT}; font-size: 11px; }}
+#receiptFieldLabel {{ color: {t.text_muted}; font-size: 11px; }}
+#receiptParseErrorStatus,
+#receiptParseErrorDetail {{ color: {t.warning}; font-size: 11px; }}
 #receiptCardDetails {{ background: transparent; }}
-#receiptAcceptButton {{ background: {SELECTED_BACKGROUND}; color: {SELECTED_TEXT}; padding: 5px 9px; }}
-#receiptAcceptButton:hover {{ background: {SIDEBAR_SURFACE}; color: {EDITOR_BACKGROUND}; }}
-#receiptAcceptButton:pressed {{ background: {SIDEBAR_BACKGROUND}; color: {EDITOR_BACKGROUND}; }}
-#receiptAcceptButton:disabled {{ background: {SUBTLE_BACKGROUND}; color: {SIDEBAR_TEXT}; }}
+#receiptAcceptButton {{ background: {t.accent}; color: {t.accent_text}; padding: 4px 8px; }}
+#receiptAcceptButton:hover {{ background: {t.focus}; }}
+#receiptAcceptButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
 #receiptRejectButton,
-#receiptCloseButton {{ color: {TOOLBAR_ICON}; background: transparent; padding: 5px 8px; }}
+#receiptCloseButton {{ color: {t.text_muted}; background: transparent; padding: 4px 8px; }}
 #receiptRejectButton:hover,
-#receiptCloseButton:hover {{ background: {LIGHT_DIVIDER}; }}
+#receiptCloseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 
 QAbstractScrollArea::corner {{ background: transparent; }}
-QScrollBar:vertical {{ border: 0; background: transparent; width: 7px; margin: 0; }}
-QScrollBar:horizontal {{ border: 0; background: transparent; height: 7px; margin: 0; }}
+QScrollBar:vertical {{ border: 0; background: transparent; width: 8px; margin: 0; }}
+QScrollBar:horizontal {{ border: 0; background: transparent; height: 8px; margin: 0; }}
 QScrollBar::handle:vertical,
-QScrollBar::handle:horizontal {{
-    background: {SIDEBAR_TEXT};
-    border-radius: 3px;
-    min-height: 24px;
-    min-width: 24px;
-}}
+QScrollBar::handle:horizontal {{ background: {t.scrollbar}; border-radius: 6px; min-height: 24px; min-width: 24px; }}
 QScrollBar::handle:vertical:hover,
-QScrollBar::handle:horizontal:hover {{ background: {SELECTED_BACKGROUND}; }}
+QScrollBar::handle:horizontal:hover {{ background: {t.accent}; }}
+QScrollBar::handle:vertical:pressed,
+QScrollBar::handle:horizontal:pressed {{ background: {t.focus}; }}
 QScrollBar::add-line,
 QScrollBar::sub-line {{ width: 0; height: 0; background: transparent; }}
 QScrollBar::add-page,
 QScrollBar::sub-page {{ background: transparent; }}
 """
+
+
+def editor_document_style(name: str | None = None) -> str:
+    return f"""
+body {{ font-size: 15px; line-height: 180%; }}
+p {{ margin: 0 0 12px 0; }}
+h1 {{ font-size: 26px; font-weight: 700; margin: 12px 0 8px 0; }}
+h2 {{ font-size: 15px; font-weight: 700; margin: 12px 0 8px 0; }}
+h3 {{ font-size: 13px; font-weight: 700; margin: 8px 0 4px 0; }}
+blockquote {{ margin-left: 24px; font-style: italic; }}
+pre {{ font-family: 'SF Mono', Menlo, Monaco, monospace; font-size: 12.5px; padding: 8px; }}
+code {{ font-family: 'SF Mono', Menlo, Monaco, monospace; }}
+"""
+
+
+def apply_theme(app: QApplication, name: str) -> ThemeTokens:
+    tokens = set_current_theme(name)
+    app.setStyleSheet(build_app_style(tokens.name))
+    return tokens
+
+
+def repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    widget.update()
+
+
+@lru_cache(maxsize=256)
+def _render_icon(theme_name: str, filename: str, role: str, size: int) -> QIcon:
+    tokens = THEMES[theme_name]
+    color = getattr(tokens, role)
+    source = (ICON_DIR / filename).read_text(encoding="utf-8")
+    renderer = QSvgRenderer(QByteArray(source.replace("currentColor", color).encode("utf-8")))
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter, QRectF(0, 0, size, size))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def themed_icon(filename: str, role: str = "text_muted", size: int = 14) -> QIcon:
+    return _render_icon(_current_theme_name, filename, role, size)
