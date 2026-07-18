@@ -26,11 +26,26 @@ local configuration.
 
 ## Run
 
+Create the repository virtual environment once during setup:
+
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
+```
+
+Use its interpreter explicitly for installation and source runs:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
+```
+
+VS Code workspace settings pin `${workspaceFolder}/.venv/bin/python`; newly
+created integrated terminals activate that environment automatically.
+
+## Test
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
 ## Project Documents
