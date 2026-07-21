@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -60,10 +60,14 @@ class EditorToolbar(QWidget):
         self.compress_blank_lines_button.setPopupMode(QToolButton.InstantPopup)
         main_row.addWidget(self.compress_blank_lines_button)
         main_row.addSpacing(8)
-        self.format_button = QPushButton("标题")
+        self.format_button = QToolButton()
+        self.format_button.setText("标题")
         self.format_button.setObjectName("toolbarButton")
         self.format_button.setToolTip("标题和字号")
+        self.format_button.setFixedSize(37, 29)
+        self.format_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.format_button.setMenu(self._build_format_menu())
+        self.format_button.setPopupMode(QToolButton.InstantPopup)
         main_row.addWidget(self.format_button)
 
         for text, tooltip, callback, icon in (

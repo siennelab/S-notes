@@ -560,31 +560,47 @@ class NotesEditor(QTextEdit):
                 cursor.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
         cursor.removeSelectedText()
 
+    @staticmethod
+    def _set_char_format_pixel_size(
+        char_format: QTextCharFormat,
+        pixel_size: int,
+    ) -> None:
+        char_format.setProperty(QTextFormat.FontPixelSize, pixel_size)
+
     def apply_heading(self, level: int) -> None:
         cursor = self.textCursor()
         block_format = QTextBlockFormat()
         char_format = QTextCharFormat()
         if level == 1:
             block_format.setHeadingLevel(1)
-            char_format.setFontPixelSize(26)
+            self._set_char_format_pixel_size(char_format, 26)
             char_format.setFontWeight(QFont.Bold)
         elif level == 2:
             block_format.setHeadingLevel(2)
-            char_format.setFontPixelSize(15)
+            self._set_char_format_pixel_size(char_format, 15)
             char_format.setFontWeight(QFont.Bold)
         else:
             block_format.setHeadingLevel(0)
-            char_format.setFontPixelSize(15)
+            self._set_char_format_pixel_size(char_format, 15)
             char_format.setFontWeight(QFont.Normal)
-        cursor.mergeBlockFormat(block_format)
-        cursor.mergeCharFormat(char_format)
-        self.mergeCurrentCharFormat(char_format)
+        cursor.beginEditBlock()
+        try:
+            cursor.mergeBlockFormat(block_format)
+            cursor.mergeCharFormat(char_format)
+            self.mergeCurrentCharFormat(char_format)
+        finally:
+            cursor.endEditBlock()
 
     def apply_font_size(self, pixel_size: int) -> None:
+        cursor = self.textCursor()
         char_format = QTextCharFormat()
-        char_format.setFontPixelSize(pixel_size)
-        self.textCursor().mergeCharFormat(char_format)
-        self.mergeCurrentCharFormat(char_format)
+        self._set_char_format_pixel_size(char_format, pixel_size)
+        cursor.beginEditBlock()
+        try:
+            cursor.mergeCharFormat(char_format)
+            self.mergeCurrentCharFormat(char_format)
+        finally:
+            cursor.endEditBlock()
 
     def apply_list(self, ordered: bool) -> None:
         cursor = self.textCursor()
