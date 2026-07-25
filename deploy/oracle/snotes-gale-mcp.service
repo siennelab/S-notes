@@ -29,6 +29,7 @@ MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/opt/snotes-gale-mcp
 ReadOnlyPaths=/var/lib/snotes-gale-mcp/mirror
+ReadWritePaths=/var/lib/snotes-gale-mcp/oauth
 RuntimeDirectory=snotes-gale-mcp
 RuntimeDirectoryMode=0700
 

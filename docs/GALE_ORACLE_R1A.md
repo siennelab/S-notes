@@ -2,10 +2,10 @@
 
 ## Boundary
 
-This service is a headless OAuth resource server for one disposable, fully
-fictional `gale-mirror.db`. It does not open the Mac S-notes database, load
-redaction rules, start the GUI or local MCP server, write notes, publish
-mirrors, or synchronize data.
+This service is a headless Auth0 OIDC proxy and OAuth resource server for one
+disposable, fully fictional `gale-mirror.db`. It does not open the Mac S-notes
+database, load redaction rules, start the GUI or local MCP server, write notes,
+publish mirrors, or synchronize data.
 
 The Mac S-notes database remains the only full source of truth. The mirror is
 schema version 1 and contains only Function Package A's Gale-safe derived
@@ -18,17 +18,28 @@ Real S-notes data and real redaction rules remain prohibited.
 
 ## Runtime and tools
 
-The service runs with the existing MCP dependency set plus PyJWT:
+The remote service deliberately uses standalone FastMCP in a dedicated virtual
+environment. The local desktop MCP remains on the existing MCP SDK:
 
 ```text
 mcp[cli]==1.28.1
+fastmcp==3.4.4
 PyJWT[crypto]==2.13.0
 ```
 
-The desktop repository uses Python 3.13. Oracle deployment uses a dedicated
-virtual environment and must not reuse Basic Memory's runtime. The code is also
-compatible with Oracle's current Ubuntu Python 3.12; the exact interpreter used
-must be recorded in the deployment evidence.
+FastMCP 3.4.4 is pinned because it supplies `Auth0Provider`, OIDC/OAuth proxy
+routes, DCR, PKCE, explicit consent, fixed callbacks, signed proxy tokens, and
+persistent pluggable storage. This version also contains the 3.4.x OAuth-client
+lifecycle, DCR redirect-validation, unsafe-redirect-scheme, host-guard, and
+Starlette dependency-floor fixes. Its encrypted store is backed by a dedicated
+filesystem directory in this single-instance R1A deployment. Multi-instance
+shared storage remains a pre-production item.
+
+The desktop repository uses Python 3.13. Oracle deployment must use a dedicated
+virtual environment and must not reuse Basic Memory's runtime. Exact
+compatibility is checked against Streamable HTTP, Starlette, Uvicorn, and the
+two existing tool schemas; mirror query business logic remains in
+`gale_remote_service.py`.
 
 Exactly two tools are registered:
 
@@ -103,117 +114,107 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m src.gale_mirror export \
   --redaction-rules /private/tmp/fictional-rules.json
 ```
 
-Then configure only non-secret resource-server values. Do not put any OAuth
-client secret or token in this environment:
+The complete proxy requires a root-only/local-test-only environment file with
+the resource-server values plus:
 
-```bash
-export SNOTES_GALE_MIRROR_ROOT=/private/tmp
-export SNOTES_GALE_MIRROR_PATH=/private/tmp/gale-mirror.db
-export SNOTES_GALE_HOST=127.0.0.1
-export SNOTES_GALE_PORT=8767
-export SNOTES_GALE_RESOURCE_URL=https://snotes.ke-den.de/mcp
-export SNOTES_GALE_AUDIENCE=https://snotes.ke-den.de/mcp
-export SNOTES_GALE_ISSUER_URL=https://AUTH0_TENANT_DOMAIN/
-export SNOTES_GALE_JWKS_URL=https://AUTH0_TENANT_DOMAIN/.well-known/jwks.json
-export SNOTES_GALE_ALLOWED_SUBJECTS=AUTH0_USER_SUBJECT
-export SNOTES_GALE_EXPECTED_OWNER_UID="$(id -u)"
+```text
+Auth0 OIDC configuration URL
+fixed Auth0 Regular Web Application client ID and secret
+public proxy base URL
+mode-0700 encrypted OAuth storage directory
+Fernet storage encryption key
+independent proxy JWT signing key
+explicitly approved MCP client redirect URI patterns
 ```
 
-Run the safe startup check:
+Do not put any of those secret values in Git or ordinary shell history. The
+checked-in `deploy/oracle/snotes-gale-mcp.env.example` contains placeholders
+only. Local automated checks instantiate only fictional credentials and a
+fictional OIDC upstream.
+
+For local isolation, use a dedicated environment with
+`requirements-mcp.txt`, bind only `127.0.0.1:8877`, use a temporary fictional
+mirror and mode-0700 temporary OAuth store, then run:
 
 ```bash
-/Users/s/.venvs/snotes-mcp/bin/python -m src.gale_remote_mcp doctor
+PYTHONDONTWRITEBYTECODE=1 <isolated-fastmcp-venv>/bin/python \
+  -m src.gale_remote_mcp serve
 ```
 
-The formal Oracle service uses:
+The eventual formal Oracle service command remains:
 
 ```bash
 /opt/snotes-gale-mcp/.venv/bin/python -m src.gale_remote_mcp serve
 ```
 
-It binds only `127.0.0.1:8767`. Uvicorn access logging is disabled.
+It is not deployed by the local implementation phase. Uvicorn access logging
+is disabled.
 
 ## OAuth architecture
 
-The MCP is only an OAuth resource server. Auth0 owns login, consent,
-authorization codes, client registration, access tokens, and refresh tokens.
-The MCP stores none of them.
+Auth0 owns user login and upstream authorization. Standalone FastMCP's
+`Auth0Provider` acts as the OIDC/OAuth proxy presented to MCP clients. The
+proxy exposes:
+
+```text
+/.well-known/oauth-authorization-server
+/.well-known/oauth-protected-resource
+/.well-known/oauth-protected-resource/mcp
+/register
+/authorize
+/consent
+/auth/callback
+/token
+/mcp
+```
+
+`/auth/callback` is fixed. DCR registrations, authorization state, upstream
+access/refresh tokens, and proxy token mappings persist in an encrypted
+filesystem store. The separate JWT signing key remains stable across service
+restarts. Neither upstream nor proxy tokens are passed through to tools.
 
 Required values:
 
 ```text
-flow: OAuth Authorization Code + PKCE (S256)
+client-facing flow: OAuth Authorization Code + PKCE (S256)
+upstream flow: Auth0 Authorization Code + forwarded PKCE (S256)
 resource/audience: https://snotes.ke-den.de/mcp
 API scope: gale.read
 access-token signing: RS256
 issuer: exact Auth0 tenant HTTPS issuer
 JWKS: exact Auth0 tenant JWKS endpoint
 subject restriction: exact permitted fictional-test user subject
+fixed upstream callback: https://snotes.ke-den.de/auth/callback
 ```
 
-For every request, the server validates the JWT signature, allowed algorithm,
-issuer, audience, expiration, not-before when present, subject, client
-identifier, and scopes. Tokens without `gale.read`, tokens containing an
-unapproved API scope such as a write scope, JWKS failures, and all verification
-exceptions fail closed. The protected resource metadata is available at:
+Before issuing its own client token, the proxy validates the Auth0 JWT
+signature with JWKS, RS256, exact issuer, exact audience, expiration,
+not-before, permitted subject, client identifier, and `gale.read`. Tokens
+without `gale.read`, tokens containing an unapproved API scope such as a write
+scope, JWKS failures, and verification exceptions fail closed. Tool metadata
+advertises exactly the `gale.read` OAuth scope. Identity and refresh scopes are
+used only by the OIDC flow.
 
-```text
-/.well-known/oauth-protected-resource
-/.well-known/oauth-protected-resource/mcp
-```
+Explicit consent remains enabled. FastMCP's consent binding cookie and CSRF
+checks remain enabled to prevent confused-deputy authorization. Registered
+client redirect URIs are allowlisted; DCR cannot register an arbitrary remote
+callback. Token passthrough is not used.
 
 Anonymous MCP requests receive `401` and a `WWW-Authenticate: Bearer`
 challenge containing the resource metadata location.
 
-### Manual Auth0 and ChatGPT Business Draft block
+### Manual secret and external acceptance gate
 
-These steps must be completed by S in the two secure web UIs. Never paste a
-client secret, token, authorization code, or refresh token into Codex, a report,
-or ordinary shell history.
+Local construction uses placeholders and fictional credentials only. After the
+local MCP Inspector flow passes against real Auth0, S must use `sudoedit` to
+place the real Auth0 client ID/secret and independent storage/JWT keys directly
+into the root-owned mode-0600 Oracle environment file. Secrets must never be
+pasted into Codex, reports, or ordinary terminal history.
 
-1. In ChatGPT Business, switch to the intended workspace. Open
-   **Workspace settings → Permissions & Roles** and confirm
-   **Connected Data Developer mode / Create custom MCP connectors** is enabled.
-2. Open **Workspace settings → Apps → Create**. Enter a distinct draft name,
-   for example `S-notes Gale Fictional R1A`. Set the MCP endpoint to
-   `https://snotes.ke-den.de/mcp`, select **OAuth**, and keep this page open.
-3. Copy the callback URI exactly as ChatGPT displays it. Do not invent,
-   shorten, or add a trailing slash to it. Do not click Publish.
-4. In Auth0 Dashboard, open **Applications → APIs → Create API**. Use a
-   non-private display name, set **Identifier** to
-   `https://snotes.ke-den.de/mcp`, select **RS256**, and create it. In its
-   permissions/scopes, add only `gale.read`. Enable offline access if the
-   current tenant UI exposes that API setting.
-5. In Auth0 Dashboard, confirm the test login identity under
-   **User Management → Users**. Copy its Auth0 `user_id` directly into the
-   root-only Oracle environment file as `SNOTES_GALE_ALLOWED_SUBJECTS`; do not
-   paste it into this conversation.
-6. Preferred registration: if the current ChatGPT creation screen exposes a
-   Client ID Metadata Document URL, use Auth0's current
-   **Applications → Create Application → Import from URL / CIMD** flow with
-   that exact HTTPS URL. Require Authorization Code, PKCE S256, the exact
-   ChatGPT callback URI, the API resource above, and only `gale.read` plus
-   identity/refresh scopes required by the UI.
-7. If ChatGPT does not expose CIMD, use the approved registration fallback:
-   in Auth0 **Applications → Create Application**, create a confidential
-   regular web application for this one Business draft. Add only the exact
-   callback URI shown by ChatGPT, enable Authorization Code + PKCE S256 and
-   refresh-token rotation, and authorize only the API and `gale.read`.
-8. For the static-client fallback, copy the Auth0 Client ID into ChatGPT's
-   **OAuth client ID** field. Move the Client Secret directly from Auth0's
-   secure field to ChatGPT's **OAuth client secret** field. In all evidence
-   represent it only as `***REDACTED***`.
-9. Request `gale.read` and `offline_access` if the current ChatGPT scope field
-   permits them. Do not add a write scope. Click **Scan Tools**, complete the
-   Auth0 login/consent, and confirm exactly `search_notes` and `get_note`.
-10. Click **Create** only to save the app as a Draft. Do not Publish. In a new
-    chat, enable the Dev-labelled draft and run the fictional search/read
-    acceptance matrix. Reconnect or reauthorize if the current UI requires it.
-
-If any current UI lacks the required OAuth flow, callback registration,
-resource/audience, scope, or refresh-token support, stop with
-`AUTH_BLOCKED=YES`. Do not use No Auth, Mixed anonymous access, URL tokens,
-custom API keys, or ad-hoc headers.
+Oracle staging, Caddy changes, and any ChatGPT Business Draft action are
+separate approval gates. They are not performed during local implementation.
+No Auth, anonymous discovery, URL tokens, custom API keys, token passthrough,
+and Mixed Auth are forbidden fallbacks.
 
 ## Oracle layout
 
@@ -233,21 +234,22 @@ public MCP:    https://snotes.ke-den.de/mcp
 `deploy/oracle/snotes-gale-mcp.Caddyfile` is an isolated hostname block.
 The live environment file is root-owned mode `0600`. The mirror is owned by
 `snotes-gale`, mode `0600`; its parent directory is root-owned and not writable
-by the service. Basic Memory's service user, venv, data, token gate, and route
-must not be reused.
+by the service. The mode-0700 OAuth store is the only persistent service-writable
+directory. Basic Memory's service user, venv, data, token gate, and route must
+not be reused.
 
 The current Oracle has one public Caddy already owning 80/443 for Basic Memory.
-The S-notes block must be added as a separate hostname without changing the
-existing `memory.ke-den.de` route. Validate the complete candidate with
-`caddy validate` before reload and keep a root-only pre-change copy plus
-SHA-256. The S-notes site discards proxy access logs, forwards only `/mcp` and
-the two protected-resource metadata paths, caps request bodies at 1 MiB, and
-returns 404 elsewhere.
+The checked-in Caddy block still represents the previously deployed
+resource-server-only route and is deliberately not changed during the local
+OIDC implementation gate. A future approved staging change must add the proxy
+discovery, DCR, authorize, consent, callback, and token paths without changing
+the existing `memory.ke-den.de` route. Validate the complete candidate before
+reload and keep a root-only pre-change copy plus SHA-256.
 
 ## Tests
 
-No dependency installation is part of a test run. The current repository venv
-does not contain pytest, so the unittest-compatible suites can be run as:
+No dependency installation is part of a test run. The standalone FastMCP suite
+uses the separately prepared, pinned environment:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest \
@@ -255,7 +257,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest \
   tests.test_ai_safe_materialization \
   tests.test_ai_foundation
 
-PYTHONDONTWRITEBYTECODE=1 /Users/s/.venvs/snotes-mcp/bin/python -m unittest \
+PYTHONDONTWRITEBYTECODE=1 <isolated-fastmcp-venv>/bin/python -m unittest \
   tests_mcp.test_gale_remote_mcp \
   tests_mcp.test_mcp_protocol
 ```
@@ -264,7 +266,10 @@ Tests create only temporary fictional databases and rules. They cover exact
 tool count/schema, all four FTS fields, safe reads, missing IDs, special
 characters, limits, prompt text as inert data, raw-canary exclusion,
 read-only byte stability, `0600`, owner/path gates, OAuth positive/negative
-claims, challenge metadata, and log redaction.
+claims, discovery, DCR, consent/CSRF binding, PKCE, fixed callback, token
+passthrough rejection, encrypted storage, restart persistence, refresh, and log
+redaction. The synthetic OIDC upstream proves code behavior but does not count
+as a real Auth0 MCP Inspector login.
 
 ## Logging and retention
 
@@ -297,6 +302,10 @@ Known deferred Function Package A LOW findings: cleanup after a hypothetical
 expanded in Package B. L01 exact FTS rowid mapping and L03 mode `0600` are
 enforced here.
 
+Known Package B pre-production item: the encrypted filesystem store is for one
+Oracle process. Horizontal/multi-instance deployment requires a shared
+transactional store and a separate design review.
+
 ## Current primary references
 
 - OpenAI, Developer mode and MCP apps in ChatGPT:
@@ -307,3 +316,7 @@ enforced here.
   <https://auth0.com/docs/get-started/authentication-and-authorization-flow/authorization-code-flow-with-pkce>
 - Auth0, Create applications and CIMD registration:
   <https://auth0.com/docs/get-started/auth0-overview/create-applications>
+- FastMCP, OAuth proxy:
+  <https://gofastmcp.com/servers/auth/oauth-proxy>
+- FastMCP, Auth0 provider:
+  <https://gofastmcp.com/integrations/auth0>

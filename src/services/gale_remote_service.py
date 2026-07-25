@@ -65,7 +65,7 @@ def load_gale_remote_config(
     mirror_root = _required_path(values, "SNOTES_GALE_MIRROR_ROOT")
     issuer_url = _required_https_url(values, "SNOTES_GALE_ISSUER_URL")
     resource_url = _required_https_url(values, "SNOTES_GALE_RESOURCE_URL")
-    audience = _required_value(values, "SNOTES_GALE_AUDIENCE")
+    audience = _required_https_url(values, "SNOTES_GALE_AUDIENCE")
     jwks_url = _required_https_url(values, "SNOTES_GALE_JWKS_URL")
     allowed_subjects = frozenset(
         item.strip()
@@ -96,7 +96,7 @@ def load_gale_remote_config(
     if expected_owner_uid < 0:
         raise GaleRemoteError("invalid_owner_uid")
 
-    return GaleRemoteConfig(
+    config = GaleRemoteConfig(
         mirror_path=mirror_path,
         mirror_root=mirror_root,
         issuer_url=issuer_url,
@@ -108,6 +108,13 @@ def load_gale_remote_config(
         port=port,
         expected_owner_uid=expected_owner_uid,
     )
+    validate_remote_auth_binding(config)
+    return config
+
+
+def validate_remote_auth_binding(config: GaleRemoteConfig) -> None:
+    if config.audience != config.resource_url:
+        raise GaleRemoteError("audience_resource_mismatch")
 
 
 def validate_remote_mirror(config: GaleRemoteConfig) -> GaleRemoteHealth:
