@@ -38,7 +38,10 @@ ALLOWED_IDENTITY_SCOPES = {
     "offline_access",
 }
 ALLOWED_ACCESS_SCOPES = {GALE_READ_SCOPE} | ALLOWED_IDENTITY_SCOPES
-REQUIRED_PROXY_SCOPES = [
+RUNTIME_REQUIRED_SCOPES = [
+    GALE_READ_SCOPE,
+]
+UPSTREAM_REQUESTED_SCOPES = [
     "openid",
     "offline_access",
     GALE_READ_SCOPE,
@@ -74,7 +77,7 @@ class Auth0TokenVerifier(TokenVerifier):
         allowed_subjects: Iterable[str],
         jwks_client: Any | None = None,
     ) -> None:
-        super().__init__(required_scopes=REQUIRED_PROXY_SCOPES)
+        super().__init__(required_scopes=RUNTIME_REQUIRED_SCOPES)
         self.issuer = issuer
         self.audience = audience
         self.allowed_subjects = frozenset(allowed_subjects)
@@ -214,6 +217,22 @@ class RestrictedAuth0Provider(Auth0Provider):
                 ) from error
             raise
 
+    def _build_upstream_authorize_url(
+        self,
+        txn_id: str,
+        transaction: dict[str, Any],
+    ) -> str:
+        upstream_transaction = dict(transaction)
+        requested_scopes = list(transaction.get("scopes") or [])
+        for scope in UPSTREAM_REQUESTED_SCOPES:
+            if scope not in requested_scopes:
+                requested_scopes.append(scope)
+        upstream_transaction["scopes"] = requested_scopes
+        return super()._build_upstream_authorize_url(
+            txn_id,
+            upstream_transaction,
+        )
+
     async def _handle_idp_callback(self, request: Request) -> Any:
         response = await super()._handle_idp_callback(request)
         if response.status_code >= 500:
@@ -349,7 +368,7 @@ def build_auth0_provider(
         base_url=oauth_config.proxy_base_url,
         resource_base_url=oauth_config.proxy_base_url,
         issuer_url=oauth_config.proxy_base_url,
-        required_scopes=REQUIRED_PROXY_SCOPES,
+        required_scopes=RUNTIME_REQUIRED_SCOPES,
         redirect_path=FIXED_AUTH_CALLBACK_PATH,
         allowed_client_redirect_uris=list(
             oauth_config.allowed_client_redirect_uris

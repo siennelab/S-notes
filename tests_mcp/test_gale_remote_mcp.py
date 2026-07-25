@@ -427,6 +427,11 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
     async def test_http_oauth_challenge_metadata_and_negative_tokens(self) -> None:
         provider = self._build_proxy_provider()
         self.assertIs(provider._require_authorization_consent, True)
+        self.assertEqual(provider.required_scopes, ["gale.read"])
+        self.assertEqual(
+            set(provider._default_scope_str.split()),
+            {"gale.read"},
+        )
         app = build_app(self.config, auth_provider=provider)
         transport = httpx.ASGITransport(app=app)
         async with app.router.lifespan_context(app):
@@ -441,7 +446,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(metadata.json()["resource"], RESOURCE)
                 self.assertEqual(
                     metadata.json()["scopes_supported"],
-                    ["openid", "offline_access", "gale.read"],
+                    ["gale.read"],
                 )
                 root_metadata = await client.get(
                     "/.well-known/oauth-protected-resource"
@@ -614,7 +619,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             "redirect_uri": (
                                 "http://127.0.0.1:6274/oauth/callback"
                             ),
-                            "scope": "openid offline_access gale.read",
+                            "scope": "gale.read",
                             "state": "fictional-client-state",
                             "code_challenge": code_challenge,
                             "code_challenge_method": "S256",
@@ -653,6 +658,10 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                         upstream_query["redirect_uri"],
                         ["https://snotes.example.test/auth/callback"],
                     )
+                    self.assertEqual(
+                        set(upstream_query["scope"][0].split()),
+                        {"openid", "offline_access", "gale.read"},
+                    )
 
                     wrong_resource = await client.get(
                         "/authorize",
@@ -662,7 +671,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             "redirect_uri": (
                                 "http://127.0.0.1:6274/oauth/callback"
                             ),
-                            "scope": "openid offline_access gale.read",
+                            "scope": "gale.read",
                             "state": "wrong-resource-state",
                             "code_challenge": code_challenge,
                             "code_challenge_method": "S256",
@@ -745,7 +754,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     refresh_token = token_payload["refresh_token"]
                     self.assertEqual(
                         set(token_payload["scope"].split()),
-                        {"openid", "offline_access", "gale.read"},
+                        {"openid", "gale.read"},
                     )
 
                     initialize = await self._rpc(
@@ -940,9 +949,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                                     "redirect_uri": (
                                         "http://127.0.0.1:6274/oauth/callback"
                                     ),
-                                    "scope": (
-                                        "openid offline_access gale.read"
-                                    ),
+                                    "scope": "gale.read",
                                     "state": f"error-state-{index}",
                                     "code_challenge": _pkce_challenge(
                                         code_verifier
@@ -1323,7 +1330,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
 
             access_token = self._token(
                 azp=self.oauth_config.auth0_client_id,
-                scope="openid offline_access gale.read",
+                scope="openid gale.read",
             )
             refresh_token = "fictional-upstream-refresh-token"
             state["access_token"] = access_token
@@ -1334,7 +1341,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     "refresh_token": refresh_token,
                     "token_type": "Bearer",
                     "expires_in": 300,
-                    "scope": "openid offline_access gale.read",
+                    "scope": "openid gale.read",
                 }
             )
 
