@@ -208,6 +208,8 @@ def verify_gale_mirror(
     path = Path(mirror_path)
     if not path.is_file() or path.is_symlink():
         raise GaleMirrorError("mirror_unavailable")
+    if _file_mode(path) != "0600":
+        raise GaleMirrorError("mirror_permissions_unsafe")
 
     connection = _open_mirror_read_only(path)
     try:
@@ -287,6 +289,32 @@ def verify_gale_mirror(
                 """
             ).fetchone()[0]
         )
+        missing_fts_row_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM mirror_notes AS notes
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM mirror_notes_fts AS search
+                    WHERE search.rowid = notes.mirror_note_id
+                )
+                """
+            ).fetchone()[0]
+        )
+        orphaned_fts_row_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM mirror_notes_fts AS search
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM mirror_notes AS notes
+                    WHERE notes.mirror_note_id = search.rowid
+                )
+                """
+            ).fetchone()[0]
+        )
         full_note_count = int(
             connection.execute(
                 "SELECT COUNT(*) FROM mirror_notes WHERE visibility='full'"
@@ -301,6 +329,8 @@ def verify_gale_mirror(
             raise GaleMirrorError("unsafe_visibility")
         if note_count != fts_count:
             raise GaleMirrorError("fts_count_mismatch")
+        if missing_fts_row_count or orphaned_fts_row_count:
+            raise GaleMirrorError("fts_rowid_mismatch")
         if fts_mismatch_count:
             raise GaleMirrorError("fts_content_mismatch")
         if int(metadata["note_count"]) != note_count:

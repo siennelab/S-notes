@@ -1,0 +1,32 @@
+snotes.ke-den.de {
+	log {
+		output discard
+	}
+
+	@mcp path /mcp /mcp/*
+	handle @mcp {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8767 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+				read_timeout 5m
+				write_timeout 5m
+			}
+		}
+	}
+
+	@oauth_metadata path /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/mcp
+	handle @oauth_metadata {
+		reverse_proxy 127.0.0.1:8767 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 10s
+			}
+		}
+	}
+
+	respond "Not Found" 404
+}

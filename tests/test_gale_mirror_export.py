@@ -619,6 +619,46 @@ class GaleMirrorExportTest(unittest.TestCase):
             )
         self.assertTrue(self.source_database.is_file())
 
+    def test_verify_rejects_non_0600_mode_and_rowid_set_mismatch(self) -> None:
+        export_gale_mirror(
+            source_database=self.source_database,
+            output_path=self.output_path,
+            redaction_rules_path=self.rules_path,
+        )
+
+        os.chmod(self.output_path, 0o640)
+        with self.assertRaisesRegex(
+            GaleMirrorError,
+            "mirror_permissions_unsafe",
+        ):
+            verify_gale_mirror(self.output_path)
+        os.chmod(self.output_path, 0o600)
+
+        connection = sqlite3.connect(self.output_path)
+        try:
+            original = connection.execute(
+                """
+                SELECT title, body, directory, tags
+                FROM mirror_notes_fts
+                WHERE rowid=1
+                """
+            ).fetchone()
+            self.assertIsNotNone(original)
+            connection.execute("DELETE FROM mirror_notes_fts WHERE rowid=1")
+            connection.execute(
+                """
+                INSERT INTO mirror_notes_fts(rowid, title, body, directory, tags)
+                VALUES (9999, ?, ?, ?, ?)
+                """,
+                original,
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with self.assertRaisesRegex(GaleMirrorError, "fts_rowid_mismatch"):
+            verify_gale_mirror(self.output_path)
+
     def test_writer_rejects_raw_mapping_and_materialization_is_non_destructive(
         self,
     ) -> None:

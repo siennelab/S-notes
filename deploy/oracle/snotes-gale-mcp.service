@@ -1,0 +1,36 @@
+[Unit]
+Description=S-notes Gale read-only mirror MCP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=snotes-gale
+Group=snotes-gale
+WorkingDirectory=/opt/snotes-gale-mcp
+EnvironmentFile=/etc/snotes-gale-mcp/service.env
+ExecStart=/opt/snotes-gale-mcp/.venv/bin/python -m src.gale_remote_mcp serve
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/snotes-gale-mcp
+ReadOnlyPaths=/var/lib/snotes-gale-mcp/mirror
+RuntimeDirectory=snotes-gale-mcp
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
