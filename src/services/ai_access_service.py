@@ -1121,10 +1121,15 @@ def materialize_ai_safe_notes_for_target(
     redaction_rules_path: Path = REDACTION_RULES_PATH,
     body_renderer=None,
     redaction_transform=None,
+    source_read_only: bool = False,
 ) -> tuple[list[dict], str]:
     """Read authorized notes and derive safe records without logs or writes."""
     actor = normalize_target_ids([target])[0]
-    with _connect(database_path) as connection:
+    connection = _open_ai_source_connection(
+        database_path,
+        read_only=source_read_only,
+    )
+    try:
         rows = _authorized_rows(connection, actor)
         rows = sorted(
             rows,
@@ -1155,7 +1160,31 @@ def materialize_ai_safe_notes_for_target(
             )
             for row in rows
         ]
+    finally:
+        connection.close()
     return safe_notes, rules.warning if rules else ""
+
+
+def _open_ai_source_connection(
+    database_path: Path,
+    *,
+    read_only: bool,
+) -> sqlite3.Connection:
+    if not read_only:
+        return _connect(database_path)
+
+    source_path = Path(database_path)
+    if not source_path.is_file():
+        raise FileNotFoundError("AI source database is unavailable.")
+    connection = sqlite3.connect(
+        f"{source_path.resolve().as_uri()}?mode=ro",
+        uri=True,
+        timeout=5.0,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    return connection
 
 
 def _match_note(note: dict, needle: str) -> dict | None:
