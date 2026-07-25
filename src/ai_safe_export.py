@@ -8,17 +8,14 @@ from pathlib import Path
 from src.app_paths import AI_READBOX_DIR
 from src.ai_targets import (
     AI_TARGET_COMMON,
-    AI_VISIBILITY_REDACTED,
-    normalize_ai_visibility,
     target_slug,
     visibility_display,
 )
 from src.database import (
     DATABASE_PATH,
     get_note_ai_targets,
-    list_ai_safe_notes_for_target,
 )
-from src.redaction import REDACTION_RULES_PATH, apply_redactions, load_redaction_rules
+from src.redaction import REDACTION_RULES_PATH, apply_redactions
 from src.sensitive_scan import (
     SensitiveFinding,
     findings_to_manifest,
@@ -26,19 +23,24 @@ from src.sensitive_scan import (
     merge_sensitive_findings,
     scan_sensitive_text,
 )
-from src.tag_manager import parse_tags
+from src.services.ai_access_service import materialize_ai_safe_notes_for_target
 from src.time_utils import format_display_datetime, now_shanghai
 
 
 @dataclass
 class AiSafeRenderedNote:
-    note: dict
+    safe_note: dict
     targets: list[str]
     filename: str
     markdown: str
     redacted: bool
     redaction_count: int
     scan_summary: dict[str, SensitiveFinding]
+
+    @property
+    def note(self) -> dict:
+        """Compatibility alias; this record contains safe fields only."""
+        return self.safe_note
 
 
 @dataclass
@@ -78,46 +80,34 @@ class AiSafePackageExporter:
         self.redaction_rules_path = redaction_rules_path
 
     def build_plan(self, target: str) -> AiSafeExportPlan:
-        notes = list_ai_safe_notes_for_target(target, self.database_path)
-        has_redacted_notes = any(
-            normalize_ai_visibility(note.get("ai_visibility")) == AI_VISIBILITY_REDACTED
-            for note in notes
+        safe_notes, redaction_warning = materialize_ai_safe_notes_for_target(
+            target,
+            database_path=self.database_path,
+            redaction_rules_path=self.redaction_rules_path,
+            body_renderer=_html_to_markdown,
+            redaction_transform=apply_redactions,
         )
-        redaction_rules = (
-            load_redaction_rules(self.redaction_rules_path)
-            if has_redacted_notes
-            else None
-        )
-        warnings = [
-            redaction_rules.warning
-        ] if redaction_rules and redaction_rules.warning else []
+        warnings = [redaction_warning] if redaction_warning else []
         rendered_notes: list[AiSafeRenderedNote] = []
         scan_results = []
 
-        for index, note in enumerate(notes, start=1):
-            targets = get_note_ai_targets(note["id"], self.database_path)
-            markdown = self._note_to_ai_markdown(note, targets)
-            redacted = (
-                normalize_ai_visibility(note.get("ai_visibility"))
-                == AI_VISIBILITY_REDACTED
-            )
-            redaction_count = 0
-            if redacted:
-                markdown, redaction_count = apply_redactions(
-                    markdown,
-                    redaction_rules.replacements if redaction_rules else [],
-                )
+        for index, safe_note in enumerate(safe_notes, start=1):
+            targets = get_note_ai_targets(safe_note["note_id"], self.database_path)
+            markdown = self._note_to_ai_markdown(safe_note, targets)
             scan_summary = scan_sensitive_text(markdown)
             scan_results.append(scan_summary)
-            filename = f"{index:03d}_{_safe_filename(note.get('title') or '未命名笔记')}.md"
+            filename = (
+                f"{index:03d}_"
+                f"{_safe_filename(safe_note.get('title') or '未命名笔记')}.md"
+            )
             rendered_notes.append(
                 AiSafeRenderedNote(
-                    note=note,
+                    safe_note=safe_note,
                     targets=targets,
                     filename=filename,
                     markdown=markdown,
-                    redacted=redacted,
-                    redaction_count=redaction_count,
+                    redacted=safe_note["redacted"],
+                    redaction_count=safe_note["redaction_count"],
                     scan_summary=scan_summary,
                 )
             )
@@ -159,32 +149,27 @@ class AiSafePackageExporter:
         suffix = now_shanghai().strftime("%S")
         return self.output_root / f"{target_slug(target)}_{timestamp}_{suffix}"
 
-    def _note_to_ai_markdown(self, note: dict, targets: list[str]) -> str:
-        tags = parse_tags(note.get("tags", ""))
-        tag_text = " ".join(f"#{tag}" for tag in tags) if tags else "无"
-        target_text = "、".join(targets) if targets else "未设置"
-        directory = " / ".join(
-            [
-                note.get("main_category", ""),
-                note.get("sub_category", ""),
-                note.get("sub_sub_category", ""),
-            ]
+    def _note_to_ai_markdown(self, safe_note: dict, targets: list[str]) -> str:
+        tag_text = (
+            " ".join(f"#{tag}" for tag in safe_note["tags"])
+            if safe_note["tags"]
+            else "无"
         )
-        body = _html_to_markdown(note.get("content_html", ""))
+        target_text = "、".join(targets) if targets else "未设置"
         return "\n".join(
             [
-                f"# {note.get('title') or '未命名笔记'}",
+                f"# {safe_note.get('title') or '未命名笔记'}",
                 "",
-                f"- 目录：{directory}",
+                f"- 目录：{safe_note['directory']}",
                 f"- 标签：{tag_text}",
-                f"- AI 可见性：{visibility_display(note.get('ai_visibility', ''))}",
+                f"- AI 可见性：{visibility_display(safe_note['visibility'])}",
                 f"- AI 适用对象：{target_text}",
-                f"- 创建时间：{format_display_datetime(note.get('created_at', ''))}",
-                f"- 更新时间：{format_display_datetime(note.get('updated_at', ''))}",
+                f"- 创建时间：{format_display_datetime(safe_note['created_at'])}",
+                f"- 更新时间：{format_display_datetime(safe_note['updated_at'])}",
                 "",
                 "---",
                 "",
-                body.strip(),
+                safe_note["body"].strip(),
             ]
         ).rstrip()
 
@@ -203,11 +188,13 @@ class AiSafePackageExporter:
             "has_suspicious_sensitive_content": plan.has_sensitive_findings,
             "notes": [
                 {
-                    "id": rendered.note["id"],
-                    "title": rendered.note["title"],
+                    "id": rendered.safe_note["note_id"],
+                    "title": rendered.safe_note["title"],
                     "file": f"notes/{rendered.filename}",
-                    "ai_visibility": rendered.note["ai_visibility"],
-                    "ai_visibility_display": visibility_display(rendered.note["ai_visibility"]),
+                    "ai_visibility": rendered.safe_note["visibility"],
+                    "ai_visibility_display": visibility_display(
+                        rendered.safe_note["visibility"]
+                    ),
                     "ai_targets": rendered.targets,
                     "redacted": rendered.redacted,
                     "redaction_count": rendered.redaction_count,
@@ -215,8 +202,12 @@ class AiSafePackageExporter:
                     "has_suspicious_sensitive_content": has_sensitive_findings(
                         rendered.scan_summary
                     ),
-                    "created_at": format_display_datetime(rendered.note["created_at"]),
-                    "updated_at": format_display_datetime(rendered.note["updated_at"]),
+                    "created_at": format_display_datetime(
+                        rendered.safe_note["created_at"]
+                    ),
+                    "updated_at": format_display_datetime(
+                        rendered.safe_note["updated_at"]
+                    ),
                 }
                 for rendered in plan.rendered_notes
             ],

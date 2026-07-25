@@ -33,7 +33,8 @@ from src.database import (
     _set_note_ai_targets_with_connection,
     _set_note_tags_with_connection,
 )
-from src.redaction import apply_redactions, load_redaction_rules
+from src.redaction import load_redaction_rules
+from src.services.ai_safe_materialization import materialize_ai_safe_note
 from src.tag_manager import parse_tags
 from src.time_utils import now_shanghai, now_shanghai_iso
 
@@ -1085,8 +1086,10 @@ def _safe_note(
     row,
     replacements: list[tuple[str, str]],
     connection=None,
+    *,
+    body_renderer=None,
+    redaction_transform=None,
 ) -> dict:
-    visibility = normalize_ai_visibility(row["ai_visibility"])
     if connection is None:
         tag_records = [
             {"tag_id": 0, "name": tag}
@@ -1094,30 +1097,65 @@ def _safe_note(
         ]
     else:
         tag_records = _note_tag_records(connection, int(row["id"]))
-    values = {
-        "note_id": row["id"],
-        "directory_id": row["directory_id"],
-        "title": str(row["title"] or ""),
-        "directory": " / ".join(
-            str(row[key] or "") for key in ("main_category", "sub_category", "sub_sub_category")
-        ),
-        "tags": [item["name"] for item in tag_records],
-        "tag_ids": [int(item["tag_id"]) for item in tag_records],
-        "tag_records": tag_records,
-        "body": _html_to_text(row["content_html"] or ""),
-        "updated_at": row["updated_at"],
-        "version": note_version_token(int(row["id"]), str(row["updated_at"])),
-        "visibility": visibility,
-    }
-    if visibility == AI_VISIBILITY_REDACTED:
-        for key in ("title", "directory", "body"):
-            values[key] = _apply_safe_redactions(values[key], replacements)
-        values["tags"] = [_apply_safe_redactions(tag, replacements) for tag in values["tags"]]
-        values["tag_records"] = [
-            {"tag_id": item["tag_id"], "name": _apply_safe_redactions(item["name"], replacements)}
-            for item in tag_records
-        ]
+    values = materialize_ai_safe_note(
+        row,
+        authorized=True,
+        replacements=replacements,
+        body_renderer=body_renderer or _html_to_text,
+        redaction_transform=redaction_transform or _apply_safe_redactions_with_count,
+        tag_records=tag_records,
+    )
+    if values is None:
+        raise ValueError("已授权查询返回了不可供 AI 使用的笔记。")
+    values["version"] = note_version_token(
+        int(row["id"]),
+        str(row["updated_at"]),
+    )
     return values
+
+
+def materialize_ai_safe_notes_for_target(
+    target: str,
+    *,
+    database_path: Path = DATABASE_PATH,
+    redaction_rules_path: Path = REDACTION_RULES_PATH,
+    body_renderer=None,
+    redaction_transform=None,
+) -> tuple[list[dict], str]:
+    """Read authorized notes and derive safe records without logs or writes."""
+    actor = normalize_target_ids([target])[0]
+    with _connect(database_path) as connection:
+        rows = _authorized_rows(connection, actor)
+        rows = sorted(
+            rows,
+            key=lambda row: (
+                str(row["updated_at"] or ""),
+                str(row["created_at"] or ""),
+                int(row["id"]),
+            ),
+            reverse=True,
+        )
+        has_redacted_notes = any(
+            normalize_ai_visibility(row["ai_visibility"])
+            == AI_VISIBILITY_REDACTED
+            for row in rows
+        )
+        rules = (
+            load_redaction_rules(redaction_rules_path)
+            if has_redacted_notes
+            else None
+        )
+        safe_notes = [
+            _safe_note(
+                row,
+                rules.replacements if rules else [],
+                connection,
+                body_renderer=body_renderer,
+                redaction_transform=redaction_transform,
+            )
+            for row in rows
+        ]
+    return safe_notes, rules.warning if rules else ""
 
 
 def _match_note(note: dict, needle: str) -> dict | None:
@@ -1475,11 +1513,25 @@ def _clean_timestamp_credential(value: object) -> str:
 
 
 def _apply_safe_redactions(text: str, replacements: list[tuple[str, str]]) -> str:
+    return _apply_safe_redactions_with_count(text, replacements)[0]
+
+
+def _apply_safe_redactions_with_count(
+    text: str,
+    replacements: list[tuple[str, str]],
+) -> tuple[str, int]:
     redacted = text
+    count = 0
     for source, target in replacements:
         if source:
-            redacted = re.sub(re.escape(source), lambda _match: target, redacted, flags=re.IGNORECASE)
-    return redacted
+            redacted, occurrences = re.subn(
+                re.escape(source),
+                lambda _match: target,
+                redacted,
+                flags=re.IGNORECASE,
+            )
+            count += occurrences
+    return redacted, count
 
 
 def _html_to_text(value: str) -> str:
