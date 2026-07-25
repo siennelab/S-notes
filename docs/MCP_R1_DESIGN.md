@@ -4,7 +4,7 @@ Task 13A prepares the S-notes application and its permission boundary for a
 future MCP adapter. It does not install an MCP SDK, run a server, open a public
 port, connect a tunnel, or connect ChatGPT.
 
-Task 13B adds the local headless adapter. It uses the dedicated Python 3.12 MCP
+Task 13B adds the local headless adapter. It uses the dedicated Python 3.13 MCP
 environment and stdio only. It does not connect a tunnel, ChatGPT, or any
 internet service and does not change the packaged desktop App.
 

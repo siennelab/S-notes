@@ -77,7 +77,8 @@ def doctor_report(config: RuntimeConfig) -> dict:
         installed_mcp = "missing"
     health = runtime_health(config)
     python_version = platform.python_version()
-    python_ok = python_version == "3.12.13"
+    python_major, python_minor, *_ = platform.python_version_tuple()
+    python_ok = (python_major, python_minor) == ("3", "13")
     mcp_ok = installed_mcp == MCP_VERSION
     return {
         "status": "ok" if health["status"] == "ok" and python_ok and mcp_ok else "failed",

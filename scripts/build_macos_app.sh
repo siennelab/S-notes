@@ -14,7 +14,7 @@ ICNS_FILE="$BUILD_DIR/S-notes.icns"
 APP_BUNDLE="$DIST_DIR/S-notes.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/S-notes"
 
-EXPECTED_PYTHON="3.9.6"
+EXPECTED_PYTHON_SERIES="3.13"
 EXPECTED_PYSIDE="6.10.3"
 EXPECTED_PYINSTALLER="6.21.0"
 EXPECTED_HOOKS="2026.6"
@@ -60,12 +60,13 @@ done
 [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy not found."
 
 python_version="$($PYTHON -B -c 'import platform; print(platform.python_version())')"
+python_series="$($PYTHON -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 python_arch="$($PYTHON -B -c 'import platform; print(platform.machine())')"
 pyside_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version("PySide6"))')"
 pyinstaller_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version("PyInstaller"))')"
 hooks_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version("pyinstaller-hooks-contrib"))')"
 
-[[ "$python_version" == "$EXPECTED_PYTHON" ]] || fail "Expected Python $EXPECTED_PYTHON, found $python_version."
+[[ "$python_series" == "$EXPECTED_PYTHON_SERIES" ]] || fail "Expected Python ${EXPECTED_PYTHON_SERIES}.x, found $python_version."
 [[ "$python_arch" == "arm64" ]] || fail "Expected arm64 Python, found $python_arch."
 [[ "$pyside_version" == "$EXPECTED_PYSIDE" ]] || fail "Expected PySide6 $EXPECTED_PYSIDE, found $pyside_version."
 [[ "$pyinstaller_version" == "$EXPECTED_PYINSTALLER" ]] || fail "Expected PyInstaller $EXPECTED_PYINSTALLER, found $pyinstaller_version."

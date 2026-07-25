@@ -7,12 +7,12 @@ tools.
 
 ## Two Separate Python Environments
 
-- Desktop App: repository `.venv`, Python 3.9.6, PySide6 6.10.3.
-- MCP Server: `/Users/s/.venvs/snotes-mcp`, Python 3.12.13,
+- Desktop App: repository `.venv`, Python 3.13.x, PySide6 6.10.3.
+- MCP Server: `/Users/s/.venvs/snotes-mcp`, Python 3.13.x,
   `mcp[cli]==1.28.1`.
 
-They remain separate because the accepted desktop runtime is Python 3.9.6,
-while MCP 1.28.1 is installed in the dedicated Python 3.12 environment. Task
+They remain separate because the accepted desktop runtime is Python 3.13.x,
+while MCP 1.28.1 is installed in the dedicated Python 3.13 environment. Task
 13B does not upgrade, replace, or merge either environment. The locked MCP
 dependency is recorded in `requirements-mcp.txt`; do not add it to the desktop
 `requirements.txt`.
@@ -141,7 +141,7 @@ npx @modelcontextprotocol/inspector@0.22.0 \
   -e SNOTES_MCP_DATABASE_PATH="$fixture_root/s_notes.db" \
   -e SNOTES_MCP_REDACTION_RULES_PATH="$fixture_root/redaction_rules.json" \
   -e SNOTES_MCP_CONFIG_PATH="$fixture_root/config/mcp_server.json" \
-  -- /Users/s/Documents/Python们/S-notes/scripts/run_snotes_mcp_stdio.sh
+  -- /Users/s/Documents/项目/S-notes/scripts/run_snotes_mcp_stdio.sh
 ```
 
 Task 13B's local acceptance launch used Inspector 0.22.0. If that package is
@@ -198,7 +198,7 @@ its authenticated arguments. Its stdio command value will be this stable local
 entrypoint:
 
 ```text
---mcp.command /Users/s/Documents/Python们/S-notes/scripts/run_snotes_mcp_stdio.sh
+--mcp.command /Users/s/Documents/项目/S-notes/scripts/run_snotes_mcp_stdio.sh
 ```
 
 Do not invent or commit the remaining Task 13C command, Tunnel ID, or API key.
