@@ -23,7 +23,9 @@ from key_value.aio.stores.filetree import (
     FileTreeV1KeySanitizationStrategy,
 )
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
-from mcp.server.auth.provider import AuthorizeError
+from mcp.server.auth.provider import AuthorizeError, TokenError
+from starlette.requests import Request
+from starlette.responses import HTMLResponse
 
 from src.services.gale_remote_service import GALE_READ_SCOPE
 
@@ -212,6 +214,38 @@ class RestrictedAuth0Provider(Auth0Provider):
                 ) from error
             raise
 
+    async def _handle_idp_callback(self, request: Request) -> Any:
+        response = await super()._handle_idp_callback(request)
+        if response.status_code >= 500:
+            _safe_proxy_failure(
+                "upstream_token_exchange_failed",
+                response.status_code,
+            )
+            return HTMLResponse(
+                "OAuth token exchange failed.",
+                status_code=response.status_code,
+            )
+        return response
+
+    async def exchange_refresh_token(
+        self,
+        client: Any,
+        refresh_token: Any,
+        scopes: list[str],
+    ) -> Any:
+        try:
+            return await super().exchange_refresh_token(
+                client,
+                refresh_token,
+                scopes,
+            )
+        except TokenError as error:
+            _safe_proxy_failure("upstream_refresh_failed", 400)
+            raise TokenError(
+                "invalid_grant",
+                "upstream_refresh_failed",
+            ) from error
+
 
 def load_gale_oauth_proxy_config(
     environment: dict[str, str] | None = None,
@@ -346,6 +380,14 @@ def _token_scopes(claims: dict[str, Any]) -> set[str]:
 
 def _safe_auth_failure(code: str) -> None:
     LOGGER.warning("auth_event status=failed error_code=%s", code)
+
+
+def _safe_proxy_failure(code: str, http_status: int) -> None:
+    LOGGER.warning(
+        "oauth_proxy_event status=failed error_code=%s http_status=%d",
+        code,
+        http_status,
+    )
 
 
 def _required_value(

@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -27,7 +28,12 @@ from fastmcp.server.auth import TokenVerifier
 from fastmcp.server.auth.oidc_proxy import OIDCConfiguration
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from starlette.routing import Route
 
 from src.database import (
@@ -879,6 +885,168 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             gc.collect()
             await asyncio.sleep(0.05)
 
+    async def test_upstream_token_exchange_error_logs_are_redacted(self) -> None:
+        _configure_safe_logging()
+        upstream = await self._start_fictional_auth0()
+        sensitive_values = {
+            "access_token_json": "FICTIONAL_ERROR_ACCESS_TOKEN",
+            "refresh_token_json": "FICTIONAL_ERROR_REFRESH_TOKEN",
+            "client_secret_json": "FICTIONAL_ERROR_CLIENT_SECRET",
+            "authorization_code_json": "FICTIONAL_ERROR_AUTHORIZATION_CODE",
+            "html": "FICTIONAL_HTML_ERROR_SECRET",
+            "oversized": "FICTIONAL_OVERSIZED_ERROR_SECRET",
+            "network": "FICTIONAL_NETWORK_ERROR_SECRET",
+            "timeout": "FICTIONAL_TIMEOUT_ERROR_SECRET",
+        }
+        upstream["sensitive_values"] = sensitive_values
+        provider = self._build_proxy_provider(
+            oidc_configuration=upstream["oidc_configuration"]
+        )
+        app = build_app(self.config, auth_provider=provider)
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with app.router.lifespan_context(app):
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="https://snotes.example.test",
+                    follow_redirects=False,
+                ) as client:
+                    registration = await client.post(
+                        "/register",
+                        json={
+                            "client_name": "fictional-error-test-client",
+                            "redirect_uris": [
+                                "http://127.0.0.1:6274/oauth/callback"
+                            ],
+                            "grant_types": [
+                                "authorization_code",
+                                "refresh_token",
+                            ],
+                            "response_types": ["code"],
+                            "token_endpoint_auth_method": "none",
+                        },
+                    )
+                    self.assertEqual(registration.status_code, 201)
+                    client_id = registration.json()["client_id"]
+
+                    for index, mode in enumerate(sensitive_values):
+                        with self.subTest(mode=mode):
+                            code_verifier = chr(65 + index) * 64
+                            authorize = await client.get(
+                                "/authorize",
+                                params={
+                                    "response_type": "code",
+                                    "client_id": client_id,
+                                    "redirect_uri": (
+                                        "http://127.0.0.1:6274/oauth/callback"
+                                    ),
+                                    "scope": (
+                                        "openid offline_access gale.read"
+                                    ),
+                                    "state": f"error-state-{index}",
+                                    "code_challenge": _pkce_challenge(
+                                        code_verifier
+                                    ),
+                                    "code_challenge_method": "S256",
+                                    "resource": RESOURCE,
+                                },
+                            )
+                            consent = await client.get(
+                                authorize.headers["location"]
+                            )
+                            approve = await client.post(
+                                "/consent",
+                                data={
+                                    "txn_id": _hidden_value(
+                                        consent.text,
+                                        "txn_id",
+                                    ),
+                                    "csrf_token": _hidden_value(
+                                        consent.text,
+                                        "csrf_token",
+                                    ),
+                                    "action": "approve",
+                                },
+                            )
+                            async with httpx.AsyncClient(
+                                follow_redirects=False
+                            ) as upstream_client:
+                                upstream_authorize = (
+                                    await upstream_client.get(
+                                        approve.headers["location"]
+                                    )
+                                )
+                            callback_url = upstream_authorize.headers[
+                                "location"
+                            ]
+                            upstream["failure_mode"] = mode
+                            original_client_factory = (
+                                provider._upstream_oauth_client
+                            )
+                            if mode in {"network", "timeout"}:
+                                exception = (
+                                    httpx.ConnectError(
+                                        sensitive_values[mode]
+                                    )
+                                    if mode == "network"
+                                    else httpx.ReadTimeout(
+                                        sensitive_values[mode]
+                                    )
+                                )
+
+                                @asynccontextmanager
+                                async def failing_client():
+                                    class FailureClient:
+                                        async def fetch_token(
+                                            self,
+                                            **_kwargs,
+                                        ):
+                                            raise exception
+
+                                    yield FailureClient()
+
+                                provider._upstream_oauth_client = (
+                                    failing_client
+                                )
+                            try:
+                                with self.assertLogs(
+                                    "snotes_gale_mcp.auth",
+                                    level="WARNING",
+                                ) as captured:
+                                    callback = await client.get(callback_url)
+                            finally:
+                                provider._upstream_oauth_client = (
+                                    original_client_factory
+                                )
+                            self.assertEqual(callback.status_code, 500)
+                            self.assertEqual(
+                                callback.text,
+                                "OAuth token exchange failed.",
+                            )
+                            log_text = "\n".join(captured.output)
+                            self.assertIn(
+                                "error_code=upstream_token_exchange_failed",
+                                log_text,
+                            )
+                            self.assertIn("http_status=500", log_text)
+                            for sensitive in sensitive_values.values():
+                                self.assertNotIn(sensitive, log_text)
+                                self.assertNotIn(
+                                    sensitive,
+                                    callback.text,
+                                )
+                            self.assertNotIn(
+                                "X" * 256,
+                                log_text,
+                            )
+        finally:
+            upstream["server"].should_exit = True
+            await upstream["task"]
+            upstream["listener"].close()
+            await asyncio.sleep(0.05)
+            gc.collect()
+            await asyncio.sleep(0.05)
+
     def test_oauth_storage_and_key_startup_gates(self) -> None:
         mismatched_resource = replace(
             self.config,
@@ -1097,6 +1265,38 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             form = await request.form()
             if form.get("audience") != RESOURCE:
                 return JSONResponse({"error": "invalid_audience"}, status_code=400)
+            failure_mode = state.get("failure_mode")
+            sensitive_values = state.get("sensitive_values", {})
+            sensitive_fields = {
+                "access_token_json": "access_token",
+                "refresh_token_json": "refresh_token",
+                "client_secret_json": "client_secret",
+                "authorization_code_json": "code",
+            }
+            if failure_mode in sensitive_fields:
+                return JSONResponse(
+                    {
+                        "error": "invalid_grant",
+                        sensitive_fields[failure_mode]: sensitive_values[
+                            failure_mode
+                        ],
+                    },
+                    status_code=400,
+                )
+            if failure_mode == "html":
+                return HTMLResponse(
+                    (
+                        "<html><body>OAuth failed: "
+                        f"{sensitive_values[failure_mode]}"
+                        "</body></html>"
+                    ),
+                    status_code=502,
+                )
+            if failure_mode == "oversized":
+                return PlainTextResponse(
+                    ("X" * 131_072) + sensitive_values[failure_mode],
+                    status_code=502,
+                )
             if form.get("grant_type") == "authorization_code":
                 if (
                     form.get("code") != state.get("code")
