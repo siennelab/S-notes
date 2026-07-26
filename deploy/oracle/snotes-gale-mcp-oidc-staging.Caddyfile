@@ -1,0 +1,47 @@
+# Recovery fragment for the accepted 8877 OIDC Proxy + Mixed Auth staging.
+# The backend remains localhost-only; Caddy owns the public TLS endpoint.
+# Merge this site block into the existing Caddy configuration only after a
+# root-only backup and `caddy validate`. Do not alter memory.ke-den.de.
+snotes.ke-den.de {
+	log {
+		# Current privacy boundary: do not write request access logs.
+		output discard
+	}
+
+	@oidc_proxy path /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/mcp /.well-known/oauth-authorization-server /register /authorize /consent /auth/callback /token /revoke
+	handle @oidc_proxy {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8877 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+				read_timeout 5m
+				write_timeout 5m
+			}
+		}
+	}
+
+	@mcp path /mcp /mcp/*
+	handle @mcp {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8877 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+				read_timeout 5m
+				write_timeout 5m
+			}
+		}
+	}
+
+	respond "Not Found" 404
+}
+
+# Function Package C gate, not implemented here: an explicitly switchable
+# metadata-only OAuth timeline may record timestamp, method, path, status, and
+# client category. It must never record query strings, bodies, Authorization
+# headers, tokens, authorization codes, subjects, search terms, or note text.

@@ -16,6 +16,7 @@ import unittest
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -572,6 +573,265 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(self.mirror), log_text)
         self.assertNotIn(self._token(), log_text)
 
+    async def test_mixed_auth_anonymous_discovery_and_tool_challenge(
+        self,
+    ) -> None:
+        app = build_app(
+            self.config,
+            auth_provider=self.verifier,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="https://snotes.example.test",
+            ) as client:
+                optional_sse = await client.get(
+                    "/mcp",
+                    headers={"Accept": "text/event-stream"},
+                )
+                self.assertEqual(optional_sse.status_code, 405)
+                self.assertIn(
+                    "POST",
+                    optional_sse.headers["allow"].split(", "),
+                )
+                self.assertEqual(
+                    optional_sse.content,
+                    b"Method Not Allowed",
+                )
+
+                initialize = await self._rpc(
+                    client,
+                    request_id=40,
+                    method="initialize",
+                    params={
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "fictional-anonymous-discovery",
+                            "version": "1",
+                        },
+                    },
+                )
+                self.assertEqual(initialize.status_code, 200)
+                capabilities = initialize.json()["result"]["capabilities"]
+                self.assertNotIn("logging", capabilities)
+
+                initialized = await client.post(
+                    "/mcp",
+                    headers={
+                        "Accept": "application/json, text/event-stream",
+                        "Content-Type": "application/json",
+                        "MCP-Protocol-Version": "2025-11-25",
+                    },
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized",
+                    },
+                )
+                self.assertEqual(initialized.status_code, 202)
+
+                logging_set_level = await self._rpc(
+                    client,
+                    request_id=41,
+                    method="logging/setLevel",
+                    params={"level": "debug"},
+                )
+                self.assertEqual(logging_set_level.status_code, 401)
+
+                ping = await self._rpc(
+                    client,
+                    request_id=42,
+                    method="ping",
+                    params={},
+                )
+                self.assertEqual(ping.status_code, 200)
+
+                tools = await self._rpc(
+                    client,
+                    request_id=43,
+                    method="tools/list",
+                    params={},
+                )
+                self.assertEqual(tools.status_code, 200)
+                tool_payloads = tools.json()["result"]["tools"]
+                self.assertEqual(
+                    [tool["name"] for tool in tool_payloads],
+                    ["search_notes", "get_note"],
+                )
+                expected_security_schemes = [
+                    {
+                        "type": "oauth2",
+                        "scopes": ["gale.read"],
+                    }
+                ]
+                for tool in tool_payloads:
+                    self.assertIn("securitySchemes", tool)
+                    self.assertIn("_meta", tool)
+                    self.assertIn("securitySchemes", tool["_meta"])
+                    self.assertEqual(
+                        tool["securitySchemes"],
+                        expected_security_schemes,
+                    )
+                    self.assertEqual(
+                        tool["_meta"]["securitySchemes"],
+                        expected_security_schemes,
+                    )
+                    self.assertEqual(
+                        tool["securitySchemes"],
+                        tool["_meta"]["securitySchemes"],
+                    )
+                serialized_tools = json.dumps(
+                    tool_payloads,
+                    ensure_ascii=False,
+                )
+                self.assertNotIn("noauth", serialized_tools)
+                self.assertNotIn("offline_access", serialized_tools)
+
+                with (
+                    patch(
+                        "src.gale_remote_mcp.search_remote_mirror"
+                    ) as search_query,
+                    patch(
+                        "src.gale_remote_mcp.get_remote_note"
+                    ) as read_query,
+                ):
+                    anonymous_search = await self._rpc(
+                        client,
+                        request_id=44,
+                        method="tools/call",
+                        params={
+                            "name": "search_notes",
+                            "arguments": {
+                                "query": "ORBITAL_TITLE_TERM",
+                                "limit": 10,
+                            },
+                        },
+                    )
+                    anonymous_read = await self._rpc(
+                        client,
+                        request_id=45,
+                        method="tools/call",
+                        params={
+                            "name": "get_note",
+                            "arguments": {
+                                "note_id": self.note_ids["common"],
+                            },
+                        },
+                    )
+                    for response in (anonymous_search, anonymous_read):
+                        self.assertEqual(response.status_code, 200)
+                        result = response.json()["result"]
+                        self.assertTrue(result["isError"])
+                        challenges = result["_meta"][
+                            "mcp/www_authenticate"
+                        ]
+                        self.assertEqual(len(challenges), 1)
+                        self.assertIn(
+                            "resource_metadata="
+                            '"https://snotes.example.test/'
+                            '.well-known/oauth-protected-resource"',
+                            challenges[0],
+                        )
+                        self.assertIn(
+                            'error="insufficient_scope"',
+                            challenges[0],
+                        )
+                        self.assertIn(
+                            'error_description="Authentication with '
+                            'gale.read is required."',
+                            challenges[0],
+                        )
+                    search_query.assert_not_called()
+                    read_query.assert_not_called()
+
+                anonymous_text = json.dumps(
+                    {
+                        "initialize": initialize.json(),
+                        "tools": tools.json(),
+                        "search": anonymous_search.json(),
+                        "read": anonymous_read.json(),
+                    },
+                    ensure_ascii=False,
+                )
+                for private_value in (
+                    "ORBITAL_TITLE_TERM",
+                    "ORBITAL_BODY_TERM",
+                    "ORBITAL_DIR_TERM",
+                    "ORBITAL_TAG_TERM",
+                    *RAW_CANARIES,
+                ):
+                    self.assertNotIn(private_value, anonymous_text)
+
+                authenticated_search = await self._rpc(
+                    client,
+                    request_id=46,
+                    method="tools/call",
+                    params={
+                        "name": "search_notes",
+                        "arguments": {
+                            "query": "ORBITAL_TITLE_TERM",
+                            "limit": 10,
+                        },
+                    },
+                    token=self._token(),
+                )
+                self.assertEqual(authenticated_search.status_code, 200)
+                self.assertEqual(
+                    authenticated_search.json()["result"][
+                        "structuredContent"
+                    ]["result_count"],
+                    1,
+                )
+
+                authenticated_read = await self._rpc(
+                    client,
+                    request_id=47,
+                    method="tools/call",
+                    params={
+                        "name": "get_note",
+                        "arguments": {
+                            "note_id": self.note_ids["common"],
+                        },
+                    },
+                    token=self._token(),
+                )
+                self.assertEqual(authenticated_read.status_code, 200)
+                self.assertEqual(
+                    authenticated_read.json()["result"][
+                        "structuredContent"
+                    ]["status"],
+                    "ok",
+                )
+
+                rejected_tokens = (
+                    "not-a-token",
+                    self._token(scope="openid"),
+                    self._token(
+                        sub="auth0|unauthorized-fictional-user"
+                    ),
+                    self._token(aud="https://wrong.example.test/mcp"),
+                )
+                with patch(
+                    "src.gale_remote_mcp.search_remote_mirror"
+                ) as rejected_query:
+                    for index, rejected_token in enumerate(rejected_tokens):
+                        rejected = await self._rpc(
+                            client,
+                            request_id=50 + index,
+                            method="tools/call",
+                            params={
+                                "name": "search_notes",
+                                "arguments": {
+                                    "query": "ORBITAL_TITLE_TERM",
+                                    "limit": 10,
+                                },
+                            },
+                            token=rejected_token,
+                        )
+                        self.assertEqual(rejected.status_code, 401)
+                    rejected_query.assert_not_called()
+
     async def test_complete_fictional_oidc_proxy_flow_and_restart(self) -> None:
         _configure_safe_logging()
         self.assertGreaterEqual(
@@ -825,7 +1085,14 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                         method="tools/list",
                         params={},
                     )
-                    self.assertEqual(no_token.status_code, 401)
+                    self.assertEqual(no_token.status_code, 200)
+                    self.assertEqual(
+                        [
+                            tool["name"]
+                            for tool in no_token.json()["result"]["tools"]
+                        ],
+                        ["search_notes", "get_note"],
+                    )
                     wrong_token = await self._rpc(
                         client,
                         request_id=75,
