@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from difflib import SequenceMatcher
 
 from PySide6.QtCore import QMimeData, QSignalBlocker, Qt
@@ -55,6 +56,9 @@ MARKDOWN_FENCE_RE = re.compile(
 )
 MARKDOWN_HEADING_RE = re.compile(
     r"^[ \t]{0,3}#{1,6}(?:[ \t]+|(?=\d+[、.)．。]))"
+)
+PASTE_LIST_PREFIX_RE = re.compile(
+    r"^[ \t]*(?:[-+*•◦▪‣][ \t]+|\d+[.)、．。][ \t]*)"
 )
 MARKDOWN_QUOTE_RE = re.compile(r"^([ \t]{0,3})>[ \t]?")
 MARKDOWN_TASK_RE = re.compile(r"^([ ]{0,3})[-+*][ \t]+\[[ xX]\][ \t]+")
@@ -286,12 +290,19 @@ class NotesEditor(QTextEdit):
             if source.hasHtml():
                 safe_html = self.sanitize_html(source.html())
                 if safe_html.strip():
+                    normalized_html, html_text = self._normalized_html_and_text(
+                        safe_html
+                    )
                     if source.hasText():
                         source_text = self.sanitize_pasted_text(source.text())
-                        if self._plain_text_from_html(safe_html) != source_text:
-                            self.insertPlainText(source_text)
+                        representation, content = self._select_paste_representation(
+                            normalized_html, html_text, source_text
+                        )
+                        if representation == "plain":
+                            if content:
+                                self.insertPlainText(content)
                             return
-                    self.insertHtml(safe_html)
+                    self.insertHtml(normalized_html)
                     return
 
             text = self.sanitize_pasted_text(source.text() if source.hasText() else "")
@@ -1065,10 +1076,143 @@ class NotesEditor(QTextEdit):
         return clean
 
     @staticmethod
-    def _plain_text_from_html(markup: str) -> str:
+    def _normalized_html_and_text(markup: str) -> tuple[str, str]:
         document = QTextDocument()
         document.setHtml(markup or "")
-        return NotesEditor.sanitize_pasted_text(document.toPlainText())
+        return (
+            document.toHtml(),
+            NotesEditor.sanitize_pasted_text(document.toPlainText()),
+        )
+
+    @staticmethod
+    def _comparison_text(text: str) -> str:
+        normalized = NotesEditor.sanitize_pasted_text(text)
+        normalized = normalized.replace("\u2028", "\n").replace("\u2029", "\n")
+        normalized = normalized.replace("\u00a0", " ")
+        normalized = normalized.replace("\u2007", " ").replace("\u202f", " ")
+        normalized = unicodedata.normalize("NFC", normalized)
+        lines = [line.rstrip() for line in normalized.split("\n")]
+        while lines and not lines[-1]:
+            lines.pop()
+        return "\n".join(lines)
+
+    @classmethod
+    def _semantic_lines(
+        cls, text: str, *, strip_list_prefixes: bool = False
+    ) -> list[str]:
+        lines: list[str] = []
+        for line in cls._comparison_text(text).split("\n"):
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+            lines.append(
+                PASTE_LIST_PREFIX_RE.sub("", clean_line)
+                if strip_list_prefixes
+                else clean_line
+            )
+        return lines
+
+    @classmethod
+    def _semantic_characters(
+        cls, text: str, *, strip_list_prefixes: bool = False
+    ) -> str:
+        return "".join(
+            re.sub(r"\s+", "", line)
+            for line in cls._semantic_lines(
+                text, strip_list_prefixes=strip_list_prefixes
+            )
+        )
+
+    @staticmethod
+    def _is_line_subsequence(needle: list[str], haystack: list[str]) -> bool:
+        if not needle:
+            return True
+        position = 0
+        for line in haystack:
+            if line == needle[position]:
+                position += 1
+                if position == len(needle):
+                    return True
+        return False
+
+    @classmethod
+    def _merge_visible_texts(cls, html_text: str, plain_text: str) -> str:
+        html_lines = cls.sanitize_pasted_text(html_text).rstrip("\n").split("\n")
+        plain_lines = cls.sanitize_pasted_text(plain_text).rstrip("\n").split("\n")
+        html_keys = [cls._comparison_text(line) for line in html_lines]
+        plain_keys = [cls._comparison_text(line) for line in plain_lines]
+        merged: list[str] = []
+        for tag, html_start, html_end, plain_start, plain_end in SequenceMatcher(
+            None, html_keys, plain_keys, autojunk=False
+        ).get_opcodes():
+            if tag == "equal":
+                merged.extend(plain_lines[plain_start:plain_end])
+            elif tag == "delete":
+                merged.extend(html_lines[html_start:html_end])
+            elif tag == "insert":
+                merged.extend(plain_lines[plain_start:plain_end])
+            else:
+                merged.extend(html_lines[html_start:html_end])
+                merged.extend(plain_lines[plain_start:plain_end])
+        return "\n".join(merged)
+
+    @classmethod
+    def _select_paste_representation(
+        cls,
+        normalized_html: str,
+        html_text: str,
+        plain_text: str,
+    ) -> tuple[str, str]:
+        if not html_text and plain_text:
+            return "plain", plain_text
+        if html_text and not plain_text:
+            return "html", normalized_html
+        if not html_text and not plain_text:
+            return "plain", ""
+
+        html_comparison = cls._comparison_text(html_text)
+        plain_comparison = cls._comparison_text(plain_text)
+        if html_comparison == plain_comparison:
+            return "html", normalized_html
+
+        html_has_list = bool(re.search(r"<(?:ol|ul)\b", normalized_html, re.I))
+        html_semantic_lines = cls._semantic_lines(html_text)
+        plain_semantic_lines = cls._semantic_lines(
+            plain_text, strip_list_prefixes=html_has_list
+        )
+        if html_semantic_lines == plain_semantic_lines:
+            html_nonblank = [
+                line
+                for line in html_comparison.split("\n")
+                if line.strip()
+            ]
+            plain_nonblank = [
+                line
+                for line in plain_comparison.split("\n")
+                if line.strip()
+            ]
+            if html_nonblank == plain_nonblank:
+                return "plain", plain_text
+            return "html", normalized_html
+        if cls._is_line_subsequence(plain_semantic_lines, html_semantic_lines):
+            return "html", normalized_html
+        if cls._is_line_subsequence(html_semantic_lines, plain_semantic_lines):
+            return "plain", plain_text
+        html_characters = cls._semantic_characters(html_text)
+        plain_characters = cls._semantic_characters(
+            plain_text, strip_list_prefixes=html_has_list
+        )
+        if html_characters == plain_characters:
+            return "plain", plain_text
+        if plain_characters and plain_characters in html_characters:
+            return "html", normalized_html
+        if html_characters and html_characters in plain_characters:
+            return "plain", plain_text
+        if plain_comparison and plain_comparison in html_comparison:
+            return "html", normalized_html
+        if html_comparison and html_comparison in plain_comparison:
+            return "plain", plain_text
+        return "plain", cls._merge_visible_texts(html_text, plain_text)
 
     @classmethod
     def markdown_to_html(cls, text: str) -> str:

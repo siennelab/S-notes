@@ -64,13 +64,10 @@ from src.database import (
     rename_directory,
     restore_note,
     restore_trash_directory,
+    save_editor_state,
     search_notes,
     set_note_pinned,
-    set_note_ai_targets,
-    set_note_ai_visibility,
-    set_note_tags,
     soft_delete_note,
-    update_note,
 )
 from src.editor import NotesEditor
 from src.editor_toolbar import EditorToolbar
@@ -1098,6 +1095,8 @@ class MainWindow(QMainWindow):
         self.update_delete_button_state()
 
     def exit_trash(self) -> None:
+        if not self.force_save_current_note(refresh_tree=False):
+            return
         note_id = self.note_id_before_trash
         self.note_id_before_trash = None
         self.return_to_directory()
@@ -1659,10 +1658,7 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         try:
             note_id = self.current_note["id"]
-            set_note_tags(note_id, parse_tags(self.tags_input.text()))
-            set_note_ai_visibility(note_id, self.ai_visibility_combo.currentText())
-            set_note_ai_targets(note_id, self.selected_ai_targets())
-            note = update_note(
+            note = save_editor_state(
                 note_id,
                 title=self.title_input.text().strip() or "未命名笔记",
                 content_html=self.body_edit.note_content_html(),
@@ -1671,10 +1667,10 @@ class MainWindow(QMainWindow):
                 sub_category=self.sub_category_combo.currentText() or DEFAULT_SUB_CATEGORY,
                 sub_sub_category=self.sub_sub_category_combo.currentText()
                 or DEFAULT_SUB_SUB_CATEGORY,
+                tags=parse_tags(self.tags_input.text()),
+                ai_visibility=self.ai_visibility_combo.currentText(),
+                ai_targets=self.selected_ai_targets(),
             )
-            note = get_note(note["id"])
-            if note is None:
-                raise RuntimeError("保存后读取失败")
         except Exception as error:
             self.status_label.setText(f"保存失败：{error}")
             self.has_unsaved_changes = True
@@ -1866,6 +1862,12 @@ class MainWindow(QMainWindow):
             self, "重命名笔记", "笔记标题", text=note["title"]
         )
         if not accepted:
+            return
+        if (
+            self.current_note
+            and self.current_note["id"] == note_id
+            and not self.force_save_current_note(refresh_tree=False)
+        ):
             return
         try:
             renamed = rename_note(note_id, title)

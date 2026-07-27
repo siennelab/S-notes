@@ -703,8 +703,15 @@ def rename_note(
     note_id: int, new_title: str, database_path: Path = DATABASE_PATH
 ) -> dict:
     clean_title = new_title.strip() or "未命名笔记"
-    timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            "SELECT updated_at FROM notes WHERE id = ? AND is_deleted = 0",
+            (note_id,),
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+        timestamp = _next_note_updated_at(current["updated_at"])
         connection.execute(
             """
             UPDATE notes
@@ -986,6 +993,104 @@ def update_note(
     if note is None:
         raise RuntimeError(f"保存后读取失败: {note_id}")
     return note
+
+
+def save_editor_state(
+    note_id: int,
+    *,
+    title: str,
+    content_html: str,
+    main_category: str,
+    sub_category: str,
+    sub_sub_category: str,
+    tags: list[str],
+    ai_visibility: str,
+    ai_targets: list[str],
+    database_path: Path = DATABASE_PATH,
+) -> dict:
+    """Atomically save one complete editor state with a monotonic version."""
+
+    normalized_tags = _normalize_note_tags(tags)
+    clean_visibility = validate_ai_visibility(ai_visibility)
+    normalized_target_ids = normalize_target_ids(ai_targets)
+    with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            """
+            SELECT main_category, sub_category, sub_sub_category, updated_at
+            FROM notes
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (note_id,),
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+
+        timestamp = _next_note_updated_at(current["updated_at"])
+        next_main = main_category or current["main_category"]
+        next_sub = sub_category or current["sub_category"]
+        next_sub_sub = sub_sub_category or current["sub_sub_category"]
+        directory_id = _ensure_directory_path(
+            connection, next_main, next_sub, next_sub_sub
+        )
+        _set_note_tags_with_connection(
+            connection, note_id, normalized_tags, timestamp
+        )
+        _set_note_ai_targets_with_connection(
+            connection, note_id, normalized_target_ids, timestamp
+        )
+        connection.execute(
+            """
+            UPDATE notes
+            SET title = ?,
+                body_rich_text = ?,
+                content_html = ?,
+                directory_id = ?,
+                main_category = ?,
+                sub_category = ?,
+                sub_sub_category = ?,
+                tags = ?,
+                ai_visibility = ?,
+                updated_at = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (
+                title,
+                content_html,
+                content_html,
+                directory_id,
+                next_main,
+                next_sub,
+                next_sub_sub,
+                ", ".join(normalized_tags),
+                clean_visibility,
+                timestamp,
+                note_id,
+            ),
+        )
+        saved = connection.execute(
+            """
+            SELECT
+                id,
+                title,
+                content_html,
+                main_category,
+                sub_category,
+                sub_sub_category,
+                tags,
+                ai_visibility,
+                is_pinned,
+                is_deleted,
+                created_at,
+                updated_at
+            FROM notes
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (note_id,),
+        ).fetchone()
+        if saved is None:
+            raise RuntimeError(f"保存后读取失败: {note_id}")
+    return dict(saved)
 
 
 def _next_note_updated_at(previous: str) -> str:
