@@ -706,6 +706,33 @@ def rename_note(
     with _connect(database_path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         current = connection.execute(
+            "SELECT title, updated_at FROM notes WHERE id = ? AND is_deleted = 0",
+            (note_id,),
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+        if clean_title != current["title"]:
+            timestamp = _next_note_updated_at(current["updated_at"])
+            connection.execute(
+                """
+                UPDATE notes
+                SET title = ?, updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                (clean_title, timestamp, note_id),
+            )
+    note = get_note(note_id, database_path)
+    if note is None:
+        raise RuntimeError(f"重命名后读取失败: {note_id}")
+    return note
+
+
+def soft_delete_note(note_id: int, database_path: Path = DATABASE_PATH) -> None:
+    deleted_at = now_shanghai_iso()
+    trash_group_id = uuid.uuid4().hex
+    with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
             "SELECT updated_at FROM notes WHERE id = ? AND is_deleted = 0",
             (note_id,),
         ).fetchone()
@@ -715,34 +742,11 @@ def rename_note(
         connection.execute(
             """
             UPDATE notes
-            SET title = ?, updated_at = ?
-            WHERE id = ? AND is_deleted = 0
-            """,
-            (clean_title, timestamp, note_id),
-        )
-        changed = connection.total_changes
-    if changed == 0:
-        raise ValueError(f"笔记不存在或已删除: {note_id}")
-    note = get_note(note_id, database_path)
-    if note is None:
-        raise RuntimeError(f"重命名后读取失败: {note_id}")
-    return note
-
-
-def soft_delete_note(note_id: int, database_path: Path = DATABASE_PATH) -> None:
-    timestamp = now_shanghai_iso()
-    trash_group_id = uuid.uuid4().hex
-    with _connect(database_path) as connection:
-        connection.execute(
-            """
-            UPDATE notes
             SET is_deleted = 1, deleted_at = ?, updated_at = ?, trash_group_id = ?
             WHERE id = ? AND is_deleted = 0
             """,
-            (timestamp, timestamp, trash_group_id, note_id),
+            (deleted_at, timestamp, trash_group_id, note_id),
         )
-        if connection.total_changes == 0:
-            raise ValueError(f"笔记不存在或已删除: {note_id}")
 
 
 def list_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
@@ -1100,10 +1104,27 @@ def _next_note_updated_at(previous: str) -> str:
         if prior.tzinfo is None:
             prior = prior.replace(tzinfo=timestamp.tzinfo)
         if timestamp <= prior:
-            timestamp = prior + timedelta(microseconds=1)
+            try:
+                timestamp = prior + timedelta(microseconds=1)
+            except OverflowError as error:
+                raise RuntimeError(
+                    "笔记更新时间已达到可表示上限，无法继续保存"
+                ) from error
     except (TypeError, ValueError):
         pass
     return timestamp.isoformat(timespec="microseconds")
+
+
+def _next_note_updated_at_locked(
+    connection: sqlite3.Connection, note_id: int
+) -> str:
+    row = connection.execute(
+        "SELECT updated_at FROM notes WHERE id = ?",
+        (note_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"笔记不存在: {note_id}")
+    return _next_note_updated_at(row["updated_at"])
 
 
 def list_directories(database_path: Path = DATABASE_PATH) -> list[dict]:
@@ -1172,6 +1193,7 @@ def rename_directory(
         raise ValueError("目录名称不能为空")
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT id, name, parent_id FROM directories WHERE id = ? AND is_deleted = 0",
             (directory_id,),
@@ -1187,7 +1209,7 @@ def rename_directory(
             "UPDATE directories SET name = ?, updated_at = ? WHERE id = ?",
             (clean_name, timestamp, directory_id),
         )
-        _rename_notes_for_directory_path(connection, old_path, clean_name, timestamp)
+        _rename_notes_for_directory_path(connection, old_path, clean_name)
 
 
 def delete_directory(directory_id: int, database_path: Path = DATABASE_PATH) -> None:
@@ -1200,6 +1222,7 @@ def soft_delete_directory_tree(
     timestamp = now_shanghai_iso()
     trash_group_id = uuid.uuid4().hex
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         path = _get_directory_path(connection, directory_id)
         _soft_delete_notes_under_path(connection, path, timestamp, trash_group_id)
         descendant_ids = _collect_descendant_directory_ids(connection, directory_id)
@@ -1223,16 +1246,17 @@ def soft_delete_notes_under_directory(
     timestamp = now_shanghai_iso()
     trash_group_id = uuid.uuid4().hex
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         path = _get_directory_path(connection, directory_id)
         _soft_delete_notes_under_path(connection, path, timestamp, trash_group_id)
 
 
 def restore_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict:
-    timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             """
-            SELECT main_category, sub_category, sub_sub_category
+            SELECT main_category, sub_category, sub_sub_category, updated_at
             FROM notes
             WHERE id = ? AND is_deleted = 1
             """,
@@ -1246,6 +1270,7 @@ def restore_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict:
             row["sub_category"] or DEFAULT_SUB_CATEGORY,
             row["sub_sub_category"] or DEFAULT_SUB_SUB_CATEGORY,
         )
+        timestamp = _next_note_updated_at(row["updated_at"])
         connection.execute(
             """
             UPDATE notes
@@ -1280,6 +1305,7 @@ def restore_trash_directory(
 ) -> None:
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         _restore_trash_directories_with_connection(
             connection, [directory_id], timestamp
         )
@@ -1366,8 +1392,15 @@ def _directory_path_from_lookup(
 def set_note_pinned(
     note_id: int, pinned: bool, database_path: Path = DATABASE_PATH
 ) -> dict:
-    timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            "SELECT updated_at FROM notes WHERE id = ? AND is_deleted = 0",
+            (note_id,),
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
+        timestamp = _next_note_updated_at(current["updated_at"])
         connection.execute(
             """
             UPDATE notes
@@ -1376,8 +1409,6 @@ def set_note_pinned(
             """,
             (1 if pinned else 0, timestamp, note_id),
         )
-        if connection.total_changes == 0:
-            raise ValueError(f"笔记不存在或已删除: {note_id}")
     note = get_note(note_id, database_path)
     if note is None:
         raise RuntimeError(f"固定状态更新后读取失败: {note_id}")
@@ -2116,37 +2147,37 @@ def _rename_notes_for_directory_path(
     connection: sqlite3.Connection,
     old_path: tuple[str, ...],
     new_name: str,
-    timestamp: str,
 ) -> None:
     if len(old_path) == 1:
-        connection.execute(
-            """
-            UPDATE notes
-            SET main_category = ?, updated_at = ?
-            WHERE is_deleted = 0 AND main_category = ?
-            """,
-            (new_name, timestamp, old_path[0]),
-        )
+        target_column = "main_category"
+        where_clause = "main_category = ?"
+        values = (old_path[0],)
     elif len(old_path) == 2:
-        connection.execute(
-            """
-            UPDATE notes
-            SET sub_category = ?, updated_at = ?
-            WHERE is_deleted = 0 AND main_category = ? AND sub_category = ?
-            """,
-            (new_name, timestamp, old_path[0], old_path[1]),
-        )
+        target_column = "sub_category"
+        where_clause = "main_category = ? AND sub_category = ?"
+        values = (old_path[0], old_path[1])
     elif len(old_path) == 3:
+        target_column = "sub_sub_category"
+        where_clause = (
+            "main_category = ? AND sub_category = ? AND sub_sub_category = ?"
+        )
+        values = (old_path[0], old_path[1], old_path[2])
+    else:
+        raise ValueError("目录路径无效")
+
+    rows = connection.execute(
+        f"SELECT id FROM notes WHERE is_deleted = 0 AND {where_clause}",
+        values,
+    ).fetchall()
+    for row in rows:
+        timestamp = _next_note_updated_at_locked(connection, row["id"])
         connection.execute(
-            """
+            f"""
             UPDATE notes
-            SET sub_sub_category = ?, updated_at = ?
-            WHERE is_deleted = 0
-              AND main_category = ?
-              AND sub_category = ?
-              AND sub_sub_category = ?
+            SET {target_column} = ?, updated_at = ?
+            WHERE id = ? AND is_deleted = 0
             """,
-            (new_name, timestamp, old_path[0], old_path[1], old_path[2]),
+            (new_name, timestamp, row["id"]),
         )
 
 
@@ -2168,29 +2199,29 @@ def _soft_delete_notes_under_path(
     else:
         raise ValueError("目录路径无效")
 
-    connection.execute(
-        f"""
-        UPDATE notes
-        SET directory_id = NULL,
-            is_deleted = 1,
-            deleted_at = ?,
-            updated_at = ?,
-            trash_group_id = ?
-        WHERE {where_clause}
-        """,
-        (
-            timestamp,
-            timestamp,
-            trash_group_id,
-            *values,
-        ),
-    )
+    rows = connection.execute(
+        f"SELECT id FROM notes WHERE is_deleted = 0 AND {where_clause}",
+        values,
+    ).fetchall()
+    for row in rows:
+        updated_at = _next_note_updated_at_locked(connection, row["id"])
+        connection.execute(
+            """
+            UPDATE notes
+            SET directory_id = NULL,
+                is_deleted = 1,
+                deleted_at = ?,
+                updated_at = ?,
+                trash_group_id = ?
+            WHERE id = ? AND is_deleted = 0
+            """,
+            (timestamp, updated_at, trash_group_id, row["id"]),
+        )
 
 
 def _restore_notes_under_path(
     connection: sqlite3.Connection,
     path: tuple[str, ...],
-    timestamp: str,
     trash_group_ids: set[str],
 ) -> None:
     if not trash_group_ids:
@@ -2213,19 +2244,33 @@ def _restore_notes_under_path(
     else:
         raise ValueError("目录路径无效")
     directory_id = _ensure_directory_path(connection, path[0], sub, sub_sub)
-    connection.execute(
+    ordered_trash_group_ids = tuple(sorted(trash_group_ids))
+    rows = connection.execute(
         f"""
-        UPDATE notes
-        SET directory_id = ?,
-            is_deleted = 0,
-            deleted_at = NULL,
-            trash_group_id = NULL,
-            updated_at = ?
-        WHERE {where_clause}
-          AND trash_group_id IN ({",".join("?" for _ in trash_group_ids)})
+        SELECT id
+        FROM notes
+        WHERE is_deleted = 1
+          AND {where_clause}
+          AND trash_group_id IN (
+              {",".join("?" for _ in ordered_trash_group_ids)}
+          )
         """,
-        (directory_id, timestamp, *values, *trash_group_ids),
-    )
+        (*values, *ordered_trash_group_ids),
+    ).fetchall()
+    for row in rows:
+        updated_at = _next_note_updated_at_locked(connection, row["id"])
+        connection.execute(
+            """
+            UPDATE notes
+            SET directory_id = ?,
+                is_deleted = 0,
+                deleted_at = NULL,
+                trash_group_id = NULL,
+                updated_at = ?
+            WHERE id = ? AND is_deleted = 1
+            """,
+            (directory_id, updated_at, row["id"]),
+        )
 
 
 def _permanently_delete_notes_under_path(
@@ -2373,7 +2418,6 @@ def _restore_trash_directories_with_connection(
             _restore_notes_under_path(
                 connection,
                 path,
-                timestamp,
                 trash_groups_by_root[root_id],
             )
 

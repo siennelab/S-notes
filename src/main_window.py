@@ -161,6 +161,8 @@ class MainWindow(QMainWindow):
     MAX_SIDEBAR_WIDTH = 480
     SIDEBAR_WIDTH_SETTING = "ui/sidebar_width"
     EDITOR_MAX_WIDTH = EDITOR_TARGET_MAX_WIDTH
+    AUTOSAVE_DELAY_MS = 1000
+    AUTOSAVE_RETRY_DELAYS_MS = (3000, 10000, 30000)
 
     def __init__(self) -> None:
         super().__init__()
@@ -182,8 +184,9 @@ class MainWindow(QMainWindow):
         self.filter_controls_loading = False
         self.note_id_before_trash: int | None = None
         self.receipt_inbox_dialog: AiCenterDialog | None = None
+        self.autosave_retry_count = 0
         self.save_timer = QTimer(self)
-        self.save_timer.setInterval(1000)
+        self.save_timer.setInterval(self.AUTOSAVE_DELAY_MS)
         self.save_timer.setSingleShot(True)
         self.save_timer.timeout.connect(self.save_current_note)
         self.search_timer = QTimer(self)
@@ -1401,6 +1404,7 @@ class MainWindow(QMainWindow):
             f"已保存 · 更新于 {format_display_datetime(note['updated_at'])}"
         )
         self.has_unsaved_changes = False
+        self.autosave_retry_count = 0
         self.save_timer.stop()
         self.set_editor_enabled(True)
         self.update_note_action_states()
@@ -1424,6 +1428,7 @@ class MainWindow(QMainWindow):
         self.set_metadata_expanded(False)
         self.status_label.setText("回收站中 · 只读")
         self.has_unsaved_changes = False
+        self.autosave_retry_count = 0
         self.save_timer.stop()
         self.set_editor_enabled(False, show_content=True)
         self.is_loading_note = False
@@ -1639,8 +1644,9 @@ class MainWindow(QMainWindow):
         if self.is_loading_note or self.current_note is None:
             return
         self.has_unsaved_changes = True
+        self.autosave_retry_count = 0
         self.status_label.setText("未保存")
-        self.save_timer.start()
+        self.save_timer.start(self.AUTOSAVE_DELAY_MS)
 
     def handle_body_document_modification(self, modified: bool) -> None:
         if modified:
@@ -1649,6 +1655,17 @@ class MainWindow(QMainWindow):
     def force_save_current_note(self, *, refresh_tree: bool = True) -> bool:
         self.save_timer.stop()
         return self.save_current_note(refresh_tree=refresh_tree)
+
+    def schedule_autosave_retry(self) -> None:
+        if (
+            self.current_note is None
+            or not self.has_unsaved_changes
+            or self.autosave_retry_count >= len(self.AUTOSAVE_RETRY_DELAYS_MS)
+        ):
+            return
+        delay = self.AUTOSAVE_RETRY_DELAYS_MS[self.autosave_retry_count]
+        self.autosave_retry_count += 1
+        self.save_timer.start(delay)
 
     def save_current_note(self, *, refresh_tree: bool = True) -> bool:
         if self.current_note is None or not self.has_unsaved_changes:
@@ -1674,11 +1691,14 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self.status_label.setText(f"保存失败：{error}")
             self.has_unsaved_changes = True
+            self.schedule_autosave_retry()
             return False
 
         self.current_note = note
         self.body_edit.document().setModified(False)
         self.has_unsaved_changes = False
+        self.autosave_retry_count = 0
+        self.save_timer.stop()
         self.status_label.setText(
             f"已保存 · 更新于 {format_display_datetime(note['updated_at'])}"
         )
@@ -1863,14 +1883,25 @@ class MainWindow(QMainWindow):
         )
         if not accepted:
             return
+        clean_title = title.strip() or "未命名笔记"
+        is_current_note = bool(
+            self.current_note and self.current_note["id"] == note_id
+        )
+        if clean_title == note["title"]:
+            if (
+                is_current_note
+                and self.has_unsaved_changes
+                and not self.force_save_current_note(refresh_tree=False)
+            ):
+                return
+            return
         if (
-            self.current_note
-            and self.current_note["id"] == note_id
+            is_current_note
             and not self.force_save_current_note(refresh_tree=False)
         ):
             return
         try:
-            renamed = rename_note(note_id, title)
+            renamed = rename_note(note_id, clean_title)
         except Exception as error:
             QMessageBox.warning(self, "重命名笔记失败", str(error))
             return
@@ -1995,6 +2026,7 @@ class MainWindow(QMainWindow):
         self.set_ai_target_controls([])
         self.status_label.setText("未选择笔记")
         self.has_unsaved_changes = False
+        self.autosave_retry_count = 0
         self.save_timer.stop()
         self.set_editor_enabled(False)
         self.update_note_action_states()

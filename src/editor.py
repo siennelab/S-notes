@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from collections import Counter
 from difflib import SequenceMatcher
 
 from PySide6.QtCore import QMimeData, QSignalBlocker, Qt
@@ -1136,25 +1137,12 @@ class NotesEditor(QTextEdit):
         return False
 
     @classmethod
-    def _merge_visible_texts(cls, html_text: str, plain_text: str) -> str:
-        html_lines = cls.sanitize_pasted_text(html_text).rstrip("\n").split("\n")
-        plain_lines = cls.sanitize_pasted_text(plain_text).rstrip("\n").split("\n")
-        html_keys = [cls._comparison_text(line) for line in html_lines]
-        plain_keys = [cls._comparison_text(line) for line in plain_lines]
-        merged: list[str] = []
-        for tag, html_start, html_end, plain_start, plain_end in SequenceMatcher(
-            None, html_keys, plain_keys, autojunk=False
-        ).get_opcodes():
-            if tag == "equal":
-                merged.extend(plain_lines[plain_start:plain_end])
-            elif tag == "delete":
-                merged.extend(html_lines[html_start:html_end])
-            elif tag == "insert":
-                merged.extend(plain_lines[plain_start:plain_end])
-            else:
-                merged.extend(html_lines[html_start:html_end])
-                merged.extend(plain_lines[plain_start:plain_end])
-        return "\n".join(merged)
+    def _visible_information_score(cls, text: str) -> tuple[int, int]:
+        semantic_lines = cls._semantic_lines(text)
+        visible_characters = sum(
+            len(re.sub(r"\s+", "", line)) for line in semantic_lines
+        )
+        return len(semantic_lines), visible_characters
 
     @classmethod
     def _select_paste_representation(
@@ -1181,38 +1169,41 @@ class NotesEditor(QTextEdit):
             plain_text, strip_list_prefixes=html_has_list
         )
         if html_semantic_lines == plain_semantic_lines:
-            html_nonblank = [
-                line
-                for line in html_comparison.split("\n")
-                if line.strip()
-            ]
-            plain_nonblank = [
-                line
-                for line in plain_comparison.split("\n")
-                if line.strip()
-            ]
-            if html_nonblank == plain_nonblank:
-                return "plain", plain_text
-            return "html", normalized_html
+            if html_has_list:
+                return "html", normalized_html
+            return "plain", plain_text
         if cls._is_line_subsequence(plain_semantic_lines, html_semantic_lines):
             return "html", normalized_html
         if cls._is_line_subsequence(html_semantic_lines, plain_semantic_lines):
+            return "plain", plain_text
+        if Counter(html_semantic_lines) == Counter(plain_semantic_lines):
             return "plain", plain_text
         html_characters = cls._semantic_characters(html_text)
         plain_characters = cls._semantic_characters(
             plain_text, strip_list_prefixes=html_has_list
         )
-        if html_characters == plain_characters:
+        if (
+            html_characters == plain_characters
+            and len(html_semantic_lines) == len(plain_semantic_lines)
+        ):
             return "plain", plain_text
-        if plain_characters and plain_characters in html_characters:
+        if (
+            plain_characters
+            and plain_characters in html_characters
+            and len(html_semantic_lines) == len(plain_semantic_lines)
+        ):
             return "html", normalized_html
-        if html_characters and html_characters in plain_characters:
+        if (
+            html_characters
+            and html_characters in plain_characters
+            and len(html_semantic_lines) == len(plain_semantic_lines)
+        ):
             return "plain", plain_text
-        if plain_comparison and plain_comparison in html_comparison:
+        html_score = cls._visible_information_score(html_text)
+        plain_score = cls._visible_information_score(plain_text)
+        if html_score > plain_score:
             return "html", normalized_html
-        if html_comparison and html_comparison in plain_comparison:
-            return "plain", plain_text
-        return "plain", cls._merge_visible_texts(html_text, plain_text)
+        return "plain", plain_text
 
     @classmethod
     def markdown_to_html(cls, text: str) -> str:

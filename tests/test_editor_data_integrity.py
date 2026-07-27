@@ -30,15 +30,24 @@ def _assert(condition: bool, message: str) -> None:
 def _run_window_persistence_probe() -> None:
     from src.app_paths import DATABASE_PATH
     from src.database import (
+        create_directory,
         create_note,
+        create_note_in_directory,
         get_note,
         get_note_ai_targets,
         get_note_tags,
         initialize_database,
+        rename_directory,
         rename_note,
+        restore_note,
+        restore_trash_directory,
         save_editor_state,
+        set_note_pinned,
+        soft_delete_directory_tree,
+        soft_delete_note,
         update_note,
     )
+    from src.batch_note_operations import restore_trash_items
     from src.main_window import MainWindow
 
     initialize_database()
@@ -446,6 +455,295 @@ def _run_window_persistence_probe() -> None:
         "concurrent final row did not retain the latest committed timestamp",
     )
 
+    def set_note_timestamp(note_id: int, timestamp: str) -> None:
+        with sqlite3.connect(DATABASE_PATH) as connection:
+            connection.execute(
+                "UPDATE notes SET updated_at = ? WHERE id = ?",
+                (timestamp, note_id),
+            )
+
+    def note_timestamp(note_id: int) -> datetime:
+        note = get_note(note_id, include_deleted=True)
+        _assert(note is not None, f"missing note {note_id}")
+        return datetime.fromisoformat(note["updated_at"])
+
+    direct_writer_time = datetime.fromisoformat("2026-01-01T00:00:00+08:00")
+    direct_writer_note = create_note()
+    direct_writer_initial = "2030-01-01T00:00:00.000001+08:00"
+    set_note_timestamp(direct_writer_note["id"], direct_writer_initial)
+    with patch("src.database.now_shanghai", return_value=direct_writer_time):
+        pinned = set_note_pinned(direct_writer_note["id"], True)
+        pinned_time = datetime.fromisoformat(pinned["updated_at"])
+        _assert(
+            pinned_time > datetime.fromisoformat(direct_writer_initial),
+            "pin clock rollback regressed updated_at",
+        )
+        saved_after_pin = save_editor_state(
+            direct_writer_note["id"],
+            title="虚构置顶后保存",
+            content_html="<p>虚构置顶后正文</p>",
+            main_category="临时",
+            sub_category="无",
+            sub_sub_category="无",
+            tags=["置顶顺序"],
+            ai_visibility="AI不可见",
+            ai_targets=[],
+        )
+        saved_after_pin_time = datetime.fromisoformat(
+            saved_after_pin["updated_at"]
+        )
+        _assert(
+            saved_after_pin_time > pinned_time,
+            "pin then editor save did not advance updated_at",
+        )
+        unpinned = set_note_pinned(direct_writer_note["id"], False)
+        _assert(
+            datetime.fromisoformat(unpinned["updated_at"]) > saved_after_pin_time,
+            "editor save then pin did not advance updated_at",
+        )
+
+    same_second_note = create_note()
+    same_second_before = "2026-01-01T00:00:00.500000+08:00"
+    set_note_timestamp(same_second_note["id"], same_second_before)
+    with patch("src.database.now_shanghai", return_value=direct_writer_time):
+        same_second_pin = set_note_pinned(same_second_note["id"], True)
+    _assert(
+        datetime.fromisoformat(same_second_pin["updated_at"])
+        > datetime.fromisoformat(same_second_before),
+        "pin replaced a microsecond timestamp with an earlier whole second",
+    )
+
+    lifecycle_note = create_note()
+    lifecycle_initial = "2031-01-01T00:00:00.000001+08:00"
+    set_note_timestamp(lifecycle_note["id"], lifecycle_initial)
+    with patch("src.database.now_shanghai", return_value=direct_writer_time):
+        renamed_lifecycle = rename_note(
+            lifecycle_note["id"], "虚构直接写入链路"
+        )
+        rename_time = datetime.fromisoformat(renamed_lifecycle["updated_at"])
+        _assert(
+            rename_time > datetime.fromisoformat(lifecycle_initial),
+            "rename regressed updated_at",
+        )
+        unchanged = rename_note(
+            lifecycle_note["id"], "虚构直接写入链路"
+        )
+        _assert(
+            unchanged["updated_at"] == renamed_lifecycle["updated_at"],
+            "same-title rename changed updated_at",
+        )
+        soft_delete_note(lifecycle_note["id"])
+        delete_time = note_timestamp(lifecycle_note["id"])
+        _assert(delete_time > rename_time, "soft delete regressed updated_at")
+        restored_lifecycle = restore_note(lifecycle_note["id"])
+        _assert(
+            datetime.fromisoformat(restored_lifecycle["updated_at"]) > delete_time,
+            "restore note regressed updated_at",
+        )
+
+    directory = create_directory("虚构单调目录")
+    directory_note = create_note_in_directory("虚构单调目录")
+    directory_initial = "2032-01-01T00:00:00.000001+08:00"
+    set_note_timestamp(directory_note["id"], directory_initial)
+    with patch("src.database.now_shanghai", return_value=direct_writer_time):
+        rename_directory(directory["id"], "虚构单调目录改名")
+        directory_rename_time = note_timestamp(directory_note["id"])
+        _assert(
+            directory_rename_time > datetime.fromisoformat(directory_initial),
+            "directory rename regressed a note timestamp",
+        )
+        soft_delete_directory_tree(directory["id"])
+        directory_delete_time = note_timestamp(directory_note["id"])
+        _assert(
+            directory_delete_time > directory_rename_time,
+            "directory delete regressed a note timestamp",
+        )
+        restore_trash_directory(directory["id"])
+        _assert(
+            note_timestamp(directory_note["id"]) > directory_delete_time,
+            "directory restore regressed a note timestamp",
+        )
+
+    batch_note = create_note()
+    batch_initial = "2033-01-01T00:00:00.000001+08:00"
+    set_note_timestamp(batch_note["id"], batch_initial)
+    with patch("src.database.now_shanghai", return_value=direct_writer_time):
+        soft_delete_note(batch_note["id"])
+        batch_delete_time = note_timestamp(batch_note["id"])
+        restore_trash_items([batch_note["id"]], [])
+        _assert(
+            note_timestamp(batch_note["id"]) > batch_delete_time,
+            "batch trash restore regressed a note timestamp",
+        )
+
+    same_title_note = create_note()
+    same_title_note = rename_note(same_title_note["id"], "虚构同名标题")
+    same_title_before = get_note(same_title_note["id"])
+    same_title_window = MainWindow()
+    same_title_window.load_note(same_title_note["id"])
+    same_title_editor_before = same_title_window.body_edit.note_content_html()
+    with (
+        patch(
+            "src.main_window.QInputDialog.getText",
+            return_value=("虚构同名标题", True),
+        ),
+        patch("src.main_window.rename_note", wraps=rename_note) as same_rename_spy,
+        patch.object(
+            same_title_window,
+            "load_note",
+            wraps=same_title_window.load_note,
+        ) as same_load_spy,
+    ):
+        same_title_window.prompt_rename_note(same_title_note["id"])
+    same_title_after = get_note(same_title_note["id"])
+    _assert(
+        same_title_after == same_title_before,
+        "same-title real rename path changed database state",
+    )
+    _assert(
+        not same_rename_spy.called and not same_load_spy.called,
+        "same-title real rename path updated or reloaded the note",
+    )
+    _assert(
+        same_title_window.body_edit.note_content_html()
+        == same_title_editor_before,
+        "same-title real rename path changed editor content",
+    )
+    same_title_window.close()
+
+    def wait_until(predicate, timeout_ms: int = 1500) -> bool:
+        waited = 0
+        while waited < timeout_ms:
+            if predicate():
+                return True
+            QTest.qWait(10)
+            waited += 10
+        return predicate()
+
+    retry_note = create_note()
+    retry_note = update_note(
+        retry_note["id"],
+        title="虚构重试笔记",
+        content_html="<p>虚构重试旧正文</p>",
+    )
+    retry_window = MainWindow()
+    retry_window.load_note(retry_note["id"])
+    retry_window.AUTOSAVE_RETRY_DELAYS_MS = (20, 30, 40)
+    retry_window.body_edit.setPlainText("虚构重试后完整正文")
+    retry_expected_html = retry_window.body_edit.note_content_html()
+    retry_attempts = 0
+    real_save_editor_state = save_editor_state
+
+    def fail_twice_then_save(*args, **kwargs):
+        nonlocal retry_attempts
+        retry_attempts += 1
+        if retry_attempts <= 2:
+            raise RuntimeError("虚构临时保存失败")
+        return real_save_editor_state(*args, **kwargs)
+
+    with patch(
+        "src.main_window.save_editor_state",
+        side_effect=fail_twice_then_save,
+    ):
+        _assert(
+            not retry_window.force_save_current_note(refresh_tree=False),
+            "initial retry test save unexpectedly succeeded",
+        )
+        _assert(
+            retry_window.save_timer.isActive()
+            and retry_window.autosave_retry_count == 1,
+            "save failure did not schedule the first retry",
+        )
+        _assert(
+            wait_until(lambda: not retry_window.has_unsaved_changes),
+            "autosave retry did not eventually succeed",
+        )
+    _assert(retry_attempts == 3, "autosave retry success used wrong attempt count")
+    _assert(
+        get_note(retry_note["id"])["content_html"] == retry_expected_html,
+        "successful autosave retry did not persist the exact body",
+    )
+    _assert(
+        not retry_window.has_unsaved_changes
+        and retry_window.autosave_retry_count == 0
+        and not retry_window.save_timer.isActive(),
+        "successful autosave retry did not reset dirty/timer state",
+    )
+
+    retry_window.load_note(retry_note["id"])
+    retry_window.body_edit.setPlainText("虚构持续失败完整正文")
+    retry_limit_expected_html = retry_window.body_edit.note_content_html()
+    retry_limit_database_html = get_note(retry_note["id"])["content_html"]
+    retry_limit_attempts = 0
+
+    def always_fail(*_args, **_kwargs):
+        nonlocal retry_limit_attempts
+        retry_limit_attempts += 1
+        raise RuntimeError("虚构持续保存失败")
+
+    with patch("src.main_window.save_editor_state", side_effect=always_fail):
+        _assert(
+            not retry_window.force_save_current_note(refresh_tree=False),
+            "retry limit initial save unexpectedly succeeded",
+        )
+        _assert(
+            wait_until(
+                lambda: retry_limit_attempts == 4
+                and not retry_window.save_timer.isActive()
+            ),
+            "autosave retries did not stop at the approved limit",
+        )
+        QTest.qWait(100)
+        _assert(
+            retry_limit_attempts == 4,
+            "autosave retries continued after the approved limit",
+        )
+    _assert(
+        retry_window.has_unsaved_changes
+        and retry_window.body_edit.note_content_html()
+        == retry_limit_expected_html,
+        "retry exhaustion lost or cleared the editor body",
+    )
+    _assert(
+        get_note(retry_note["id"])["content_html"] == retry_limit_database_html,
+        "retry exhaustion changed the database body",
+    )
+
+    max_note = create_note()
+    max_note = update_note(
+        max_note["id"],
+        title="虚构最大时间笔记",
+        content_html="<p>虚构最大时间旧正文</p>",
+    )
+    maximum_timestamp = "9999-12-31T23:59:59.999999+08:00"
+    set_note_timestamp(max_note["id"], maximum_timestamp)
+    max_before = get_note(max_note["id"])
+    retry_window.load_note(max_note["id"])
+    retry_window.AUTOSAVE_RETRY_DELAYS_MS = (10000, 20000, 30000)
+    retry_window.body_edit.setPlainText("虚构最大时间待保存正文")
+    max_editor_html = retry_window.body_edit.note_content_html()
+    _assert(
+        not retry_window.force_save_current_note(refresh_tree=False),
+        "maximum datetime save unexpectedly succeeded",
+    )
+    _assert(
+        "笔记更新时间已达到可表示上限" in retry_window.status_label.text(),
+        "maximum datetime failure was not a controlled save error",
+    )
+    _assert(
+        get_note(max_note["id"]) == max_before,
+        "maximum datetime failure partially changed the database",
+    )
+    _assert(
+        retry_window.body_edit.note_content_html() == max_editor_html
+        and retry_window.has_unsaved_changes
+        and retry_window.save_timer.isActive(),
+        "maximum datetime failure did not preserve dirty editor state and retry",
+    )
+    retry_window.clear_editor()
+    retry_window.close()
+    app.processEvents()
+
 
 class EditorDataIntegrityTest(unittest.TestCase):
     @classmethod
@@ -576,14 +874,14 @@ class EditorDataIntegrityTest(unittest.TestCase):
         )
         self.assertEqual(
             conflicting.toPlainText(),
-            "虚构共同段\n虚构 HTML 独有段\n虚构 plain 独有段",
+            "虚构共同段\n虚构 plain 独有段",
         )
 
         paragraph_boundary = self.paste_editor(
             "<p><b>虚构甲</b></p><p>虚构乙</p>",
             "虚构甲虚构乙",
         )
-        self.assertEqual(paragraph_boundary.toPlainText(), "虚构甲虚构乙")
+        self.assertEqual(paragraph_boundary.toPlainText(), "虚构甲\n虚构乙")
 
     def test_paste_preserves_lists_nested_divs_empty_lines_and_empty_fallbacks(self) -> None:
         list_editor = self.paste_editor(
@@ -622,6 +920,59 @@ class EditorDataIntegrityTest(unittest.TestCase):
             "font-weight:700",
             empty_plain.toHtml().replace(" ", "").lower(),
         )
+
+    def test_paste_conflicts_choose_one_complete_representation_without_duplication(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "reversed_order",
+                "<p>第一段</p><p>第二段</p>",
+                "第二段\n第一段",
+                "第二段\n第一段",
+            ),
+            (
+                "inline_replace",
+                "<p>版本 1.0</p>",
+                "版本1.0",
+                "版本1.0",
+            ),
+            (
+                "cross_overlap",
+                "<p>甲</p><p>乙</p><p>丙</p>",
+                "乙\n丙\n丁",
+                "乙\n丙\n丁",
+            ),
+            (
+                "equal_information_conflict",
+                "<p>共同段</p><p>HTML 独有段</p>",
+                "共同段\nplain 独有段",
+                "共同段\nplain 独有段",
+            ),
+            (
+                "html_superset",
+                "<p>甲</p><p>乙</p><p>丙</p>",
+                "甲\n乙",
+                "甲\n乙\n丙",
+            ),
+            (
+                "plain_superset",
+                "<p>甲</p><p>乙</p>",
+                "甲\n乙\n丙",
+                "甲\n乙\n丙",
+            ),
+        )
+        for name, markup, plain_text, expected in cases:
+            with self.subTest(name=name):
+                editor = self.paste_editor(markup, plain_text)
+                self.assertEqual(editor.toPlainText(), expected)
+                self.assertEqual(editor.toPlainText().split("\n"), expected.split("\n"))
+                for paragraph in expected.split("\n"):
+                    if paragraph:
+                        self.assertEqual(
+                            editor.toPlainText().split("\n").count(paragraph),
+                            expected.split("\n").count(paragraph),
+                        )
 
     def test_window_save_switch_autosave_close_and_restart_use_temp_database(self) -> None:
         with tempfile.TemporaryDirectory(

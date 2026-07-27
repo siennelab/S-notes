@@ -10,6 +10,7 @@ from src.database import (
     _directory_depth,
     _ensure_directory_path,
     _get_directory_path,
+    _next_note_updated_at_locked,
     _permanently_delete_notes_under_path,
     _restore_trash_directories_with_connection,
     _trash_group_ids_for_directories,
@@ -24,6 +25,7 @@ def restore_trash_items(
 ) -> dict:
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         root_directory_ids, independent_note_ids = _normalize_trash_selection(
             connection, note_ids, directory_ids
         )
@@ -31,7 +33,7 @@ def restore_trash_items(
             connection, root_directory_ids, timestamp
         )
         for note_id in independent_note_ids:
-            _restore_trash_note(connection, note_id, timestamp)
+            _restore_trash_note(connection, note_id)
     return _trash_result(root_directory_ids, independent_note_ids)
 
 
@@ -171,9 +173,7 @@ def _rows_for_ids(
     ).fetchall()
 
 
-def _restore_trash_note(
-    connection: sqlite3.Connection, note_id: int, timestamp: str
-) -> None:
+def _restore_trash_note(connection: sqlite3.Connection, note_id: int) -> None:
     row = connection.execute(
         """
         SELECT main_category, sub_category, sub_sub_category
@@ -189,6 +189,7 @@ def _restore_trash_note(
         row["sub_category"],
         row["sub_sub_category"],
     )
+    timestamp = _next_note_updated_at_locked(connection, note_id)
     connection.execute(
         """
         UPDATE notes
