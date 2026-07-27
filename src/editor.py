@@ -56,7 +56,7 @@ MARKDOWN_FENCE_RE = re.compile(
     r"^[ \t]{0,3}(`{3,}|~{3,})(?:[ \t]*[A-Za-z0-9_+.-]+)?[ \t]*$"
 )
 MARKDOWN_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,6}(?:[ \t]+|(?=\d+[、.)．。]))"
+    r"^[ \t]{0,3}(?:#{1,6}[ \t]+|#{2,6}(?=\S))"
 )
 PASTE_LIST_PREFIX_RE = re.compile(
     r"^[ \t]*(?:[-+*•◦▪‣][ \t]+|\d+[.)、．。][ \t]*)"
@@ -123,7 +123,10 @@ def _strip_markdown_line(line: str) -> str:
     body, ending = _line_body_and_ending(line)
     if MARKDOWN_HORIZONTAL_RULE_RE.fullmatch(body):
         return ""
-    body = MARKDOWN_HEADING_RE.sub("", body, count=1)
+    heading = MARKDOWN_HEADING_RE.match(body)
+    if heading:
+        body = body[heading.end() :]
+        return _strip_inline_markdown(body) + ending
     body = MARKDOWN_QUOTE_RE.sub(r"\1", body, count=1)
     body = MARKDOWN_TASK_RE.sub(r"\1", body, count=1)
     body = MARKDOWN_UNORDERED_RE.sub(r"\1", body, count=1)
@@ -328,10 +331,14 @@ class NotesEditor(QTextEdit):
         self._document_reset_in_progress = True
         try:
             if HTML_MARKER_RE.search(content or ""):
-                self.setHtml(content)
-                self._normalize_legacy_document_colors()
-                self._restore_quote_properties()
-                self._restore_code_block_properties()
+                self.document().setDefaultStyleSheet("")
+                try:
+                    self.setHtml(content)
+                    self._normalize_legacy_document_colors()
+                    self._restore_quote_properties()
+                    self._restore_code_block_properties()
+                finally:
+                    self.document().setDefaultStyleSheet(editor_document_style())
             else:
                 self.setPlainText(content or "")
         finally:
@@ -397,11 +404,7 @@ class NotesEditor(QTextEdit):
             del editor_blocker
 
     def note_content_html(self) -> str:
-        document = QTextDocument()
-        document.setDefaultFont(editor_document_font())
-        document.setDefaultStyleSheet(editor_document_style())
-        document.setHtml(self.toHtml())
-        return document.toHtml()
+        return self.toHtml()
 
     def apply_bold(self) -> None:
         self.setFontWeight(QFont.Normal if self.fontWeight() > QFont.Normal else QFont.Bold)

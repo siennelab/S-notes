@@ -27,6 +27,216 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _run_real_gui_format_and_markdown_probe() -> None:
+    import sqlite3
+
+    from src.app_paths import DATABASE_PATH
+    from src.database import (
+        create_note,
+        get_note,
+        initialize_database,
+        update_note,
+    )
+    from src.main_window import MainWindow
+
+    initialize_database()
+    format_note = create_note()
+    second_note = create_note()
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.load_note(format_note["id"])
+
+    pasted_plain_text = (
+        "虚构普通中文段落\n\n\n"
+        "### 1. 外部粘贴与清除格式\n"
+        "###1、第一项\n"
+        "###2、第二项"
+    )
+    mime = QMimeData()
+    mime.setText(pasted_plain_text)
+    mime.setHtml(
+        '<div style="line-height:240%; font-family:Courier New">'
+        '<p style="margin-top:24px; margin-bottom:18px">'
+        '<b style="color:#ff0000">虚构普通中文段落</b></p>'
+        "<p><br></p>"
+        "<p>### 1. 外部粘贴与清除格式</p>"
+        "<p>###1、第一项</p>"
+        "<p>###2、第二项</p>"
+        "</div>"
+    )
+    window.body_edit.insertFromMimeData(mime)
+    _assert(
+        window.body_edit.toPlainText() == pasted_plain_text,
+        "external rich paste changed the exact visible text",
+    )
+    QTest.qWait(window.save_timer.interval() + 150)
+    formatted_note = get_note(format_note["id"])
+    _assert(formatted_note is not None, "formatted note was not autosaved")
+    formatted_html = formatted_note["content_html"]
+    _assert(
+        formatted_html == window.body_edit.note_content_html(),
+        "formatted editor and SQLite HTML differed before clear formatting",
+    )
+    _assert(
+        "font-weight:700" in formatted_html.replace(" ", "").lower(),
+        "rich paste did not establish a persisted format for the regression",
+    )
+
+    cursor = window.body_edit.textCursor()
+    cursor.select(QTextCursor.Document)
+    window.body_edit.setTextCursor(cursor)
+    window.editor_toolbar.clear_format_button.click()
+    _assert(
+        window.body_edit.toPlainText() == pasted_plain_text,
+        "clear-format toolbar action changed the exact plain text",
+    )
+    _assert(
+        window.has_unsaved_changes
+        and window.body_edit.document().isModified()
+        and window.save_timer.isActive(),
+        "clear-format toolbar action did not arm the real autosave path",
+    )
+    cleared_editor_html = window.body_edit.note_content_html()
+    _assert(
+        cleared_editor_html != formatted_html,
+        "clear-format HTML-only change collapsed to the old save representation",
+    )
+    QTest.qWait(window.save_timer.interval() + 150)
+
+    cleared_note = get_note(format_note["id"])
+    _assert(cleared_note is not None, "cleared note disappeared")
+    cleared_database_html = cleared_note["content_html"]
+    _assert(
+        cleared_database_html == cleared_editor_html,
+        "real autosave did not persist the exact cleared editor HTML",
+    )
+    _assert(
+        window.current_note is not None
+        and window.current_note["content_html"] == cleared_database_html,
+        "successful clear-format save did not refresh the current-note cache",
+    )
+    _assert(
+        window.body_edit.toPlainText() == pasted_plain_text,
+        "clear-format autosave changed the visible text",
+    )
+    compact_cleared_html = cleared_database_html.replace(" ", "").lower()
+    for forbidden in (
+        "font-weight:700",
+        "couriernew",
+        "#ff0000",
+        "line-height:240%",
+        "line-height:180%",
+        "margin-top:24px",
+        "margin-bottom:18px",
+    ):
+        _assert(
+            forbidden not in compact_cleared_html,
+            f"cleared SQLite HTML retained external formatting: {forbidden}",
+        )
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        stored_columns = connection.execute(
+            "SELECT content_html, body_rich_text FROM notes WHERE id = ?",
+            (format_note["id"],),
+        ).fetchone()
+    _assert(
+        stored_columns is not None
+        and stored_columns[0] == stored_columns[1] == cleared_database_html,
+        "cleared SQLite body columns diverged",
+    )
+
+    window.open_linked_note(second_note["id"])
+    window.open_linked_note(format_note["id"])
+    _assert(
+        window.body_edit.note_content_html() == cleared_database_html
+        and window.body_edit.toPlainText() == pasted_plain_text,
+        "switch reload revived the pre-clear HTML",
+    )
+
+    with patch.object(window, "confirm_continue", return_value=True):
+        window.confirm_delete_note(format_note["id"])
+    deleted_note = get_note(format_note["id"], include_deleted=True)
+    _assert(
+        deleted_note is not None
+        and deleted_note["content_html"] == cleared_database_html,
+        "moving the cleared note to trash changed its HTML",
+    )
+    window.restore_deleted_note(format_note["id"])
+    restored_note = get_note(format_note["id"])
+    _assert(
+        restored_note is not None
+        and restored_note["content_html"] == cleared_database_html
+        and window.body_edit.note_content_html() == cleared_database_html
+        and window.body_edit.toPlainText() == pasted_plain_text,
+        "trash restore revived the pre-clear HTML",
+    )
+
+    restarted = MainWindow()
+    restarted.load_note(format_note["id"])
+    _assert(
+        restarted.body_edit.note_content_html() == cleared_database_html
+        and restarted.body_edit.toPlainText() == pasted_plain_text,
+        "new-window reload revived the pre-clear HTML",
+    )
+    restarted.close()
+
+    markdown_source = (
+        "### 1. 外部粘贴与清除格式\n"
+        "###1、第一项\n"
+        "###2、第二项\n"
+        "#标签\n"
+        "C#\n"
+        "A#B\n"
+        "正文里的 #号\n"
+        "https://example.test/page#section"
+    )
+    markdown_expected = (
+        "1. 外部粘贴与清除格式\n"
+        "1、第一项\n"
+        "2、第二项\n"
+        "#标签\n"
+        "C#\n"
+        "A#B\n"
+        "正文里的 #号\n"
+        "https://example.test/page#section"
+    )
+    markdown_note = create_note()
+    update_note(
+        markdown_note["id"],
+        title="虚构 Markdown 工具栏验收",
+        content_html=markdown_source,
+    )
+    window.load_note(markdown_note["id"])
+    window.editor_toolbar.clear_markdown_button.click()
+    _assert(
+        window.body_edit.toPlainText() == markdown_expected,
+        "real Markdown toolbar action changed numbering or protected hashes",
+    )
+    _assert(
+        window.has_unsaved_changes and window.save_timer.isActive(),
+        "Markdown toolbar action did not arm autosave",
+    )
+    markdown_editor_html = window.body_edit.note_content_html()
+    QTest.qWait(window.save_timer.interval() + 150)
+    markdown_saved = get_note(markdown_note["id"])
+    _assert(
+        markdown_saved is not None
+        and markdown_saved["content_html"] == markdown_editor_html,
+        "Markdown toolbar result was not persisted exactly",
+    )
+    markdown_reload = MainWindow()
+    markdown_reload.load_note(markdown_note["id"])
+    _assert(
+        markdown_reload.body_edit.toPlainText() == markdown_expected
+        and markdown_reload.body_edit.note_content_html() == markdown_editor_html,
+        "Markdown toolbar result changed after new-window reload",
+    )
+    markdown_reload.close()
+
+    window.clear_editor()
+    window.close()
+    app.processEvents()
+
+
 def _run_window_persistence_probe() -> None:
     from src.app_paths import DATABASE_PATH
     from src.database import (
@@ -1003,9 +1213,42 @@ class EditorDataIntegrityTest(unittest.TestCase):
             f"probe stdout:\n{result.stdout}\nprobe stderr:\n{result.stderr}",
         )
 
+    def test_real_toolbar_format_and_markdown_persistence_paths_use_temp_database(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="snotes-editor-real-gui-integrity-"
+        ) as temporary_home:
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "HOME": temporary_home,
+                    "QT_QPA_PLATFORM": "offscreen",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "PYTHONPYCACHEPREFIX": str(Path(temporary_home) / "pycache"),
+                    "SNOTES_EDITOR_REAL_GUI_PROBE": "1",
+                }
+            )
+            result = subprocess.run(
+                [sys.executable, "-m", "tests.test_editor_data_integrity"],
+                cwd=Path(__file__).resolve().parents[1],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"probe stdout:\n{result.stdout}\nprobe stderr:\n{result.stderr}",
+        )
+
 
 if __name__ == "__main__":
-    if os.environ.get("SNOTES_EDITOR_INTEGRITY_PROBE") == "1":
+    if os.environ.get("SNOTES_EDITOR_REAL_GUI_PROBE") == "1":
+        _run_real_gui_format_and_markdown_probe()
+    elif os.environ.get("SNOTES_EDITOR_INTEGRITY_PROBE") == "1":
         _run_window_persistence_probe()
     else:
         unittest.main()

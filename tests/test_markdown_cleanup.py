@@ -37,24 +37,34 @@ class MarkdownConversionTest(unittest.TestCase):
         source = (
             "# 1、\n"
             "## 1.\n"
+            "### 1. 外部粘贴与清除格式\n"
             "###1、\n"
+            "###1、第一项\n"
+            "###2、第二项\n"
             "### 1)\n"
             "#### 第一章\n"
             "正文中的 # 号保留\n"
             "#标签\n"
-            "版本#1、保留\n"
+            "C#\n"
+            "A#B\n"
+            "https://example.test/page#section\n"
         )
         self.assertEqual(
             strip_markdown_markup(source),
             (
                 "1、\n"
                 "1.\n"
+                "1. 外部粘贴与清除格式\n"
                 "1、\n"
+                "1、第一项\n"
+                "2、第二项\n"
                 "1)\n"
                 "第一章\n"
                 "正文中的 # 号保留\n"
                 "#标签\n"
-                "版本#1、保留\n"
+                "C#\n"
+                "A#B\n"
+                "https://example.test/page#section\n"
             ),
         )
 
@@ -74,6 +84,12 @@ class MarkdownConversionTest(unittest.TestCase):
             "before\necho **literal**\nvalue = '''not a fence'''\nafter\n",
         )
         self.assertEqual(strip_markdown_markup("```\nunclosed\n"), "```\nunclosed\n")
+        self.assertEqual(
+            strip_markdown_markup(
+                "```\n###1、围栏内保留\n### 1. 围栏内也保留\n```\n"
+            ),
+            "###1、围栏内保留\n### 1. 围栏内也保留\n",
+        )
 
     def test_inline_formatting_is_removed_conservatively(self) -> None:
         source = "**bold** __strong__ *italic* _em_ ~~strike~~ `code`"
@@ -203,6 +219,27 @@ class MarkdownEditorTest(unittest.TestCase):
             editor.set_note_content("**text**")
             button.click()
             self.assertEqual(editor.toPlainText(), "text")
+
+            editor.set_note_content(
+                "### 1. 外部粘贴与清除格式\n"
+                "###1、第一项\n"
+                "###2、第二项\n"
+                "#标签\n"
+                "C#\n"
+                "A#B\n"
+                "https://example.test/page#section"
+            )
+            button.click()
+            self.assertEqual(
+                editor.toPlainText(),
+                "1. 外部粘贴与清除格式\n"
+                "1、第一项\n"
+                "2、第二项\n"
+                "#标签\n"
+                "C#\n"
+                "A#B\n"
+                "https://example.test/page#section",
+            )
             toolbar.close()
             editor.close()
 
