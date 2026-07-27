@@ -24,7 +24,7 @@ def rendered_foreground(editor: NotesEditor, position: int) -> str | None:
 
 
 class MarkdownConversionTest(unittest.TestCase):
-    def test_headings_require_space_and_support_levels_one_through_six(self) -> None:
+    def test_headings_support_spaced_levels_one_through_six(self) -> None:
         source = "\n".join(
             [*("#" * level + f" Heading {level}" for level in range(1, 7)), "#标签", "#giffgaff"]
         )
@@ -32,6 +32,31 @@ class MarkdownConversionTest(unittest.TestCase):
             [*(f"Heading {level}" for level in range(1, 7)), "#标签", "#giffgaff"]
         )
         self.assertEqual(strip_markdown_markup(source), expected)
+
+    def test_heading_cleanup_preserves_numbering_and_ordinary_hashes(self) -> None:
+        source = (
+            "# 1、\n"
+            "## 1.\n"
+            "###1、\n"
+            "### 1)\n"
+            "#### 第一章\n"
+            "正文中的 # 号保留\n"
+            "#标签\n"
+            "版本#1、保留\n"
+        )
+        self.assertEqual(
+            strip_markdown_markup(source),
+            (
+                "1、\n"
+                "1.\n"
+                "1、\n"
+                "1)\n"
+                "第一章\n"
+                "正文中的 # 号保留\n"
+                "#标签\n"
+                "版本#1、保留\n"
+            ),
+        )
 
     def test_fenced_code_drops_matched_fences_and_preserves_code(self) -> None:
         source = (

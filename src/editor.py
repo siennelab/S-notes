@@ -13,6 +13,7 @@ from PySide6.QtGui import (
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
     QTextFormat,
     QTextListFormat,
 )
@@ -36,6 +37,7 @@ ALLOWED_HTML_TAGS = (
     "pre",
     "code",
     "blockquote",
+    "div",
     "h1",
     "h2",
     "h3",
@@ -51,7 +53,9 @@ MARKDOWN_SIGNAL_RE = re.compile(
 MARKDOWN_FENCE_RE = re.compile(
     r"^[ \t]{0,3}(`{3,}|~{3,})(?:[ \t]*[A-Za-z0-9_+.-]+)?[ \t]*$"
 )
-MARKDOWN_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+")
+MARKDOWN_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,6}(?:[ \t]+|(?=\d+[、.)．。]))"
+)
 MARKDOWN_QUOTE_RE = re.compile(r"^([ \t]{0,3})>[ \t]?")
 MARKDOWN_TASK_RE = re.compile(r"^([ ]{0,3})[-+*][ \t]+\[[ xX]\][ \t]+")
 MARKDOWN_UNORDERED_RE = re.compile(r"^([ ]{0,3})[-+*][ \t]+")
@@ -282,6 +286,11 @@ class NotesEditor(QTextEdit):
             if source.hasHtml():
                 safe_html = self.sanitize_html(source.html())
                 if safe_html.strip():
+                    if source.hasText():
+                        source_text = self.sanitize_pasted_text(source.text())
+                        if self._plain_text_from_html(safe_html) != source_text:
+                            self.insertPlainText(source_text)
+                            return
                     self.insertHtml(safe_html)
                     return
 
@@ -376,7 +385,11 @@ class NotesEditor(QTextEdit):
             del editor_blocker
 
     def note_content_html(self) -> str:
-        return self.toHtml()
+        document = QTextDocument()
+        document.setDefaultFont(editor_document_font())
+        document.setDefaultStyleSheet(editor_document_style())
+        document.setHtml(self.toHtml())
+        return document.toHtml()
 
     def apply_bold(self) -> None:
         self.setFontWeight(QFont.Normal if self.fontWeight() > QFont.Normal else QFont.Bold)
@@ -390,7 +403,11 @@ class NotesEditor(QTextEdit):
         self.textCursor().mergeCharFormat(char_format)
         self.mergeCurrentCharFormat(char_format)
 
-    def clear_formatting(self) -> None:
+    def clear_formatting(self) -> bool:
+        if self.isReadOnly() or not self.isEnabled():
+            return False
+
+        before_html = self.toHtml()
         cursor = self.textCursor()
         if cursor.hasSelection():
             text = self.sanitize_pasted_text(cursor.selection().toPlainText())
@@ -400,10 +417,14 @@ class NotesEditor(QTextEdit):
             end = cursor.position()
             self.normalize_format_range(start, end)
             cursor.endEditBlock()
-            return
+        else:
+            text = self.toPlainText()
+            self.setPlainText(self.sanitize_pasted_text(text))
 
-        text = self.toPlainText()
-        self.setPlainText(self.sanitize_pasted_text(text))
+        changed = self.toHtml() != before_html
+        if changed:
+            self.document().setModified(True)
+        return changed
 
     def clear_markdown_markup(self) -> bool:
         if self.isReadOnly() or not self.isEnabled():
@@ -1022,8 +1043,6 @@ class NotesEditor(QTextEdit):
         clean = UNSAFE_HTML_BLOCK_RE.sub("", clean)
         clean = UNSAFE_HTML_SINGLE_RE.sub("", clean)
         clean = re.sub(r"(?is)<!--.*?-->", "", clean)
-        clean = re.sub(r"(?is)<\s*div[^>]*>", "<p>", clean)
-        clean = re.sub(r"(?is)</\s*div\s*>", "</p>", clean)
         clean = re.sub(r"(?is)<\s*span[^>]*>", "", clean)
         clean = re.sub(r"(?is)</\s*span\s*>", "", clean)
         clean = HTML_ATTRIBUTE_RE.sub("", clean)
@@ -1044,6 +1063,12 @@ class NotesEditor(QTextEdit):
         )
         clean = re.sub(rf"(?is)</?(?!{allowed}\b)[a-z][^>]*>", "", clean)
         return clean
+
+    @staticmethod
+    def _plain_text_from_html(markup: str) -> str:
+        document = QTextDocument()
+        document.setHtml(markup or "")
+        return NotesEditor.sanitize_pasted_text(document.toPlainText())
 
     @classmethod
     def markdown_to_html(cls, text: str) -> str:

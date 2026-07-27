@@ -4,7 +4,7 @@ import html
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.app_paths import DATABASE_PATH
@@ -937,11 +937,10 @@ def update_note(
     sub_sub_category: str | None = None,
     database_path: Path = DATABASE_PATH,
 ) -> dict:
-    timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
         current = connection.execute(
             """
-            SELECT main_category, sub_category, sub_sub_category
+            SELECT main_category, sub_category, sub_sub_category, updated_at
             FROM notes
             WHERE id = ? AND is_deleted = 0
             """,
@@ -950,6 +949,7 @@ def update_note(
         if current is None:
             raise ValueError(f"笔记不存在或已删除: {note_id}")
 
+        timestamp = _next_note_updated_at(current["updated_at"])
         next_main = main_category or current["main_category"]
         next_sub = sub_category or current["sub_category"]
         next_sub_sub = sub_sub_category or current["sub_sub_category"]
@@ -986,6 +986,19 @@ def update_note(
     if note is None:
         raise RuntimeError(f"保存后读取失败: {note_id}")
     return note
+
+
+def _next_note_updated_at(previous: str) -> str:
+    timestamp = now_shanghai()
+    try:
+        prior = datetime.fromisoformat(previous)
+        if prior.tzinfo is None:
+            prior = prior.replace(tzinfo=timestamp.tzinfo)
+        if timestamp <= prior:
+            timestamp = prior + timedelta(microseconds=1)
+    except (TypeError, ValueError):
+        pass
+    return timestamp.isoformat(timespec="microseconds")
 
 
 def list_directories(database_path: Path = DATABASE_PATH) -> list[dict]:

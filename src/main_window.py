@@ -738,6 +738,9 @@ class MainWindow(QMainWindow):
         self.body_edit.setObjectName("bodyEdit")
         self.body_edit.setPlaceholderText("写正文")
         self.body_edit.textChanged.connect(self.mark_note_dirty)
+        self.body_edit.document().modificationChanged.connect(
+            self.handle_body_document_modification
+        )
         self.editor_toolbar = EditorToolbar(self.body_edit)
         body_section_layout.addWidget(self.editor_toolbar)
         body_section_layout.addWidget(self.body_edit, stretch=1)
@@ -1640,6 +1643,10 @@ class MainWindow(QMainWindow):
         self.status_label.setText("未保存")
         self.save_timer.start()
 
+    def handle_body_document_modification(self, modified: bool) -> None:
+        if modified:
+            self.mark_note_dirty()
+
     def force_save_current_note(self, *, refresh_tree: bool = True) -> bool:
         self.save_timer.stop()
         return self.save_current_note(refresh_tree=refresh_tree)
@@ -1651,8 +1658,12 @@ class MainWindow(QMainWindow):
         self.status_label.setText("保存中...")
         QApplication.processEvents()
         try:
+            note_id = self.current_note["id"]
+            set_note_tags(note_id, parse_tags(self.tags_input.text()))
+            set_note_ai_visibility(note_id, self.ai_visibility_combo.currentText())
+            set_note_ai_targets(note_id, self.selected_ai_targets())
             note = update_note(
-                self.current_note["id"],
+                note_id,
                 title=self.title_input.text().strip() or "未命名笔记",
                 content_html=self.body_edit.note_content_html(),
                 main_category=self.main_category_combo.currentText()
@@ -1661,9 +1672,6 @@ class MainWindow(QMainWindow):
                 sub_sub_category=self.sub_sub_category_combo.currentText()
                 or DEFAULT_SUB_SUB_CATEGORY,
             )
-            set_note_tags(note["id"], parse_tags(self.tags_input.text()))
-            set_note_ai_visibility(note["id"], self.ai_visibility_combo.currentText())
-            set_note_ai_targets(note["id"], self.selected_ai_targets())
             note = get_note(note["id"])
             if note is None:
                 raise RuntimeError("保存后读取失败")
@@ -1673,6 +1681,7 @@ class MainWindow(QMainWindow):
             return False
 
         self.current_note = note
+        self.body_edit.document().setModified(False)
         self.has_unsaved_changes = False
         self.status_label.setText(
             f"已保存 · 更新于 {format_display_datetime(note['updated_at'])}"
