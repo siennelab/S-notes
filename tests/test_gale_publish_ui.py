@@ -9,7 +9,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from src.database import initialize_database
-from src.main_window import GalePublishThread, MainWindow
+from src.main_window import (
+    GalePublishThread,
+    MainWindow,
+    application_settings,
+)
 
 
 class GalePublishUiTest(unittest.TestCase):
@@ -19,6 +23,9 @@ class GalePublishUiTest(unittest.TestCase):
         initialize_database()
 
     def setUp(self) -> None:
+        self.settings = application_settings()
+        self.settings.remove(MainWindow.GALE_AUTO_PUBLISH_SETTING)
+        self.settings.sync()
         self.window = MainWindow()
         self.window.show()
         self.app.processEvents()
@@ -30,6 +37,8 @@ class GalePublishUiTest(unittest.TestCase):
         self.window.gale_publish_thread = None
         self.window.close()
         self.app.processEvents()
+        self.settings.remove(MainWindow.GALE_AUTO_PUBLISH_SETTING)
+        self.settings.sync()
 
     def test_existing_action_area_has_minimal_publish_menu(self) -> None:
         button = self.window.gale_menu_button
@@ -44,8 +53,40 @@ class GalePublishUiTest(unittest.TestCase):
             ["立即发布给 Gale", "", "自动发布给 Gale"],
         )
         self.assertTrue(self.window.gale_auto_publish_action.isCheckable())
+        self.assertFalse(self.window.gale_auto_publish_action.isChecked())
+
+    def test_auto_publish_default_does_not_start_monitoring(self) -> None:
+        self.assertFalse(self.window.gale_auto_scheduler.enabled)
+        self.assertFalse(self.window.gale_watch_timer.isActive())
+
+    def test_enabling_auto_publish_starts_monitoring_only_once(self) -> None:
+        with (
+            patch.object(self.window.gale_watch_timer, "start") as start_timer,
+            patch.object(
+                self.window,
+                "check_gale_auto_publish",
+            ) as check_publish,
+        ):
+            self.window.gale_auto_publish_action.setChecked(True)
+            self.window.gale_auto_publish_action.setChecked(True)
+
+        start_timer.assert_called_once_with()
+        check_publish.assert_called_once_with()
+        self.assertTrue(self.window.gale_auto_scheduler.enabled)
+
+    def test_disabling_auto_publish_prevents_new_publish_tasks(self) -> None:
+        self.window.gale_auto_publish_action.setChecked(True)
+        self.window.gale_auto_publish_action.setChecked(False)
+
+        with patch.object(self.window, "start_gale_publish") as start_publish:
+            self.window.check_gale_auto_publish(network_restored=True)
+
+        start_publish.assert_not_called()
+        self.assertFalse(self.window.gale_auto_scheduler.enabled)
+        self.assertFalse(self.window.gale_watch_timer.isActive())
 
     def test_manual_publish_starts_background_thread_without_sync_publish(self) -> None:
+        self.assertFalse(self.window.gale_auto_publish_action.isChecked())
         with (
             patch(
                 "src.main_window.publish_gale_mirror"

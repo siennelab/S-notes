@@ -38,6 +38,8 @@ from PySide6.QtWidgets import (
 from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS, visibility_display
 from src.ai_center_dialog import AiCenterDialog
 from src.app_paths import (
+    APP_SETTINGS_PATH,
+    DATA_ROOT_OVERRIDDEN,
     GALE_MIRROR_PATH,
     GALE_PUBLISH_LOCK_PATH,
     GALE_PUBLISH_STATE_PATH,
@@ -171,6 +173,13 @@ def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
     return left_margin, right_margin, leading_space
 
 
+def application_settings() -> QSettings:
+    if DATA_ROOT_OVERRIDDEN:
+        APP_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return QSettings(str(APP_SETTINGS_PATH), QSettings.IniFormat)
+    return QSettings("S-notes", "S-notes")
+
+
 class GalePublishThread(QThread):
     def __init__(self, config: GalePublishConfig, *, manual: bool) -> None:
         super().__init__()
@@ -212,7 +221,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.settings = QSettings("S-notes", "S-notes")
+        self.settings = application_settings()
         self.current_theme_name = load_saved_theme()
         app = QApplication.instance()
         if app is not None:
@@ -241,6 +250,7 @@ class MainWindow(QMainWindow):
         self.search_timer.timeout.connect(self.apply_search_filter)
         publish_state = load_publish_state(GALE_PUBLISH_STATE_PATH)
         self.gale_auto_scheduler = GaleAutoPublishScheduler(
+            enabled=False,
             last_success_hash=publish_state.last_success_hash,
         )
         self.gale_publish_thread: GalePublishThread | None = None
@@ -679,7 +689,7 @@ class MainWindow(QMainWindow):
         self.gale_auto_publish_action.setChecked(
             self.settings.value(
                 self.GALE_AUTO_PUBLISH_SETTING,
-                True,
+                False,
                 type=bool,
             )
         )
@@ -1401,11 +1411,14 @@ class MainWindow(QMainWindow):
             self.gale_network_information = None
 
     def set_gale_auto_publish_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
         self.settings.setValue(
             self.GALE_AUTO_PUBLISH_SETTING,
-            bool(enabled),
+            enabled,
         )
         self.settings.sync()
+        if enabled == self.gale_auto_scheduler.enabled:
+            return
         if enabled:
             self.gale_auto_scheduler.enable()
             self.gale_watch_timer.start()
