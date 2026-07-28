@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -66,8 +68,18 @@ class EqualWidthTabBar(QTabBar):
 class AiCenterDialog(QWidget):
     finished = Signal(int)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        auto_publish_enabled: bool = False,
+        set_auto_publish_enabled: Callable[[bool], None] | None = None,
+        publish_now: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(parent, Qt.Window)
+        self._set_auto_publish_enabled = set_auto_publish_enabled
+        self._publish_now = publish_now
+        self._initial_auto_publish_enabled = bool(auto_publish_enabled)
         self.setObjectName("aiCenterDialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setWindowTitle("AI中心")
@@ -283,9 +295,53 @@ class AiCenterDialog(QWidget):
         note.setWordWrap(True)
         note.setObjectName("statusLabel")
         layout.addWidget(note)
+
+        remote_group = QWidget()
+        remote_group.setObjectName("remoteAiAccessGroup")
+        remote_layout = QVBoxLayout(remote_group)
+        remote_layout.setContentsMargins(12, 12, 12, 12)
+        remote_layout.setSpacing(10)
+        remote_title = QLabel("远程 AI 访问")
+        remote_title.setObjectName("settingsSectionTitle")
+        remote_layout.addWidget(remote_title)
+
+        controls = QGridLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setHorizontalSpacing(16)
+        controls.setVerticalSpacing(8)
+        controls.setColumnStretch(0, 1)
+        controls.addWidget(QLabel("自动更新"), 0, 0)
+        self.remote_auto_update = QCheckBox()
+        self.remote_auto_update.setObjectName("remoteAutoUpdate")
+        self.remote_auto_update.setChecked(self._initial_auto_publish_enabled)
+        self.remote_auto_update.toggled.connect(self.handle_remote_auto_update)
+        controls.addWidget(self.remote_auto_update, 0, 1, Qt.AlignRight)
+        controls.addWidget(QLabel("立即更新"), 1, 0)
+        self.remote_update_now = QPushButton("立即更新")
+        self.remote_update_now.setObjectName("remoteUpdateNow")
+        self.remote_update_now.clicked.connect(self.handle_remote_update_now)
+        controls.addWidget(self.remote_update_now, 1, 1, Qt.AlignRight)
+        remote_layout.addLayout(controls)
+
+        remote_note = QLabel("仅更新符合 AI 对象与 AI 可见性规则的内容")
+        remote_note.setObjectName("remoteAiAccessNote")
+        remote_note.setWordWrap(True)
+        remote_layout.addWidget(remote_note)
+        layout.addWidget(remote_group)
         layout.addStretch(1)
         self.refresh_settings()
         return page
+
+    def handle_remote_auto_update(self, enabled: bool) -> None:
+        if self._set_auto_publish_enabled is not None:
+            self._set_auto_publish_enabled(bool(enabled))
+
+    def handle_remote_update_now(self) -> None:
+        if self._publish_now is not None:
+            self._publish_now()
+
+    def set_remote_publish_enabled(self, enabled: bool) -> None:
+        self.remote_update_now.setEnabled(bool(enabled))
 
     def refresh_settings(self) -> None:
         values = get_ai_settings()

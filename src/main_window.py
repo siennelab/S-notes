@@ -9,6 +9,7 @@ from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -147,30 +148,13 @@ class EditorSheet(QWidget):
 
 EDITOR_BASELINE_MAX_WIDTH = 800
 EDITOR_ACCEPTED_MAX_WIDTH = 920
-EDITOR_TARGET_MAX_WIDTH = 1000
-EDITOR_WIDE_RATIO_MIN_WIDTH = 960
+EDITOR_TARGET_MAX_WIDTH = 1280
 
 
 def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
     left_margin = 48 if width >= 896 else 24 if width >= 640 else 16
     right_margin = 40 if left_margin == 48 else left_margin
-    baseline_available_width = max(0, width - (left_margin * 2))
-    baseline_width = min(EDITOR_BASELINE_MAX_WIDTH, baseline_available_width)
-    leading_space = max(0, (baseline_available_width - baseline_width) // 2)
-
-    if width >= EDITOR_WIDE_RATIO_MIN_WIDTH:
-        accepted_left_gap = left_margin + leading_space
-        accepted_sheet_width = min(
-            EDITOR_ACCEPTED_MAX_WIDTH,
-            max(0, width - accepted_left_gap - right_margin),
-        )
-        accepted_right_gap = max(
-            right_margin,
-            width - accepted_left_gap - accepted_sheet_width,
-        )
-        return accepted_right_gap * 2, accepted_right_gap, 0
-
-    return left_margin, right_margin, leading_space
+    return left_margin, right_margin, 0
 
 
 def application_settings() -> QSettings:
@@ -337,6 +321,8 @@ class MainWindow(QMainWindow):
         if app is not None:
             apply_theme(app, theme_name)
         save_theme(theme_name)
+        if hasattr(self, "body_edit"):
+            self.body_edit.apply_theme()
         self._update_theme_button_states()
         self._refresh_theme_icons()
         if sidebar_width is not None:
@@ -367,7 +353,6 @@ class MainWindow(QMainWindow):
             getattr(self, "pin_button", None),
             getattr(self, "link_drawer_button", None),
             getattr(self, "export_button", None),
-            getattr(self, "gale_menu_button", None),
             getattr(self, "delete_note_button", None),
         ):
             if button is not None and button.property("iconFile"):
@@ -620,18 +605,16 @@ class MainWindow(QMainWindow):
 
         self.title_band = QWidget()
         self.title_band.setObjectName("titleBand")
-        title_band_layout = QGridLayout(self.title_band)
+        title_band_layout = QHBoxLayout(self.title_band)
         title_band_layout.setContentsMargins(0, 0, 0, 0)
-        title_band_layout.setHorizontalSpacing(8)
-        title_band_layout.setVerticalSpacing(0)
-        title_band_layout.setColumnStretch(0, 1)
+        title_band_layout.setSpacing(8)
         self.title_input = QLineEdit()
         self.title_input.setObjectName("titleInput")
         self.title_input.setPlaceholderText("标题")
         self.title_input.setMinimumWidth(0)
         self.title_input.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.title_input.textChanged.connect(self.mark_note_dirty)
-        title_band_layout.addWidget(self.title_input, 0, 0, alignment=Qt.AlignBottom)
+        title_band_layout.addWidget(self.title_input, stretch=1, alignment=Qt.AlignBottom)
         self.editor_action_bar = QWidget()
         self.editor_action_bar.setObjectName("editorActionBar")
         self.editor_action_bar.setFixedHeight(36)
@@ -665,42 +648,16 @@ class MainWindow(QMainWindow):
         action_bar_layout.addWidget(self.pin_button)
         action_bar_layout.addWidget(self.link_drawer_button)
         action_bar_layout.addWidget(self.export_button)
-        self.gale_menu_button = QToolButton()
-        self.gale_menu_button.setObjectName("actionBarButton")
-        self.gale_menu_button.setProperty(
-            "iconFile",
-            "more-horizontal.svg",
+        title_band_layout.addWidget(
+            self.editor_action_bar,
+            alignment=Qt.AlignRight | Qt.AlignBottom,
         )
-        self.gale_menu_button.setIcon(themed_icon("more-horizontal.svg"))
-        self.gale_menu_button.setIconSize(QSize(14, 14))
-        self.gale_menu_button.setFixedSize(28, 28)
-        self.gale_menu_button.setToolTip("Gale 发布")
-        self.gale_menu_button.setPopupMode(QToolButton.InstantPopup)
-        gale_menu = QMenu(self.gale_menu_button)
-        self.gale_publish_action = gale_menu.addAction(
-            "立即发布给 Gale",
-            self.publish_to_gale_now,
-        )
-        gale_menu.addSeparator()
-        self.gale_auto_publish_action = gale_menu.addAction(
-            "自动发布给 Gale"
-        )
-        self.gale_auto_publish_action.setCheckable(True)
-        self.gale_auto_publish_action.setChecked(
-            self.settings.value(
-                self.GALE_AUTO_PUBLISH_SETTING,
-                False,
-                type=bool,
-            )
-        )
-        self.gale_auto_publish_action.toggled.connect(
-            self.set_gale_auto_publish_enabled
-        )
-        self.gale_menu_button.setMenu(gale_menu)
-        action_bar_layout.addWidget(self.gale_menu_button)
-
-        title_band_layout.addWidget(self.editor_action_bar, 0, 1, Qt.AlignRight | Qt.AlignBottom)
         layout.addWidget(self.title_band)
+        self.title_separator = QFrame()
+        self.title_separator.setObjectName("titleSeparator")
+        self.title_separator.setFrameShape(QFrame.HLine)
+        self.title_separator.setFixedHeight(1)
+        layout.addWidget(self.title_separator)
 
         self.metadata_section = QWidget()
         self.metadata_section.setObjectName("metadataSection")
@@ -1112,24 +1069,9 @@ class MainWindow(QMainWindow):
 
     def confirm_delete_selected_notes(self) -> None:
         note_ids = self.selected_note_ids()
-        if len(note_ids) <= 1:
-            if note_ids:
-                self.confirm_delete_note(note_ids[0])
+        if not note_ids:
             return
-        if not self.confirm_continue(
-            "删除所选笔记",
-            f"删除所选的 {len(note_ids)} 篇笔记后，它们会移入回收站。是否继续？",
-        ):
-            return
-        try:
-            for note_id in note_ids:
-                soft_delete_note(note_id)
-        except Exception as error:
-            QMessageBox.warning(self, "删除笔记失败", str(error))
-            return
-        if self.current_note and self.current_note["id"] in note_ids:
-            self.clear_editor()
-        self.refresh_current_sidebar_view()
+        self.delete_notes_to_trash(note_ids)
 
     def handle_search_text_changed(self) -> None:
         self.search_timer.start()
@@ -1388,7 +1330,13 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def configure_gale_auto_publish(self) -> None:
-        enabled = bool(self.gale_auto_publish_action.isChecked())
+        enabled = bool(
+            self.settings.value(
+                self.GALE_AUTO_PUBLISH_SETTING,
+                False,
+                type=bool,
+            )
+        )
         self.gale_auto_scheduler.enabled = enabled
         if enabled:
             self.gale_watch_timer.start()
@@ -1430,6 +1378,15 @@ class MainWindow(QMainWindow):
     def publish_to_gale_now(self) -> None:
         self.start_gale_publish(manual=True)
 
+    def set_gale_publish_control_enabled(self, enabled: bool) -> None:
+        dialog = self.receipt_inbox_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.set_remote_publish_enabled(enabled)
+        except RuntimeError:
+            self.receipt_inbox_dialog = None
+
     def start_gale_publish(self, *, manual: bool) -> None:
         if (
             self.gale_publish_thread is not None
@@ -1439,7 +1396,7 @@ class MainWindow(QMainWindow):
                 self.status_label.setText("正在发布给 Gale")
             return
         self.gale_auto_scheduler.mark_started()
-        self.gale_publish_action.setEnabled(False)
+        self.set_gale_publish_control_enabled(False)
         thread = GalePublishThread(
             GalePublishConfig(
                 mirror_path=GALE_MIRROR_PATH,
@@ -1467,7 +1424,7 @@ class MainWindow(QMainWindow):
         manual = thread.manual
         thread.deleteLater()
         self.gale_publish_thread = None
-        self.gale_publish_action.setEnabled(True)
+        self.set_gale_publish_control_enabled(True)
 
         if result.status in {"success", "duplicate"}:
             if result.sha256:
@@ -1555,8 +1512,19 @@ class MainWindow(QMainWindow):
                 return
             except RuntimeError:
                 self.receipt_inbox_dialog = None
-        dialog = AiCenterDialog(self)
+        dialog = AiCenterDialog(
+            self,
+            auto_publish_enabled=self.gale_auto_scheduler.enabled,
+            set_auto_publish_enabled=self.set_gale_auto_publish_enabled,
+            publish_now=self.publish_to_gale_now,
+        )
         self.receipt_inbox_dialog = dialog
+        dialog.set_remote_publish_enabled(
+            not (
+                self.gale_publish_thread is not None
+                and self.gale_publish_thread.isRunning()
+            )
+        )
         dialog.finished.connect(
             lambda _result, target=dialog: self.handle_receipt_inbox_closed(target)
         )
@@ -1895,6 +1863,7 @@ class MainWindow(QMainWindow):
         self.editor_toolbar.setVisible(show_content)
         self.body_edit.setVisible(show_content)
         self.title_band.setVisible(show_content)
+        self.title_separator.setVisible(show_content)
         self.metadata_section.setVisible(show_content)
         self.body_section.setVisible(show_content)
         self.empty_editor_label.setVisible(not show_content)
@@ -2187,19 +2156,74 @@ class MainWindow(QMainWindow):
         if note is None:
             self.refresh_directory_tree()
             return
-        if not self.confirm_continue(
-            "删除笔记",
-            f"删除“{note['title']}”后，该笔记会移入回收站。是否继续？",
-        ):
+        self.delete_notes_to_trash([note_id])
+
+    def delete_notes_to_trash(self, note_ids: list[int]) -> None:
+        ordered_ids = list(dict.fromkeys(int(note_id) for note_id in note_ids))
+        if not ordered_ids:
             return
+        if not self.force_save_current_note(refresh_tree=False):
+            return
+
+        deleted_ids = set(ordered_ids)
+        current_id = self.current_note["id"] if self.current_note else None
+        visible_ids = self.visible_note_ids()
+        adjacent_id = None
+        if current_id in deleted_ids and current_id in visible_ids:
+            current_index = visible_ids.index(current_id)
+            remaining_ids = [
+                note_id for note_id in visible_ids if note_id not in deleted_ids
+            ]
+            if remaining_ids:
+                adjacent_id = remaining_ids[min(current_index, len(remaining_ids) - 1)]
+
         try:
-            soft_delete_note(note_id)
+            for target_id in ordered_ids:
+                soft_delete_note(target_id)
         except Exception as error:
             QMessageBox.warning(self, "删除笔记失败", str(error))
             return
-        if self.current_note and self.current_note["id"] == note_id:
-            self.clear_editor()
-        self.refresh_current_sidebar_view()
+
+        if current_id in deleted_ids:
+            if adjacent_id is not None:
+                self.load_note(adjacent_id)
+            else:
+                self.clear_editor()
+
+        selected_id = (
+            adjacent_id
+            if current_id in deleted_ids
+            else (self.current_note["id"] if self.current_note else None)
+        )
+        self.refresh_current_sidebar_view(selected_id)
+        if selected_id is not None:
+            self.select_note_in_table(selected_id)
+        self.show_transient_status("已移入回收站")
+
+    def select_note_in_table(self, note_id: int) -> None:
+        for row in range(self.note_table.rowCount()):
+            item = self.note_table.item(row, 0)
+            if item is not None and item.data(Qt.UserRole) == note_id:
+                self.note_table.selectRow(row)
+                self.note_table.scrollToItem(item)
+                return
+
+    def show_transient_status(self, message: str, duration_ms: int = 1800) -> None:
+        self.status_label.setText(message)
+        QTimer.singleShot(
+            duration_ms,
+            lambda expected=message: self.restore_status_after_transient(expected),
+        )
+
+    def restore_status_after_transient(self, expected: str) -> None:
+        if self.status_label.text() != expected:
+            return
+        if self.current_note is None:
+            self.status_label.setText("未选择笔记")
+            return
+        self.status_label.setText(
+            f"已保存 · 更新于 {format_display_datetime(self.current_note['updated_at'])}"
+        )
 
     def restore_deleted_note(self, note_id: int) -> None:
         try:

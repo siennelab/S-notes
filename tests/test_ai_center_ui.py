@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from src.ai_center_dialog import AiCenterDialog
 from src.services.ai_access_service import (
@@ -21,7 +21,7 @@ class AiCenterUiTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def build_dialog(self) -> AiCenterDialog:
+    def build_dialog(self, **kwargs) -> AiCenterDialog:
         patches = (
             patch("src.ai_center_dialog.list_ai_note_history", return_value=[]),
             patch("src.ai_center_dialog.list_ai_call_logs", return_value=[]),
@@ -40,7 +40,37 @@ class AiCenterUiTest(unittest.TestCase):
         for active_patch in patches:
             active_patch.start()
             self.addCleanup(active_patch.stop)
-        return AiCenterDialog()
+        return AiCenterDialog(**kwargs)
+
+    def test_settings_contains_remote_ai_access_without_adding_a_tab(self) -> None:
+        dialog = self.build_dialog()
+        self.assertEqual(dialog.tabs.count(), 4)
+        self.assertEqual(
+            [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())],
+            ["待确认", "修改历史", "调用记录", "设置"],
+        )
+        self.assertIsNotNone(dialog.findChild(QWidget, "remoteAiAccessGroup"))
+        self.assertFalse(dialog.remote_auto_update.isChecked())
+        self.assertEqual(dialog.remote_update_now.text(), "立即更新")
+        labels = [
+            child.text()
+            for child in dialog.findChildren(QWidget)
+            if hasattr(child, "text")
+        ]
+        self.assertIn("远程 AI 访问", labels)
+        self.assertIn("仅更新符合 AI 对象与 AI 可见性规则的内容", labels)
+
+    def test_remote_controls_call_injected_existing_controllers(self) -> None:
+        set_auto = unittest.mock.Mock()
+        publish_now = unittest.mock.Mock()
+        dialog = self.build_dialog(
+            set_auto_publish_enabled=set_auto,
+            publish_now=publish_now,
+        )
+        dialog.remote_auto_update.setChecked(True)
+        dialog.remote_update_now.click()
+        set_auto.assert_called_once_with(True)
+        publish_now.assert_called_once_with()
 
     def test_primary_tabs_fill_the_row_in_four_equal_responsive_sections(self) -> None:
         apply_theme(self.app, "dark")

@@ -21,7 +21,13 @@ class ThemeTokens:
     sidebar_separator: str
     sidebar_hover: str
     sidebar_selected: str
+    sidebar_text: str
+    sidebar_text_muted: str
+    sidebar_text_subtle: str
     editor: str
+    editor_paper: str
+    editor_border: str
+    title_separator: str
     surface: str
     surface_hover: str
     surface_selected: str
@@ -63,44 +69,56 @@ THEMES: dict[str, ThemeTokens] = {
         sidebar_separator="#292C2E",
         sidebar_hover="#292C2E",
         sidebar_selected="#303438",
+        sidebar_text="#E7E9E8",
+        sidebar_text_muted="#A4AAA7",
+        sidebar_text_subtle="#707774",
         editor="#1B1D1E",
+        editor_paper="#222526",
+        editor_border="#393D3B",
+        title_separator="#76503E",
         surface="#242729",
         surface_hover="#2C3032",
         surface_selected="#32383A",
         text="#E7E9E8",
         text_muted="#A4AAA7",
         text_subtle="#707774",
-        accent="#48B981",
-        accent_soft="#253C32",
-        accent_text="#F5FBF8",
+        accent="#B97855",
+        accent_soft="#3D2D27",
+        accent_text="#FFF8F3",
         warning="#D8A45B",
         danger="#D87171",
-        focus="#65C995",
+        focus="#CB8A67",
         scrollbar="#515855",
         disabled="#5E6562",
     ),
     "light-slate": ThemeTokens(
         name="light-slate",
-        window="#E7EAED",
-        sidebar="#DCE2EA",
-        sidebar_control="#CAD2DD",
-        sidebar_separator="#C3CCD7",
-        sidebar_hover="#E8ECF1",
-        sidebar_selected="#FFFFFF",
-        editor="#FFFFFF",
-        surface="#F6F8F9",
-        surface_hover="#EAF0F3",
-        surface_selected="#DFE8EE",
+        window="#D9DEE3",
+        sidebar="#394653",
+        sidebar_control="#465563",
+        sidebar_separator="#536170",
+        sidebar_hover="#465563",
+        sidebar_selected="#526170",
+        sidebar_text="#F2F5F7",
+        sidebar_text_muted="#CAD2D9",
+        sidebar_text_subtle="#9EABB5",
+        editor="#D9DEE3",
+        editor_paper="#F0F2F3",
+        editor_border="#C5CBD0",
+        title_separator="#B9C0C6",
+        surface="#E7EBEE",
+        surface_hover="#DDE3E7",
+        surface_selected="#D2DBE1",
         text="#23292E",
         text_muted="#68737C",
         text_subtle="#929CA4",
-        accent="#3E5C76",
-        accent_soft="#D9E4EC",
+        accent="#5F768B",
+        accent_soft="#CAD6DF",
         accent_text="#FFFFFF",
         warning="#9A6A22",
         danger="#A34444",
-        focus="#3E5C76",
-        scrollbar="#B8C0C6",
+        focus="#526C83",
+        scrollbar="#AEB7BE",
         disabled="#AAB2B8",
     ),
     "light-clay": ThemeTokens(
@@ -111,7 +129,13 @@ THEMES: dict[str, ThemeTokens] = {
         sidebar_separator="#EAE7E3",
         sidebar_hover="#EAE7E3",
         sidebar_selected="#E2DDD7",
-        editor="#FFFFFF",
+        sidebar_text="#2A2723",
+        sidebar_text_muted="#716C65",
+        sidebar_text_subtle="#9B958C",
+        editor="#E8E3DD",
+        editor_paper="#FAF9F7",
+        editor_border="#D6CEC5",
+        title_separator="#CFC5BA",
         surface="#F7F6F4",
         surface_hover="#EEEAE6",
         surface_selected="#E6E0DA",
@@ -134,7 +158,7 @@ THEME_SETTINGS_KEY = "theme"
 THEME_SETTINGS_PATH = CONFIG_DIR / "ui_settings.ini"
 THEME_LABELS = (
     ("dark", "夜间"),
-    ("light-slate", "蓝灰"),
+    ("light-slate", "石板"),
     ("light-clay", "陶土"),
 )
 ICON_DIR = Path(__file__).with_name("icons")
@@ -256,12 +280,12 @@ QMenu {{
     border-radius: 10px;
     padding: 8px;
     background: {t.sidebar};
-    color: {t.text};
+    color: {t.sidebar_text};
 }}
 QMenu::separator {{ height: 4px; background: transparent; margin: 4px 0; }}
 QMenu::item {{ border-radius: 6px; padding: 8px 24px 8px 12px; }}
-QMenu::item:selected {{ background: {t.sidebar_selected}; color: {t.text}; }}
-QMenu::item:pressed {{ background: {t.accent_soft}; color: {t.text}; }}
+QMenu::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+QMenu::item:pressed {{ background: {t.accent_soft}; color: {t.sidebar_text}; }}
 QMenu::item:disabled {{ color: {t.disabled}; }}
 QMenu::item:focus {{ border: 1px solid {t.focus}; }}
 QToolTip {{
@@ -269,7 +293,7 @@ QToolTip {{
     border-radius: 6px;
     padding: 4px 8px;
     background: {t.sidebar_selected};
-    color: {t.text};
+    color: {t.sidebar_text};
 }}
 QAbstractItemView {{
     border: 0;
@@ -294,48 +318,56 @@ QHeaderView::section {{
 
 #mainContentArea {{ background: {t.editor}; }}
 #sidebar {{ background: {t.sidebar}; }}
-#sidebarTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#sidebarTitle {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
 #themeSwitch {{ background: {t.sidebar_control}; border-radius: 8px; }}
 #themeButton {{
-    color: {t.text_muted};
+    color: {t.sidebar_text_muted};
     font-size: 11px;
     padding: 4px 8px;
 }}
-#themeButton:hover {{ background: {t.sidebar_selected}; color: {t.text}; }}
-#themeButton:pressed {{ background: {t.accent_soft}; color: {t.text}; }}
-#themeButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.text}; font-weight: 600; }}
+#themeButton:hover {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#themeButton:pressed {{ background: {t.accent_soft}; color: {t.sidebar_text}; }}
+#themeButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; font-weight: 600; }}
 #newNoteButton {{ background: {t.accent}; color: {t.accent_text}; padding: 0; }}
 #newNoteButton:hover {{ background: {t.focus}; }}
 #newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
 #sidebarSearch,
-#categoryFilter {{ background: {t.sidebar_control}; color: {t.text}; }}
+#categoryFilter {{ background: {t.sidebar_control}; color: {t.sidebar_text}; }}
 #sidebarSearch:hover,
 #categoryFilter:hover {{ background: {t.sidebar_hover}; }}
 #sidebarSearch:focus,
 #categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
 #sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 0; }}
 #smartTabButton,
-#categoryManagerButton {{ color: {t.text_muted}; font-size: 11px; }}
+#categoryManagerButton {{ color: {t.sidebar_text_muted}; font-size: 11px; }}
 #smartTabButton:hover,
-#categoryManagerButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#categoryManagerButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
 #smartTabButton:pressed,
-#categoryManagerButton:pressed {{ background: {t.accent_soft}; color: {t.text}; }}
-#smartTabButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.text}; font-weight: 600; }}
+#categoryManagerButton:pressed {{ background: {t.accent_soft}; color: {t.sidebar_text}; }}
+#smartTabButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; font-weight: 600; }}
 #sidebarComboPopupView,
 #comboPopupView {{
     border: 0;
     border-radius: 10px;
     background: {t.sidebar};
-    color: {t.text};
     outline: 0;
     padding: 4px;
     selection-background-color: transparent;
+}}
+#sidebarComboPopupView {{
+    color: {t.sidebar_text};
+    selection-color: {t.sidebar_text};
+}}
+#comboPopupView {{
+    background: {t.surface};
+    color: {t.text};
     selection-color: {t.text};
 }}
-#comboPopupView {{ background: {t.surface}; }}
 #sidebarComboPopupView::item,
-#comboPopupView::item {{ min-height: 32px; padding: 0; background: transparent; color: {t.text}; }}
-#sidebarComboPopupView::item:selected,
+#comboPopupView::item {{ min-height: 32px; padding: 0; background: transparent; }}
+#sidebarComboPopupView::item {{ color: {t.sidebar_text}; }}
+#comboPopupView::item {{ color: {t.text}; }}
+#sidebarComboPopupView::item:selected {{ background: transparent; color: {t.sidebar_text}; }}
 #comboPopupView::item:selected {{ background: transparent; color: {t.text}; }}
 #floatingComboPopup {{ background: transparent; border: 0; }}
 #mainSplitter::handle {{ background: {t.sidebar_separator}; }}
@@ -344,25 +376,25 @@ QHeaderView::section {{
     border: 0;
     background: {t.sidebar};
     alternate-background-color: {t.sidebar};
-    color: {t.text_muted};
+    color: {t.sidebar_text_muted};
     outline: 0;
     gridline-color: transparent;
     selection-background-color: {t.sidebar_selected};
-    selection-color: {t.text};
+    selection-color: {t.sidebar_text};
 }}
-#noteTable::item {{ border: 0; border-radius: 6px; padding: 0 8px; color: {t.text_muted}; }}
-#noteTable::item:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
-#noteTable::item:selected {{ background: {t.sidebar_selected}; color: {t.text}; }}
-#trashTitle {{ color: {t.text_muted}; font-size: 12.5px; }}
-#trashButton {{ color: {t.text_muted}; text-align: left; padding: 4px 8px; }}
-#trashButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#noteTable::item {{ border: 0; border-radius: 6px; padding: 0 8px; color: {t.sidebar_text_muted}; }}
+#noteTable::item:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#noteTable::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#trashTitle {{ color: {t.sidebar_text_muted}; font-size: 12.5px; }}
+#trashButton {{ color: {t.sidebar_text_muted}; text-align: left; padding: 4px 8px; }}
+#trashButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
 #trashButton:pressed {{ background: {t.sidebar_selected}; }}
-#trashCloseButton {{ color: {t.text_muted}; padding: 0; }}
-#trashCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
-#trashTree {{ border: 0; outline: 0; padding: 0; background: {t.sidebar}; color: {t.text_muted}; }}
-#trashTree::item {{ border: 0; margin: 0; padding: 0 8px; color: {t.text_muted}; }}
-#trashTree::item:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
-#trashTree::item:selected {{ background: {t.sidebar_selected}; color: {t.text}; }}
+#trashCloseButton {{ color: {t.sidebar_text_muted}; padding: 0; }}
+#trashCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#trashTree {{ border: 0; outline: 0; padding: 0; background: {t.sidebar}; color: {t.sidebar_text_muted}; }}
+#trashTree::item {{ border: 0; margin: 0; padding: 0 8px; color: {t.sidebar_text_muted}; }}
+#trashTree::item:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#trashTree::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
 #trashTree::branch {{ background: transparent; border: 0; }}
 
 #editor,
@@ -377,6 +409,12 @@ QHeaderView::section {{
     padding: 0;
 }}
 #titleInput:focus {{ border: 0; background: {t.editor}; }}
+#titleSeparator {{
+    border: 0;
+    min-height: 1px;
+    max-height: 1px;
+    background: {t.title_separator};
+}}
 #metadataSummaryButton {{
     padding: 8px 0;
     background: {t.editor};
@@ -392,13 +430,13 @@ QHeaderView::section {{
 #sectionLabel,
 #filterLabel {{ color: {t.text_muted}; font-size: 12.5px; }}
 #metadataPanel QComboBox,
-#metadataPanel QLineEdit {{ background: {t.editor}; color: {t.text}; }}
+#metadataPanel QLineEdit {{ background: {t.editor_paper}; color: {t.text}; }}
 #aiTargetCheck {{ color: {t.text_muted}; font-size: 12.5px; spacing: 8px; padding: 0; }}
 #metadataCollapseButton {{ color: {t.text_muted}; padding: 0; }}
 #metadataCollapseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #editorToolbar,
-#findPanel,
-#editorActionBar {{ background: {t.surface}; border-radius: 8px; }}
+#findPanel {{ background: {t.surface}; border-radius: 8px; }}
+#editorActionBar {{ background: transparent; border-radius: 0; }}
 #editorToolbar {{ padding: 4px 8px; }}
 #toolbarButton {{ padding: 4px; color: {t.text_muted}; font-size: 12.5px; }}
 #toolbarButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
@@ -406,10 +444,17 @@ QHeaderView::section {{
 #toolbarButton:checked {{ background: {t.surface_selected}; color: {t.text}; }}
 #toolbarButton:focus {{ border-color: {t.focus}; }}
 #toolbarButton::menu-indicator {{ image: none; width: 0; }}
-#toolbarInput {{ background: {t.editor}; color: {t.text}; font-size: 12.5px; min-width: 80px; }}
-#bodyEdit {{ border: 0; border-radius: 0; background: {t.editor}; padding: 0; color: {t.text}; font-size: 15px; }}
-#bodyEdit:hover {{ background: {t.editor}; }}
-#bodyEdit:focus {{ border: 0; background: {t.editor}; }}
+#toolbarInput {{ background: {t.editor_paper}; color: {t.text}; font-size: 12.5px; min-width: 80px; }}
+#bodyEdit {{
+    border: 1px solid {t.editor_border};
+    border-radius: 3px;
+    background: {t.editor_paper};
+    padding: 10px 12px;
+    color: {t.text};
+    font-size: 15px;
+}}
+#bodyEdit:hover {{ background: {t.editor_paper}; }}
+#bodyEdit:focus {{ border: 1px solid {t.editor_border}; background: {t.editor_paper}; }}
 #deleteNoteButton,
 #actionBarButton {{ padding: 0; color: {t.text_muted}; }}
 #deleteNoteButton:hover,
@@ -426,25 +471,25 @@ QHeaderView::section {{
 #tagMoreButton::menu-indicator {{ image: none; width: 0; }}
 
 #linkDrawer {{ background: {t.sidebar}; }}
-#linkDrawerTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
-#linkDrawerCloseButton {{ color: {t.text_muted}; padding: 0; }}
-#linkDrawerCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.text}; }}
+#linkDrawerTitle {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
+#linkDrawerCloseButton {{ color: {t.sidebar_text_muted}; padding: 0; }}
+#linkDrawerCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
 #linkDrawerEmptyState,
 #linkEmptyText,
-#linkDrawerSummary {{ color: {t.text_muted}; font-size: 12.5px; }}
+#linkDrawerSummary {{ color: {t.sidebar_text_muted}; font-size: 12.5px; }}
 #linkDrawerScroll,
 #linkDrawerScroll QWidget {{ background: {t.sidebar}; }}
-#linkSectionHeader {{ padding: 4px; background: transparent; color: {t.text_muted}; font-size: 12.5px; font-weight: 600; text-align: left; }}
+#linkSectionHeader {{ padding: 4px; background: transparent; color: {t.sidebar_text_muted}; font-size: 12.5px; font-weight: 600; text-align: left; }}
 #linkSectionHeader:hover {{ background: {t.sidebar_hover}; }}
 #linkResult {{ border: 0; border-radius: 8px; background: {t.sidebar_hover}; }}
 #linkResult:hover {{ background: {t.sidebar_selected}; }}
 #linkResult[pressed="true"] {{ background: {t.accent_soft}; }}
 #linkResult:focus {{ border: 1px solid {t.focus}; }}
-#linkResultTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
+#linkResultTitle {{ color: {t.sidebar_text}; font-size: 13px; font-weight: 600; }}
 #linkResultPath,
-#linkResultUpdated {{ color: {t.text_subtle}; font-size: 11px; }}
+#linkResultUpdated {{ color: {t.sidebar_text_subtle}; font-size: 11px; }}
 #linkReasonTags {{ background: transparent; }}
-#linkReasonTag {{ border-radius: 6px; padding: 4px 8px; background: {t.sidebar}; color: {t.text_muted}; font-size: 11px; }}
+#linkReasonTag {{ border-radius: 6px; padding: 4px 8px; background: {t.sidebar}; color: {t.sidebar_text_muted}; font-size: 11px; }}
 #linkReasonTag[important="true"] {{ background: {t.accent_soft}; color: {t.accent}; }}
 
 #categoryManagerDialog,
@@ -503,6 +548,22 @@ QTabWidget#aiCenterTabs QTabBar::tab:disabled {{
 #aiCenterCloseButton:pressed {{ background: {t.surface_selected}; color: {t.text}; }}
 #aiCenterCloseButton:focus {{ border-color: {t.focus}; color: {t.text}; }}
 #aiCenterCloseButton:disabled {{ background: transparent; color: {t.disabled}; }}
+#remoteAiAccessGroup {{
+    border: 1px solid {t.editor_border};
+    border-radius: 6px;
+    background: {t.surface};
+}}
+#settingsSectionTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
+#remoteAiAccessNote {{ color: {t.text_subtle}; font-size: 12px; }}
+#remoteUpdateNow {{
+    border: 1px solid {t.editor_border};
+    background: transparent;
+    color: {t.text};
+    padding: 4px 12px;
+}}
+#remoteUpdateNow:hover {{ background: {t.surface_hover}; }}
+#remoteUpdateNow:pressed {{ background: {t.surface_selected}; }}
+#remoteUpdateNow:disabled {{ color: {t.disabled}; background: transparent; }}
 #exportSectionTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
 #exportInfoLabel {{ color: {t.text_muted}; padding: 12px; }}
 #exportSelectionTree {{ border: 0; border-radius: 8px; background: {t.surface}; color: {t.text}; padding: 4px; outline: 0; }}

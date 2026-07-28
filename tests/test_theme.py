@@ -15,8 +15,6 @@ from PySide6.QtWidgets import QApplication
 
 from src.editor import NotesEditor
 from src.main_window import (
-    EDITOR_ACCEPTED_MAX_WIDTH,
-    EDITOR_BASELINE_MAX_WIDTH,
     EDITOR_TARGET_MAX_WIDTH,
     editor_horizontal_metrics,
 )
@@ -80,26 +78,27 @@ class ThemeSystemTest(unittest.TestCase):
             self.assertEqual(tokens.document_link, tokens.accent)
             self.assertEqual(tokens.document_code, tokens.text)
             self.assertGreaterEqual(
-                contrast_ratio(tokens.document_text, tokens.editor),
+                contrast_ratio(tokens.document_text, tokens.editor_paper),
                 4.5,
                 tokens.name,
             )
 
     def test_light_slate_sidebar_roles_have_clear_visual_levels(self) -> None:
         tokens = THEMES["light-slate"]
-        self.assertLess(
-            QColor(tokens.sidebar_control).lightnessF(),
-            QColor(tokens.sidebar).lightnessF(),
-        )
         self.assertGreater(
-            QColor(tokens.sidebar_hover).lightnessF(),
+            QColor(tokens.sidebar_control).lightnessF(),
             QColor(tokens.sidebar).lightnessF(),
         )
         self.assertGreater(
             QColor(tokens.sidebar_selected).lightnessF(),
             QColor(tokens.sidebar_hover).lightnessF(),
         )
-        self.assertEqual(tokens.sidebar_selected, tokens.editor)
+        self.assertGreaterEqual(
+            contrast_ratio(tokens.sidebar_text, tokens.sidebar),
+            4.5,
+        )
+        self.assertNotEqual(tokens.editor, tokens.editor_paper)
+        self.assertNotEqual(tokens.editor_paper.upper(), "#FFFFFF")
 
         style = build_app_style(tokens.name)
         self.assertIn(
@@ -119,41 +118,19 @@ class ThemeSystemTest(unittest.TestCase):
             style,
         )
 
-    def test_editor_wide_gap_is_twice_the_preserved_right_gap(self) -> None:
-        editor_root_width = 1139
+    def test_editor_widens_with_a_stable_left_axis(self) -> None:
+        editor_root_width = 1600
         left_margin, right_margin, leading_space = editor_horizontal_metrics(
             editor_root_width
-        )
-        accepted_outer_margin = 48
-        accepted_right_margin = 40
-        baseline_available_width = editor_root_width - (accepted_outer_margin * 2)
-        baseline_width = min(
-            EDITOR_BASELINE_MAX_WIDTH,
-            baseline_available_width,
-        )
-        accepted_leading_space = (
-            baseline_available_width - baseline_width
-        ) // 2
-        accepted_left_gap = accepted_outer_margin + accepted_leading_space
-        accepted_width = min(
-            EDITOR_ACCEPTED_MAX_WIDTH,
-            editor_root_width - accepted_left_gap - accepted_right_margin,
-        )
-        accepted_right_gap = (
-            editor_root_width - accepted_left_gap - accepted_width
         )
         target_width = min(
             EDITOR_TARGET_MAX_WIDTH,
             editor_root_width - left_margin - right_margin - leading_space,
         )
 
-        self.assertEqual(right_margin, accepted_right_gap)
-        self.assertEqual(left_margin + leading_space, right_margin * 2)
-        self.assertEqual(
-            left_margin + leading_space + target_width,
-            accepted_left_gap + accepted_width,
-        )
-        self.assertGreater(target_width, EDITOR_ACCEPTED_MAX_WIDTH)
+        self.assertEqual((left_margin, right_margin, leading_space), (48, 40, 0))
+        self.assertEqual(target_width, 1280)
+        self.assertGreater(target_width, 1000)
 
     def test_editor_narrow_margins_do_not_overflow(self) -> None:
         widths_and_margins = ((896, 48), (895, 24), (640, 24), (639, 16))
@@ -303,12 +280,23 @@ class ThemeSystemTest(unittest.TestCase):
         self.assertIn(THEMES["dark"].surface.upper(), backgrounds)
 
     def test_shared_qss_avoids_shadow_and_rgba_layering(self) -> None:
-        for theme_name in THEMES:
+        for theme_name, tokens in THEMES.items():
             style = build_app_style(theme_name)
             self.assertNotIn("box-shadow", style)
             self.assertNotIn("rgba(", style)
             self.assertIn("#linkDrawer", style)
             self.assertIn("#sidebar", style)
+            self.assertIn(f"background: {tokens.editor_paper};", style)
+            self.assertIn(f"border: 1px solid {tokens.editor_border};", style)
+            self.assertIn(f"background: {tokens.title_separator};", style)
+
+    def test_dark_theme_no_longer_contains_the_old_green_accent(self) -> None:
+        dark = THEMES["dark"]
+        style = build_app_style("dark").upper()
+        self.assertEqual(dark.accent, "#B97855")
+        self.assertEqual(dark.focus, "#CB8A67")
+        for old_green in ("#48B981", "#65C995", "#253C32"):
+            self.assertNotIn(old_green, style)
 
     def test_repository_icons_are_lucide_sized_and_token_colored(self) -> None:
         for icon_path in ICON_DIR.glob("*.svg"):

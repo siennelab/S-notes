@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtWidgets import QApplication
 
 from src.database import initialize_database
 from src.main_window import (
@@ -40,20 +40,20 @@ class GalePublishUiTest(unittest.TestCase):
         self.settings.remove(MainWindow.GALE_AUTO_PUBLISH_SETTING)
         self.settings.sync()
 
-    def test_existing_action_area_has_minimal_publish_menu(self) -> None:
-        button = self.window.gale_menu_button
-        self.assertIsInstance(button, QToolButton)
-        self.assertEqual(button.toolTip(), "Gale 发布")
-        self.assertEqual(button.popupMode(), QToolButton.InstantPopup)
-        menu = button.menu()
-        self.assertIsNotNone(menu)
-        assert menu is not None
-        self.assertEqual(
-            [action.text() for action in menu.actions()],
-            ["立即发布给 Gale", "", "自动发布给 Gale"],
-        )
-        self.assertTrue(self.window.gale_auto_publish_action.isCheckable())
-        self.assertFalse(self.window.gale_auto_publish_action.isChecked())
+    def open_ai_center(self):
+        self.window.open_receipt_inbox()
+        self.app.processEvents()
+        dialog = self.window.receipt_inbox_dialog
+        self.assertIsNotNone(dialog)
+        return dialog
+
+    def test_publish_menu_is_removed_from_editor_and_controls_are_in_settings(self) -> None:
+        self.assertFalse(hasattr(self.window, "gale_menu_button"))
+        dialog = self.open_ai_center()
+        self.assertEqual(dialog.tabs.count(), 4)
+        self.assertEqual(dialog.tabs.tabText(3), "设置")
+        self.assertFalse(dialog.remote_auto_update.isChecked())
+        self.assertEqual(dialog.remote_update_now.text(), "立即更新")
 
     def test_auto_publish_default_does_not_start_monitoring(self) -> None:
         self.assertFalse(self.window.gale_auto_scheduler.enabled)
@@ -67,16 +67,18 @@ class GalePublishUiTest(unittest.TestCase):
                 "check_gale_auto_publish",
             ) as check_publish,
         ):
-            self.window.gale_auto_publish_action.setChecked(True)
-            self.window.gale_auto_publish_action.setChecked(True)
+            checkbox = self.open_ai_center().remote_auto_update
+            checkbox.setChecked(True)
+            checkbox.setChecked(True)
 
         start_timer.assert_called_once_with()
         check_publish.assert_called_once_with()
         self.assertTrue(self.window.gale_auto_scheduler.enabled)
 
     def test_disabling_auto_publish_prevents_new_publish_tasks(self) -> None:
-        self.window.gale_auto_publish_action.setChecked(True)
-        self.window.gale_auto_publish_action.setChecked(False)
+        checkbox = self.open_ai_center().remote_auto_update
+        checkbox.setChecked(True)
+        checkbox.setChecked(False)
 
         with patch.object(self.window, "start_gale_publish") as start_publish:
             self.window.check_gale_auto_publish(network_restored=True)
@@ -86,7 +88,8 @@ class GalePublishUiTest(unittest.TestCase):
         self.assertFalse(self.window.gale_watch_timer.isActive())
 
     def test_manual_publish_starts_background_thread_without_sync_publish(self) -> None:
-        self.assertFalse(self.window.gale_auto_publish_action.isChecked())
+        dialog = self.open_ai_center()
+        self.assertFalse(dialog.remote_auto_update.isChecked())
         with (
             patch(
                 "src.main_window.publish_gale_mirror"
@@ -96,11 +99,12 @@ class GalePublishUiTest(unittest.TestCase):
                 "start",
             ) as start_thread,
         ):
-            self.window.gale_publish_action.trigger()
+            dialog.remote_update_now.click()
 
         start_thread.assert_called_once_with()
         synchronous_publish.assert_not_called()
         self.assertEqual(self.window.status_label.text(), "正在发布给 Gale")
+        self.assertFalse(dialog.remote_update_now.isEnabled())
         self.window.gale_publish_thread = None
 
 
