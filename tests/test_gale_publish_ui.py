@@ -53,6 +53,7 @@ class GalePublishUiTest(unittest.TestCase):
         self.assertEqual(dialog.tabs.count(), 4)
         self.assertEqual(dialog.tabs.tabText(3), "设置")
         self.assertFalse(dialog.remote_auto_update.isChecked())
+        self.assertEqual(dialog.remote_auto_update.text(), "自动更新")
         self.assertEqual(dialog.remote_update_now.text(), "立即更新")
 
     def test_auto_publish_default_does_not_start_monitoring(self) -> None:

@@ -26,6 +26,7 @@ from src.main_window import (
 from src.theme import (
     ICON_DIR,
     THEMES,
+    THEME_SWATCH_COLORS,
     THEME_SETTINGS_PATH,
     apply_theme,
     build_app_style,
@@ -108,10 +109,7 @@ class ThemeSystemTest(unittest.TestCase):
         self.assertEqual(tokens.editor_border, "#DCDCDC")
 
         style = build_app_style(tokens.name)
-        self.assertIn(
-            f"#themeSwitch {{ background: {tokens.sidebar_control};",
-            style,
-        )
+        self.assertIn("#themeSwatch[themeName=\"light-slate\"]", style)
         self.assertIn(
             f"#mainSplitter::handle {{ background: {tokens.sidebar_separator}; }}",
             style,
@@ -124,6 +122,34 @@ class ThemeSystemTest(unittest.TestCase):
             f"#noteTable::item:selected {{ background: {tokens.sidebar_selected};",
             style,
         )
+
+    def test_all_editor_surfaces_use_approved_single_original_color(self) -> None:
+        expected_editor_colors = {
+            "dark": "#1B1D1E",
+            "light-slate": "#F0F2F5",
+            "light-clay": "#FFFFFF",
+        }
+        for theme_name, expected_color in expected_editor_colors.items():
+            tokens = THEMES[theme_name]
+            self.assertEqual(tokens.editor, expected_color)
+            self.assertEqual(tokens.editor_paper, expected_color)
+
+    def test_theme_swatch_colors_are_fixed_representatives(self) -> None:
+        self.assertEqual(
+            THEME_SWATCH_COLORS,
+            {
+                "dark": "#1B1D1E",
+                "light-slate": "#5F768B",
+                "light-clay": "#A84B2F",
+            },
+        )
+        style = build_app_style("light-slate")
+        for theme_name, color in THEME_SWATCH_COLORS.items():
+            self.assertIn(
+                f'#themeSwatch[themeName="{theme_name}"] {{ background: {color}; }}',
+                style,
+            )
+        self.assertIn('#themeSwatch[active="true"] { border: 2px solid', style)
 
     def test_editor_widens_with_a_stable_left_axis(self) -> None:
         editor_root_width = 1600

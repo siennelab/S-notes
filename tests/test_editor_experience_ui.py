@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,6 +17,7 @@ from src.main_window import (
     TITLE_SEPARATOR_HEIGHT,
     MainWindow,
 )
+from src.theme import THEME_LABELS, THEME_SETTINGS_PATH, load_saved_theme
 
 
 class EditorExperienceUiTest(unittest.TestCase):
@@ -80,6 +83,50 @@ class EditorExperienceUiTest(unittest.TestCase):
             self.window.set_theme(theme_name)
             self.app.processEvents()
             self.assertEqual(self.window.body_edit.note_content_html(), before_html)
+
+    def test_theme_swatches_share_footer_row_and_replace_top_text_buttons(self) -> None:
+        footer_layout = self.window.sidebar_footer.layout()
+        self.assertIsInstance(footer_layout, QHBoxLayout)
+        self.assertEqual(self.window.sidebar_footer.height(), 32)
+        self.assertEqual(footer_layout.indexOf(self.window.trash_button), 0)
+        swatches = list(self.window.theme_buttons.values())
+        self.assertEqual(
+            [button.toolTip() for button in swatches],
+            ["夜间", "石板", "陶土"],
+        )
+        self.assertTrue(all(button.text() == "" for button in swatches))
+        self.assertTrue(
+            all(button.objectName() == "themeSwatch" for button in swatches)
+        )
+        self.assertTrue(all(button.size().width() == 20 for button in swatches))
+        self.assertEqual(
+            [footer_layout.indexOf(button) for button in swatches],
+            [1, 2, 3],
+        )
+        theme_labels = {label for _name, label in THEME_LABELS}
+        displayed_theme_text_buttons = [
+            button
+            for button in self.window.sidebar.findChildren(type(self.window.trash_button))
+            if button.text() in theme_labels
+        ]
+        self.assertEqual(displayed_theme_text_buttons, [])
+
+    def test_theme_swatches_switch_active_state_and_persist_existing_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            settings_path = Path(temporary_directory) / "ui_settings.ini"
+            with patch("src.theme.THEME_SETTINGS_PATH", settings_path):
+                for theme_name in ("dark", "light-slate", "light-clay"):
+                    self.window.theme_buttons[theme_name].click()
+                    self.app.processEvents()
+                    self.assertEqual(self.window.current_theme_name, theme_name)
+                    for candidate, button in self.window.theme_buttons.items():
+                        self.assertEqual(
+                            button.property("active"),
+                            candidate == theme_name,
+                        )
+                self.assertEqual(load_saved_theme(), "light-clay")
+                self.assertTrue(settings_path.is_file())
+        self.assertNotEqual(THEME_SETTINGS_PATH, settings_path)
 
     def test_normal_delete_saves_then_moves_to_trash_without_confirmation(self) -> None:
         visible_before = self.window.visible_note_ids()

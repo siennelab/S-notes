@@ -73,7 +73,7 @@ THEMES: dict[str, ThemeTokens] = {
         sidebar_text_muted="#A4AAA7",
         sidebar_text_subtle="#707774",
         editor="#1B1D1E",
-        editor_paper="#222526",
+        editor_paper="#1B1D1E",
         editor_border="#393D3B",
         title_separator="#76503E",
         surface="#242729",
@@ -132,8 +132,8 @@ THEMES: dict[str, ThemeTokens] = {
         sidebar_text="#2A2723",
         sidebar_text_muted="#716C65",
         sidebar_text_subtle="#9B958C",
-        editor="#E8E3DD",
-        editor_paper="#FAF9F7",
+        editor="#FFFFFF",
+        editor_paper="#FFFFFF",
         editor_border="#D6CEC5",
         title_separator="#CFC5BA",
         surface="#F7F6F4",
@@ -161,6 +161,11 @@ THEME_LABELS = (
     ("light-slate", "石板"),
     ("light-clay", "陶土"),
 )
+THEME_SWATCH_COLORS = {
+    "dark": "#1B1D1E",
+    "light-slate": "#5F768B",
+    "light-clay": "#A84B2F",
+}
 ICON_DIR = Path(__file__).with_name("icons")
 _current_theme_name = DEFAULT_THEME
 
@@ -319,15 +324,13 @@ QHeaderView::section {{
 #mainContentArea {{ background: {t.editor}; }}
 #sidebar {{ background: {t.sidebar}; }}
 #sidebarTitle {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
-#themeSwitch {{ background: {t.sidebar_control}; border-radius: 8px; }}
-#themeButton {{
-    color: {t.sidebar_text_muted};
-    font-size: 11px;
-    padding: 4px 8px;
-}}
-#themeButton:hover {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
-#themeButton:pressed {{ background: {t.accent_soft}; color: {t.sidebar_text}; }}
-#themeButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; font-weight: 600; }}
+#themeSwatch {{ border: 1px solid transparent; border-radius: 5px; padding: 0; }}
+#themeSwatch[themeName="dark"] {{ background: {THEME_SWATCH_COLORS["dark"]}; }}
+#themeSwatch[themeName="light-slate"] {{ background: {THEME_SWATCH_COLORS["light-slate"]}; }}
+#themeSwatch[themeName="light-clay"] {{ background: {THEME_SWATCH_COLORS["light-clay"]}; }}
+#themeSwatch:hover {{ border-color: {t.sidebar_text_muted}; }}
+#themeSwatch:pressed {{ border-color: {t.sidebar_text}; }}
+#themeSwatch[active="true"] {{ border: 2px solid {t.sidebar_text}; }}
 #newNoteButton {{ background: {t.accent}; color: {t.accent_text}; padding: 0; }}
 #newNoteButton:hover {{ background: {t.focus}; }}
 #newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
@@ -549,7 +552,7 @@ QTabWidget#aiCenterTabs QTabBar::tab:disabled {{
 #aiCenterCloseButton:focus {{ border-color: {t.focus}; color: {t.text}; }}
 #aiCenterCloseButton:disabled {{ background: transparent; color: {t.disabled}; }}
 #settingsSectionTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
-#remoteAiAccessNote {{ color: {t.text_subtle}; font-size: 12px; }}
+#settingsHelpText {{ color: {t.text_subtle}; padding: 4px 0; font-size: 12.5px; }}
 #remoteUpdateNow {{
     border: 1px solid {t.editor_border};
     background: transparent;

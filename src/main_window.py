@@ -421,23 +421,6 @@ class MainWindow(QMainWindow):
         header.addWidget(title)
         header.addStretch(1)
 
-        theme_switch = QWidget()
-        theme_switch.setObjectName("themeSwitch")
-        theme_layout = QHBoxLayout(theme_switch)
-        theme_layout.setContentsMargins(4, 4, 4, 4)
-        theme_layout.setSpacing(0)
-        self.theme_buttons: dict[str, QPushButton] = {}
-        for theme_name, label in THEME_LABELS:
-            button = QPushButton(label)
-            button.setObjectName("themeButton")
-            button.setFixedSize(40, 24)
-            button.clicked.connect(
-                lambda checked=False, name=theme_name: self.set_theme(name)
-            )
-            theme_layout.addWidget(button)
-            self.theme_buttons[theme_name] = button
-        header.addWidget(theme_switch)
-
         self.new_note_button = QPushButton()
         self.new_note_button.setObjectName("newNoteButton")
         self.new_note_button.setIconSize(QSize(14, 14))
@@ -579,7 +562,28 @@ class MainWindow(QMainWindow):
         self.trash_button.customContextMenuRequested.connect(
             self.open_trash_root_context_menu
         )
-        layout.addWidget(self.trash_button)
+
+        self.sidebar_footer = QWidget()
+        self.sidebar_footer.setObjectName("sidebarFooter")
+        self.sidebar_footer.setFixedHeight(32)
+        footer_layout = QHBoxLayout(self.sidebar_footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(4)
+        footer_layout.addWidget(self.trash_button, stretch=1)
+        self.theme_buttons: dict[str, QPushButton] = {}
+        for theme_name, label in THEME_LABELS:
+            button = QPushButton()
+            button.setObjectName("themeSwatch")
+            button.setProperty("themeName", theme_name)
+            button.setFixedSize(20, 20)
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+            button.clicked.connect(
+                lambda checked=False, name=theme_name: self.set_theme(name)
+            )
+            footer_layout.addWidget(button, alignment=Qt.AlignVCenter)
+            self.theme_buttons[theme_name] = button
+        layout.addWidget(self.sidebar_footer)
 
         self.refresh_ai_center_badge()
         self._update_theme_button_states()

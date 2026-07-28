@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QWidget
 
 from src.ai_center_dialog import AiCenterDialog
 from src.services.ai_access_service import (
@@ -57,7 +57,21 @@ class AiCenterUiTest(unittest.TestCase):
             (0, 0, 0, 0),
         )
         self.assertFalse(dialog.remote_auto_update.isChecked())
+        self.assertEqual(dialog.remote_auto_update.text(), "自动更新")
         self.assertEqual(dialog.remote_update_now.text(), "立即更新")
+        auto_update_controls = [
+            child
+            for child in remote_group.findChildren(QCheckBox)
+            if child.text() == "自动更新"
+        ]
+        self.assertEqual(auto_update_controls, [dialog.remote_auto_update])
+        self.assertEqual(
+            remote_group.layout().indexOf(dialog.remote_auto_update),
+            1,
+        )
+        self.assertEqual(dialog.remote_title.objectName(), "settingsSectionTitle")
+        self.assertEqual(dialog.confirmation_note.objectName(), "settingsHelpText")
+        self.assertEqual(dialog.remote_note.objectName(), "settingsHelpText")
         labels = [
             child.text()
             for child in dialog.findChildren(QWidget)
@@ -105,6 +119,14 @@ class AiCenterUiTest(unittest.TestCase):
             self.assertIn("top: 0;", pane_style)
             self.assertNotIn(tokens.sidebar_separator, pane_style)
             self.assertNotIn("#remoteAiAccessGroup {", style)
+            self.assertIn(
+                f"#settingsSectionTitle {{ color: {tokens.text};",
+                style,
+            )
+            self.assertIn(
+                f"#settingsHelpText {{ color: {tokens.text_subtle};",
+                style,
+            )
             self.assertIn("#aiCenterCloseButton", style)
             self.assertIn(f"background: {tokens.window};", style)
             self.assertIn(f"color: {tokens.text};", style)

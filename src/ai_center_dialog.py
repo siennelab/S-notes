@@ -7,7 +7,6 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -291,42 +290,43 @@ class AiCenterDialog(QWidget):
         )
         layout.addWidget(self.create_confirmation)
         layout.addWidget(self.modify_confirmation)
-        note = QLabel("默认：AI 新增直接入库；AI 修改进入待确认。设置保存在本地 SQLite 数据库。")
-        note.setWordWrap(True)
-        note.setObjectName("statusLabel")
-        layout.addWidget(note)
+        self.confirmation_note = QLabel(
+            "默认：AI 新增直接入库；AI 修改进入待确认。设置保存在本地 SQLite 数据库。"
+        )
+        self.confirmation_note.setWordWrap(True)
+        self.confirmation_note.setObjectName("settingsHelpText")
+        layout.addWidget(self.confirmation_note)
 
         remote_group = QWidget()
         remote_group.setObjectName("remoteAiAccessGroup")
         remote_layout = QVBoxLayout(remote_group)
         remote_layout.setContentsMargins(0, 0, 0, 0)
         remote_layout.setSpacing(10)
-        remote_title = QLabel("远程 AI 访问")
-        remote_title.setObjectName("settingsSectionTitle")
-        remote_layout.addWidget(remote_title)
+        self.remote_title = QLabel("远程 AI 访问")
+        self.remote_title.setObjectName("settingsSectionTitle")
+        remote_layout.addWidget(self.remote_title)
 
-        controls = QGridLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.setHorizontalSpacing(16)
-        controls.setVerticalSpacing(8)
-        controls.setColumnStretch(0, 1)
-        controls.addWidget(QLabel("自动更新"), 0, 0)
-        self.remote_auto_update = QCheckBox()
+        self.remote_auto_update = QCheckBox("自动更新")
         self.remote_auto_update.setObjectName("remoteAutoUpdate")
         self.remote_auto_update.setChecked(self._initial_auto_publish_enabled)
         self.remote_auto_update.toggled.connect(self.handle_remote_auto_update)
-        controls.addWidget(self.remote_auto_update, 0, 1, Qt.AlignRight)
-        controls.addWidget(QLabel("立即更新"), 1, 0)
+        remote_layout.addWidget(self.remote_auto_update)
+
+        update_now_row = QHBoxLayout()
+        update_now_row.setContentsMargins(0, 0, 0, 0)
+        update_now_row.setSpacing(16)
+        update_now_row.addWidget(QLabel("立即更新"))
+        update_now_row.addStretch(1)
         self.remote_update_now = QPushButton("立即更新")
         self.remote_update_now.setObjectName("remoteUpdateNow")
         self.remote_update_now.clicked.connect(self.handle_remote_update_now)
-        controls.addWidget(self.remote_update_now, 1, 1, Qt.AlignRight)
-        remote_layout.addLayout(controls)
+        update_now_row.addWidget(self.remote_update_now)
+        remote_layout.addLayout(update_now_row)
 
-        remote_note = QLabel("仅更新符合 AI 对象与 AI 可见性规则的内容")
-        remote_note.setObjectName("remoteAiAccessNote")
-        remote_note.setWordWrap(True)
-        remote_layout.addWidget(remote_note)
+        self.remote_note = QLabel("仅更新符合 AI 对象与 AI 可见性规则的内容")
+        self.remote_note.setObjectName("settingsHelpText")
+        self.remote_note.setWordWrap(True)
+        remote_layout.addWidget(self.remote_note)
         layout.addWidget(remote_group)
         layout.addStretch(1)
         self.refresh_settings()
