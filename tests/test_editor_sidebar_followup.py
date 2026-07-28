@@ -18,6 +18,7 @@ from src.database import (
     create_note,
     initialize_database,
     list_ai_visible_notes,
+    list_recent_notes,
     rename_note,
     set_note_ai_targets,
     set_note_ai_visibility,
@@ -366,6 +367,111 @@ class EditorSidebarUiTest(unittest.TestCase):
         self.window.show_smart_view("recent")
         self.app.processEvents()
         self.assertFalse(self.window.ai_actor_filter_widget.isVisible())
+
+    def test_pending_ai_search_cannot_override_recent_navigation(self) -> None:
+        self.window.show_smart_view("ai")
+        timeout_spy = QSignalSpy(self.window.search_timer.timeout)
+        self.window.search_input.setText("虚构待取消搜索")
+        self.assertTrue(self.window.search_timer.isActive())
+
+        self.window.show_smart_view("recent")
+        expected_recent_ids = {
+            note["id"] for note in list_recent_notes(10)
+        }
+        self.assertFalse(self.window.search_timer.isActive())
+        self.assertEqual(
+            (self.window.current_sidebar_mode, self.window.current_filter_value),
+            ("smart_view", "recent"),
+        )
+
+        QTest.qWait(self.window.search_timer.interval() + 150)
+        self.app.processEvents()
+
+        self.assertEqual(timeout_spy.count(), 0)
+        self.assertEqual(
+            (self.window.current_sidebar_mode, self.window.current_filter_value),
+            ("smart_view", "recent"),
+        )
+        self.assertEqual(
+            set(self.window.visible_note_ids()),
+            expected_recent_ids,
+        )
+
+    def test_ai_search_debounce_and_actor_filter_run_on_current_view(self) -> None:
+        self.window.show_smart_view("ai")
+        gale_index = self.window.ai_actor_filter_combo.findData("gale")
+        self.window.ai_actor_filter_combo.setCurrentIndex(gale_index)
+        timeout_spy = QSignalSpy(self.window.search_timer.timeout)
+
+        self.window.search_input.setText(
+            f"Alpha 筛选样本 {self.gale_note['id']}"
+        )
+        self.assertTrue(self.window.search_timer.isActive())
+        self.assertTrue(
+            timeout_spy.wait(self.window.search_timer.interval() + 500)
+        )
+        self.app.processEvents()
+
+        self.assertEqual(timeout_spy.count(), 1)
+        self.assertFalse(self.window.search_timer.isActive())
+        self.assertEqual(
+            (self.window.current_sidebar_mode, self.window.current_filter_value),
+            ("smart_view", "ai"),
+        )
+        self.assertEqual(
+            set(self.window.visible_note_ids()),
+            {self.gale_note["id"]},
+        )
+
+    def test_last_navigation_wins_during_rapid_page_switches(self) -> None:
+        self.window.show_smart_view("ai")
+        timeout_spy = QSignalSpy(self.window.search_timer.timeout)
+        self.window.search_input.setText("虚构快速切换搜索")
+        self.assertTrue(self.window.search_timer.isActive())
+
+        self.window.show_smart_view("todo")
+        self.window.show_smart_view("ai")
+        self.window.show_smart_view("recent")
+        expected_recent_ids = {
+            note["id"] for note in list_recent_notes(10)
+        }
+        self.assertEqual(self.window.search_input.text(), "")
+        self.assertFalse(self.window.search_timer.isActive())
+
+        QTest.qWait(self.window.search_timer.interval() + 150)
+        self.app.processEvents()
+
+        self.assertEqual(timeout_spy.count(), 0)
+        self.assertEqual(
+            (self.window.current_sidebar_mode, self.window.current_filter_value),
+            ("smart_view", "recent"),
+        )
+        self.assertEqual(
+            set(self.window.visible_note_ids()),
+            expected_recent_ids,
+        )
+
+    def test_ai_center_navigation_stops_pending_search(self) -> None:
+        self.window.show_smart_view("ai")
+        timeout_spy = QSignalSpy(self.window.search_timer.timeout)
+        self.window.search_input.setText("虚构 AI 中心切换搜索")
+        self.assertTrue(self.window.search_timer.isActive())
+
+        self.window.open_receipt_inbox()
+        self.assertIsNotNone(self.window.receipt_inbox_dialog)
+        self.assertFalse(self.window.search_timer.isActive())
+
+        QTest.qWait(self.window.search_timer.interval() + 150)
+        self.app.processEvents()
+
+        self.assertEqual(timeout_spy.count(), 0)
+        self.assertEqual(
+            (self.window.current_sidebar_mode, self.window.current_filter_value),
+            ("smart_view", "ai"),
+        )
+        if self.window.receipt_inbox_dialog is not None:
+            self.window.receipt_inbox_dialog.close()
+            self.app.processEvents()
 
     def test_actor_summary_refreshes_immediately_and_does_not_leak_between_notes(self) -> None:
         self.window.load_note(self.common_note["id"])

@@ -1209,6 +1209,10 @@ class MainWindow(QMainWindow):
     def handle_search_text_changed(self) -> None:
         self.search_timer.start()
 
+    def stop_pending_search_timer(self) -> None:
+        if self.search_timer.isActive():
+            self.search_timer.stop()
+
     def apply_search_filter(self) -> None:
         query = self.search_input.text().strip()
         if (
@@ -1388,6 +1392,7 @@ class MainWindow(QMainWindow):
     def set_sidebar_mode(
         self, mode: str, value: str = "", label: str | None = None
     ) -> None:
+        self.stop_pending_search_timer()
         self.current_sidebar_mode = mode
         self.current_filter_value = value
         if hasattr(self, "ai_actor_filter_widget"):
@@ -1412,7 +1417,7 @@ class MainWindow(QMainWindow):
             button.style().polish(button)
 
     def return_to_directory(self, keep_filters: bool = False) -> None:
-        self.search_timer.stop()
+        self.stop_pending_search_timer()
         self.search_input.blockSignals(True)
         self.search_input.clear()
         self.search_input.blockSignals(False)
@@ -1669,6 +1674,7 @@ class MainWindow(QMainWindow):
         return messages.get(reason, "发布未完成")
 
     def open_receipt_inbox(self) -> None:
+        self.stop_pending_search_timer()
         if not self.force_save_current_note(refresh_tree=False):
             return
         if self.receipt_inbox_dialog is not None:
