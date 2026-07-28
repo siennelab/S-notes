@@ -168,6 +168,15 @@ class EditorSidebarUiTest(unittest.TestCase):
     def test_clock_timer_refreshes_and_stops_on_close(self) -> None:
         self.assertTrue(self.window.sidebar_clock_timer.isActive())
         self.assertEqual(self.window.sidebar_clock_timer.interval(), 1000)
+        self.assertEqual(self.window.sidebar_clock_label.font().pixelSize(), 15)
+        self.assertEqual(self.window.sidebar_clock_label.height(), 32)
+        self.assertGreaterEqual(
+            self.window.sidebar_clock_label.width(),
+            self.window.sidebar_clock_label.fontMetrics().horizontalAdvance(
+                self.window.sidebar_clock_label.text()
+            ),
+        )
+        self.assertTrue(self.window.new_note_button.isVisible())
         timeout_spy = QSignalSpy(self.window.sidebar_clock_timer.timeout)
         self.assertTrue(timeout_spy.wait(1500))
         self.assertGreaterEqual(timeout_spy.count(), 1)
@@ -369,7 +378,13 @@ class EditorToolbarGroupingTest(unittest.TestCase):
     def test_theme_styles_cover_clock_filter_and_lightweight_separators(self) -> None:
         for theme_name in THEMES:
             style = build_app_style(theme_name)
-            self.assertIn("#sidebarClock", style)
+            self.assertIn(
+                (
+                    f"#sidebarClock {{ color: {THEMES[theme_name].sidebar_text}; "
+                    "font-size: 15px; font-weight: 500; }"
+                ),
+                style,
+            )
             self.assertIn("#aiActorFilterCombo", style)
             self.assertIn("#toolbarSeparator", style)
 

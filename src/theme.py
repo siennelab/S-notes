@@ -328,7 +328,7 @@ QHeaderView::section {{
 
 #mainContentArea {{ background: {t.editor}; }}
 #sidebar {{ background: {t.sidebar}; }}
-#sidebarClock {{ color: {t.sidebar_text}; font-size: 12px; font-weight: 500; }}
+#sidebarClock {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 500; }}
 #themeSwatch {{ border: 1px solid transparent; border-radius: 7px; padding: 0; }}
 #themeSwatch[themeName="dark"] {{ background: {THEME_SWATCH_COLORS["dark"]}; }}
 #themeSwatch[themeName="light-slate"] {{ background: {THEME_SWATCH_COLORS["light-slate"]}; }}
