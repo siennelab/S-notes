@@ -10,7 +10,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QHBoxLayout
 
 from src.database import create_note, get_note, initialize_database
-from src.main_window import MainWindow
+from src.main_window import (
+    EDITOR_BOTTOM_MARGIN,
+    TITLE_SEPARATOR_HEIGHT,
+    MainWindow,
+)
 
 
 class EditorExperienceUiTest(unittest.TestCase):
@@ -47,7 +51,25 @@ class EditorExperienceUiTest(unittest.TestCase):
             ["固定笔记", "打开关联", "导出笔记"],
         )
         self.assertEqual(self.window.title_separator.objectName(), "titleSeparator")
+        self.assertEqual(
+            self.window.title_separator.height(),
+            TITLE_SEPARATOR_HEIGHT,
+        )
         self.assertFalse(hasattr(self.window, "gale_menu_button"))
+
+    def test_editor_body_uses_narrow_bottom_outer_margin(self) -> None:
+        sheet_margins = self.window.editor_sheet.layout().contentsMargins()
+        self.assertEqual(sheet_margins.bottom(), EDITOR_BOTTOM_MARGIN)
+        body_margins = self.window.body_section.layout().contentsMargins()
+        self.assertEqual(
+            (
+                body_margins.left(),
+                body_margins.top(),
+                body_margins.right(),
+                body_margins.bottom(),
+            ),
+            (0, 0, 0, 0),
+        )
 
     def test_real_theme_switch_keeps_persisted_editor_html_unchanged(self) -> None:
         self.window.body_edit.insertHtml(

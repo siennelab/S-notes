@@ -299,7 +299,7 @@ class AiCenterDialog(QWidget):
         remote_group = QWidget()
         remote_group.setObjectName("remoteAiAccessGroup")
         remote_layout = QVBoxLayout(remote_group)
-        remote_layout.setContentsMargins(12, 12, 12, 12)
+        remote_layout.setContentsMargins(0, 0, 0, 0)
         remote_layout.setSpacing(10)
         remote_title = QLabel("远程 AI 访问")
         remote_title.setObjectName("settingsSectionTitle")

@@ -149,12 +149,22 @@ class EditorSheet(QWidget):
 EDITOR_BASELINE_MAX_WIDTH = 800
 EDITOR_ACCEPTED_MAX_WIDTH = 920
 EDITOR_TARGET_MAX_WIDTH = 1280
+EDITOR_WIDE_SIDE_MARGIN = 24
+EDITOR_MEDIUM_SIDE_MARGIN = 16
+EDITOR_NARROW_SIDE_MARGIN = 12
+EDITOR_BOTTOM_MARGIN = 12
+TITLE_SEPARATOR_HEIGHT = 2
 
 
 def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
-    left_margin = 48 if width >= 896 else 24 if width >= 640 else 16
-    right_margin = 40 if left_margin == 48 else left_margin
-    return left_margin, right_margin, 0
+    side_margin = (
+        EDITOR_WIDE_SIDE_MARGIN
+        if width >= 896
+        else EDITOR_MEDIUM_SIDE_MARGIN
+        if width >= 640
+        else EDITOR_NARROW_SIDE_MARGIN
+    )
+    return side_margin, side_margin, 0
 
 
 def application_settings() -> QSettings:
@@ -582,7 +592,12 @@ class MainWindow(QMainWindow):
         editor.setObjectName("editor")
         outer_layout = QHBoxLayout(editor)
         self.editor_outer_layout = outer_layout
-        outer_layout.setContentsMargins(48, 0, 48, 0)
+        outer_layout.setContentsMargins(
+            EDITOR_WIDE_SIDE_MARGIN,
+            0,
+            EDITOR_WIDE_SIDE_MARGIN,
+            0,
+        )
         outer_layout.setSpacing(0)
         editor.installEventFilter(self)
 
@@ -591,7 +606,7 @@ class MainWindow(QMainWindow):
         editor_sheet.setObjectName("editorSheet")
         editor_sheet.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(editor_sheet)
-        layout.setContentsMargins(0, 32, 0, 24)
+        layout.setContentsMargins(0, 32, 0, EDITOR_BOTTOM_MARGIN)
         layout.setSpacing(0)
         self.editor_leading_spacer = QSpacerItem(
             0,
@@ -656,7 +671,7 @@ class MainWindow(QMainWindow):
         self.title_separator = QFrame()
         self.title_separator.setObjectName("titleSeparator")
         self.title_separator.setFrameShape(QFrame.HLine)
-        self.title_separator.setFixedHeight(1)
+        self.title_separator.setFixedHeight(TITLE_SEPARATOR_HEIGHT)
         layout.addWidget(self.title_separator)
 
         self.metadata_section = QWidget()
@@ -793,7 +808,7 @@ class MainWindow(QMainWindow):
         self.body_section = QWidget()
         self.body_section.setObjectName("bodySection")
         body_section_layout = QVBoxLayout(self.body_section)
-        body_section_layout.setContentsMargins(0, 0, 0, 8)
+        body_section_layout.setContentsMargins(0, 0, 0, 0)
         body_section_layout.setSpacing(8)
         self.body_edit = NotesEditor()
         self.body_edit.setObjectName("bodyEdit")

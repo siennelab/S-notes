@@ -49,7 +49,13 @@ class AiCenterUiTest(unittest.TestCase):
             [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())],
             ["待确认", "修改历史", "调用记录", "设置"],
         )
-        self.assertIsNotNone(dialog.findChild(QWidget, "remoteAiAccessGroup"))
+        remote_group = dialog.findChild(QWidget, "remoteAiAccessGroup")
+        self.assertIsNotNone(remote_group)
+        margins = remote_group.layout().contentsMargins()
+        self.assertEqual(
+            (margins.left(), margins.top(), margins.right(), margins.bottom()),
+            (0, 0, 0, 0),
+        )
         self.assertFalse(dialog.remote_auto_update.isChecked())
         self.assertEqual(dialog.remote_update_now.text(), "立即更新")
         labels = [
@@ -92,6 +98,13 @@ class AiCenterUiTest(unittest.TestCase):
             style = build_app_style(theme_name)
             self.assertIn("QWidget#aiCenterDialog", style)
             self.assertIn("QTabWidget#aiCenterTabs::pane", style)
+            pane_style = style.split(
+                "QTabWidget#aiCenterTabs::pane {", 1
+            )[1].split("}", 1)[0]
+            self.assertIn("border: 0;", pane_style)
+            self.assertIn("top: 0;", pane_style)
+            self.assertNotIn(tokens.sidebar_separator, pane_style)
+            self.assertNotIn("#remoteAiAccessGroup {", style)
             self.assertIn("#aiCenterCloseButton", style)
             self.assertIn(f"background: {tokens.window};", style)
             self.assertIn(f"color: {tokens.text};", style)

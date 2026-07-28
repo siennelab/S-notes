@@ -93,7 +93,7 @@ THEMES: dict[str, ThemeTokens] = {
     ),
     "light-slate": ThemeTokens(
         name="light-slate",
-        window="#D9DEE3",
+        window="#F0F2F5",
         sidebar="#394653",
         sidebar_control="#465563",
         sidebar_separator="#536170",
@@ -102,9 +102,9 @@ THEMES: dict[str, ThemeTokens] = {
         sidebar_text="#F2F5F7",
         sidebar_text_muted="#CAD2D9",
         sidebar_text_subtle="#9EABB5",
-        editor="#D9DEE3",
-        editor_paper="#F0F2F3",
-        editor_border="#C5CBD0",
+        editor="#F0F2F5",
+        editor_paper="#F0F2F5",
+        editor_border="#DCDCDC",
         title_separator="#B9C0C6",
         surface="#E7EBEE",
         surface_hover="#DDE3E7",
@@ -411,8 +411,8 @@ QHeaderView::section {{
 #titleInput:focus {{ border: 0; background: {t.editor}; }}
 #titleSeparator {{
     border: 0;
-    min-height: 1px;
-    max-height: 1px;
+    min-height: 2px;
+    max-height: 2px;
     background: {t.title_separator};
 }}
 #metadataSummaryButton {{
@@ -510,10 +510,10 @@ QHeaderView::section {{
 #aiCenterDialog {{ background: {t.window}; color: {t.text}; }}
 QTabWidget#aiCenterTabs {{ background: transparent; color: {t.text}; }}
 QTabWidget#aiCenterTabs::pane {{
-    border: 1px solid {t.sidebar_separator};
-    border-radius: 8px;
+    border: 0;
+    border-radius: 0;
     background: {t.window};
-    top: -1px;
+    top: 0;
 }}
 QTabWidget#aiCenterTabs QTabBar {{ background: transparent; }}
 QTabWidget#aiCenterTabs QTabBar::tab {{
@@ -548,11 +548,6 @@ QTabWidget#aiCenterTabs QTabBar::tab:disabled {{
 #aiCenterCloseButton:pressed {{ background: {t.surface_selected}; color: {t.text}; }}
 #aiCenterCloseButton:focus {{ border-color: {t.focus}; color: {t.text}; }}
 #aiCenterCloseButton:disabled {{ background: transparent; color: {t.disabled}; }}
-#remoteAiAccessGroup {{
-    border: 1px solid {t.editor_border};
-    border-radius: 6px;
-    background: {t.surface};
-}}
 #settingsSectionTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
 #remoteAiAccessNote {{ color: {t.text_subtle}; font-size: 12px; }}
 #remoteUpdateNow {{

@@ -15,7 +15,12 @@ from PySide6.QtWidgets import QApplication
 
 from src.editor import NotesEditor
 from src.main_window import (
+    EDITOR_BOTTOM_MARGIN,
+    EDITOR_MEDIUM_SIDE_MARGIN,
+    EDITOR_NARROW_SIDE_MARGIN,
     EDITOR_TARGET_MAX_WIDTH,
+    EDITOR_WIDE_SIDE_MARGIN,
+    TITLE_SEPARATOR_HEIGHT,
     editor_horizontal_metrics,
 )
 from src.theme import (
@@ -97,8 +102,10 @@ class ThemeSystemTest(unittest.TestCase):
             contrast_ratio(tokens.sidebar_text, tokens.sidebar),
             4.5,
         )
-        self.assertNotEqual(tokens.editor, tokens.editor_paper)
-        self.assertNotEqual(tokens.editor_paper.upper(), "#FFFFFF")
+        self.assertEqual(tokens.window, "#F0F2F5")
+        self.assertEqual(tokens.editor, "#F0F2F5")
+        self.assertEqual(tokens.editor_paper, "#F0F2F5")
+        self.assertEqual(tokens.editor_border, "#DCDCDC")
 
         style = build_app_style(tokens.name)
         self.assertIn(
@@ -128,12 +135,20 @@ class ThemeSystemTest(unittest.TestCase):
             editor_root_width - left_margin - right_margin - leading_space,
         )
 
-        self.assertEqual((left_margin, right_margin, leading_space), (48, 40, 0))
+        self.assertEqual(
+            (left_margin, right_margin, leading_space),
+            (EDITOR_WIDE_SIDE_MARGIN, EDITOR_WIDE_SIDE_MARGIN, 0),
+        )
         self.assertEqual(target_width, 1280)
         self.assertGreater(target_width, 1000)
 
     def test_editor_narrow_margins_do_not_overflow(self) -> None:
-        widths_and_margins = ((896, 48), (895, 24), (640, 24), (639, 16))
+        widths_and_margins = (
+            (896, EDITOR_WIDE_SIDE_MARGIN),
+            (895, EDITOR_MEDIUM_SIDE_MARGIN),
+            (640, EDITOR_MEDIUM_SIDE_MARGIN),
+            (639, EDITOR_NARROW_SIDE_MARGIN),
+        )
         for editor_root_width, expected_margin in widths_and_margins:
             left_margin, right_margin, leading_space = editor_horizontal_metrics(
                 editor_root_width
@@ -144,10 +159,7 @@ class ThemeSystemTest(unittest.TestCase):
                 available_width - leading_space,
             )
             self.assertEqual(left_margin, expected_margin)
-            self.assertEqual(
-                right_margin,
-                40 if expected_margin == 48 else expected_margin,
-            )
+            self.assertEqual(right_margin, expected_margin)
             self.assertGreaterEqual(target_width, 0)
             self.assertLessEqual(leading_space + target_width, available_width)
 
@@ -289,6 +301,10 @@ class ThemeSystemTest(unittest.TestCase):
             self.assertIn(f"background: {tokens.editor_paper};", style)
             self.assertIn(f"border: 1px solid {tokens.editor_border};", style)
             self.assertIn(f"background: {tokens.title_separator};", style)
+            self.assertIn(f"min-height: {TITLE_SEPARATOR_HEIGHT}px;", style)
+            self.assertIn(f"max-height: {TITLE_SEPARATOR_HEIGHT}px;", style)
+
+        self.assertEqual(EDITOR_BOTTOM_MARGIN, 12)
 
     def test_dark_theme_no_longer_contains_the_old_green_accent(self) -> None:
         dark = THEMES["dark"]
