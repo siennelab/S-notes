@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sys
+import time
 
-from PySide6.QtCore import QEvent, QSettings, QSize, QTimer, Qt
+from PySide6.QtCore import QEvent, QSettings, QSize, QThread, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -35,6 +37,11 @@ from PySide6.QtWidgets import (
 
 from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS, visibility_display
 from src.ai_center_dialog import AiCenterDialog
+from src.app_paths import (
+    GALE_MIRROR_PATH,
+    GALE_PUBLISH_LOCK_PATH,
+    GALE_PUBLISH_STATE_PATH,
+)
 from src.batch_note_operations import (
     empty_trash,
     permanently_delete_trash_items,
@@ -82,6 +89,15 @@ from src.sidebar_interactions import (
     selected_items_without_selected_ancestors,
 )
 from src.smart_views import SMART_VIEWS, get_smart_view_notes
+from src.services.gale_publish_service import (
+    GaleAutoPublishScheduler,
+    GalePublishConfig,
+    GalePublishError,
+    GalePublishResult,
+    load_publish_state,
+    publish_gale_mirror,
+    sha256_file,
+)
 from src.tag_manager import format_tags, parse_tags
 from src.theme import (
     THEME_LABELS,
@@ -155,6 +171,34 @@ def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
     return left_margin, right_margin, leading_space
 
 
+class GalePublishThread(QThread):
+    def __init__(self, config: GalePublishConfig, *, manual: bool) -> None:
+        super().__init__()
+        self.config = config
+        self.manual = manual
+        self.result: GalePublishResult | None = None
+
+    def run(self) -> None:
+        try:
+            self.result = publish_gale_mirror(self.config)
+        except GalePublishError as error:
+            self.result = GalePublishResult(
+                status="failed",
+                sha256="",
+                note_count=0,
+                reason=error.code,
+                previous_preserved=error.previous_preserved,
+            )
+        except Exception:
+            self.result = GalePublishResult(
+                status="failed",
+                sha256="",
+                note_count=0,
+                reason="unexpected_failure",
+                previous_preserved=False,
+            )
+
+
 class MainWindow(QMainWindow):
     DEFAULT_SIDEBAR_WIDTH = 280
     MIN_SIDEBAR_WIDTH = 280
@@ -163,6 +207,8 @@ class MainWindow(QMainWindow):
     EDITOR_MAX_WIDTH = EDITOR_TARGET_MAX_WIDTH
     AUTOSAVE_DELAY_MS = 1000
     AUTOSAVE_RETRY_DELAYS_MS = (3000, 10000, 30000)
+    GALE_AUTO_PUBLISH_SETTING = "gale/auto_publish_enabled"
+    GALE_WATCH_INTERVAL_MS = 60_000
 
     def __init__(self) -> None:
         super().__init__()
@@ -193,6 +239,19 @@ class MainWindow(QMainWindow):
         self.search_timer.setInterval(300)
         self.search_timer.setSingleShot(True)
         self.search_timer.timeout.connect(self.apply_search_filter)
+        publish_state = load_publish_state(GALE_PUBLISH_STATE_PATH)
+        self.gale_auto_scheduler = GaleAutoPublishScheduler(
+            last_success_hash=publish_state.last_success_hash,
+        )
+        self.gale_publish_thread: GalePublishThread | None = None
+        self.gale_close_after_publish = False
+        self.gale_source_signature: tuple[int, int] | None = None
+        self.gale_last_watch_wall_time = time.time()
+        self.gale_network_online = False
+        self.gale_network_information: QNetworkInformation | None = None
+        self.gale_watch_timer = QTimer(self)
+        self.gale_watch_timer.setInterval(self.GALE_WATCH_INTERVAL_MS)
+        self.gale_watch_timer.timeout.connect(self.check_gale_auto_publish)
 
         self.setWindowTitle("S-notes")
         self.resize(1360, 860)
@@ -201,6 +260,7 @@ class MainWindow(QMainWindow):
         self.populate_filter_controls()
         self.refresh_directory_tree()
         self.ensure_startup_note_loaded()
+        self.configure_gale_auto_publish()
 
     def _build_content(self) -> QWidget:
         root = QWidget()
@@ -297,6 +357,7 @@ class MainWindow(QMainWindow):
             getattr(self, "pin_button", None),
             getattr(self, "link_drawer_button", None),
             getattr(self, "export_button", None),
+            getattr(self, "gale_menu_button", None),
             getattr(self, "delete_note_button", None),
         ):
             if button is not None and button.property("iconFile"):
@@ -594,6 +655,39 @@ class MainWindow(QMainWindow):
         action_bar_layout.addWidget(self.pin_button)
         action_bar_layout.addWidget(self.link_drawer_button)
         action_bar_layout.addWidget(self.export_button)
+        self.gale_menu_button = QToolButton()
+        self.gale_menu_button.setObjectName("actionBarButton")
+        self.gale_menu_button.setProperty(
+            "iconFile",
+            "more-horizontal.svg",
+        )
+        self.gale_menu_button.setIcon(themed_icon("more-horizontal.svg"))
+        self.gale_menu_button.setIconSize(QSize(14, 14))
+        self.gale_menu_button.setFixedSize(28, 28)
+        self.gale_menu_button.setToolTip("Gale 发布")
+        self.gale_menu_button.setPopupMode(QToolButton.InstantPopup)
+        gale_menu = QMenu(self.gale_menu_button)
+        self.gale_publish_action = gale_menu.addAction(
+            "立即发布给 Gale",
+            self.publish_to_gale_now,
+        )
+        gale_menu.addSeparator()
+        self.gale_auto_publish_action = gale_menu.addAction(
+            "自动发布给 Gale"
+        )
+        self.gale_auto_publish_action.setCheckable(True)
+        self.gale_auto_publish_action.setChecked(
+            self.settings.value(
+                self.GALE_AUTO_PUBLISH_SETTING,
+                True,
+                type=bool,
+            )
+        )
+        self.gale_auto_publish_action.toggled.connect(
+            self.set_gale_auto_publish_enabled
+        )
+        self.gale_menu_button.setMenu(gale_menu)
+        action_bar_layout.addWidget(self.gale_menu_button)
 
         title_band_layout.addWidget(self.editor_action_bar, 0, 1, Qt.AlignRight | Qt.AlignBottom)
         layout.addWidget(self.title_band)
@@ -1282,6 +1376,160 @@ class MainWindow(QMainWindow):
         )
         dialog = ExportCenterDialog(context, self)
         dialog.exec()
+
+    def configure_gale_auto_publish(self) -> None:
+        enabled = bool(self.gale_auto_publish_action.isChecked())
+        self.gale_auto_scheduler.enabled = enabled
+        if enabled:
+            self.gale_watch_timer.start()
+            self.check_gale_auto_publish()
+        else:
+            self.gale_watch_timer.stop()
+        try:
+            QNetworkInformation.loadDefaultBackend()
+            network_information = QNetworkInformation.instance()
+            if network_information is not None:
+                self.gale_network_information = network_information
+                self.gale_network_online = (
+                    network_information.reachability()
+                    == QNetworkInformation.Reachability.Online
+                )
+                network_information.reachabilityChanged.connect(
+                    self.handle_gale_network_reachability
+                )
+        except Exception:
+            self.gale_network_information = None
+
+    def set_gale_auto_publish_enabled(self, enabled: bool) -> None:
+        self.settings.setValue(
+            self.GALE_AUTO_PUBLISH_SETTING,
+            bool(enabled),
+        )
+        self.settings.sync()
+        if enabled:
+            self.gale_auto_scheduler.enable()
+            self.gale_watch_timer.start()
+            self.check_gale_auto_publish()
+        else:
+            self.gale_auto_scheduler.disable()
+            self.gale_watch_timer.stop()
+
+    def publish_to_gale_now(self) -> None:
+        self.start_gale_publish(manual=True)
+
+    def start_gale_publish(self, *, manual: bool) -> None:
+        if (
+            self.gale_publish_thread is not None
+            and self.gale_publish_thread.isRunning()
+        ):
+            if manual:
+                self.status_label.setText("正在发布给 Gale")
+            return
+        self.gale_auto_scheduler.mark_started()
+        self.gale_publish_action.setEnabled(False)
+        thread = GalePublishThread(
+            GalePublishConfig(
+                mirror_path=GALE_MIRROR_PATH,
+                state_path=GALE_PUBLISH_STATE_PATH,
+                lock_path=GALE_PUBLISH_LOCK_PATH,
+            ),
+            manual=manual,
+        )
+        self.gale_publish_thread = thread
+        thread.finished.connect(self.handle_gale_publish_finished)
+        thread.start()
+        self.status_label.setText("正在发布给 Gale")
+
+    def handle_gale_publish_finished(self) -> None:
+        thread = self.gale_publish_thread
+        if thread is None:
+            return
+        result = thread.result or GalePublishResult(
+            status="failed",
+            sha256="",
+            note_count=0,
+            reason="unexpected_failure",
+            previous_preserved=False,
+        )
+        manual = thread.manual
+        thread.deleteLater()
+        self.gale_publish_thread = None
+        self.gale_publish_action.setEnabled(True)
+
+        if result.status in {"success", "duplicate"}:
+            if result.sha256:
+                self.gale_auto_scheduler.mark_success(result.sha256)
+            else:
+                self.gale_auto_scheduler.running = False
+            self.status_label.setText("已发布给 Gale")
+        else:
+            self.gale_auto_scheduler.mark_failure(time.time())
+            friendly_reason = self.gale_publish_error_text(result.reason)
+            if result.previous_preserved:
+                message = f"发布失败：{friendly_reason}。继续使用上一版。"
+            else:
+                message = f"发布失败：{friendly_reason}。请停止并检查回滚状态。"
+            self.status_label.setText(message)
+            if manual:
+                QMessageBox.warning(self, "发布失败", message)
+
+        if self.gale_close_after_publish:
+            self.gale_close_after_publish = False
+            QTimer.singleShot(0, self.close)
+
+    def check_gale_auto_publish(
+        self,
+        *,
+        network_restored: bool = False,
+    ) -> None:
+        if not self.gale_auto_scheduler.enabled:
+            return
+        now = time.time()
+        resumed = (
+            now - self.gale_last_watch_wall_time
+            > (self.GALE_WATCH_INTERVAL_MS / 1000) * 2
+        )
+        self.gale_last_watch_wall_time = now
+        try:
+            file_stat = GALE_MIRROR_PATH.stat()
+            signature = (file_stat.st_mtime_ns, file_stat.st_size)
+            if signature != self.gale_source_signature:
+                digest = sha256_file(GALE_MIRROR_PATH)
+                self.gale_source_signature = signature
+                self.gale_auto_scheduler.observe(digest, now)
+        except (FileNotFoundError, OSError):
+            return
+
+        if self.gale_auto_scheduler.should_publish(
+            now,
+            resumed=resumed,
+            network_restored=network_restored,
+        ):
+            self.start_gale_publish(manual=False)
+
+    def handle_gale_network_reachability(
+        self,
+        reachability: QNetworkInformation.Reachability,
+    ) -> None:
+        online = reachability == QNetworkInformation.Reachability.Online
+        restored = online and not self.gale_network_online
+        self.gale_network_online = online
+        if restored:
+            self.check_gale_auto_publish(network_restored=True)
+
+    @staticmethod
+    def gale_publish_error_text(reason: str) -> str:
+        messages = {
+            "local_validation_failed": "本地安全镜像验证未通过",
+            "upload_failed": "无法上传",
+            "activation_unreachable": "无法连接远端发布服务",
+            "publisher_busy": "已有发布正在进行",
+            "remote_validation_failed": "远端安全镜像验证未通过",
+            "activation_failed_rolled_back": "新版本未能启动",
+            "rollback_failed": "上一版恢复检查未通过",
+            "unexpected_failure": "发生未预期错误",
+        }
+        return messages.get(reason, "发布未完成")
 
     def open_receipt_inbox(self) -> None:
         if not self.force_save_current_note(refresh_tree=False):
@@ -2086,6 +2334,16 @@ class MainWindow(QMainWindow):
         return ""
 
     def closeEvent(self, event) -> None:
+        self.gale_watch_timer.stop()
+        self.gale_auto_scheduler.disable()
+        if (
+            self.gale_publish_thread is not None
+            and self.gale_publish_thread.isRunning()
+        ):
+            self.gale_close_after_publish = True
+            self.status_label.setText("正在安全完成 Gale 发布，完成后关闭")
+            event.ignore()
+            return
         if self.force_save_current_note(refresh_tree=False):
             self._save_sidebar_width()
             self.settings.sync()

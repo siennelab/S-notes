@@ -13,6 +13,10 @@ from src.app_paths import (
     CONFIG_DIR,
     DATABASE_PATH,
     EXPORTS_ROOT,
+    GALE_EXPORT_DIR,
+    GALE_MIRROR_PATH,
+    GALE_PUBLISH_LOCK_PATH,
+    GALE_PUBLISH_STATE_PATH,
     IMPORTS_DIR,
     JSON_EXPORT_DIR,
     MARKDOWN_EXPORT_DIR,
@@ -53,11 +57,24 @@ class AppPathsTest(unittest.TestCase):
             self.assertEqual(paths.markdown_exports, root / "exports" / "markdown")
             self.assertEqual(paths.json_exports, root / "exports" / "json")
             self.assertEqual(paths.ai_readbox, root / "exports" / "ai_readbox")
+            self.assertEqual(paths.gale_exports, root / "exports" / "gale")
+            self.assertEqual(
+                paths.gale_mirror,
+                root / "exports" / "gale" / "gale-mirror.db",
+            )
             self.assertEqual(paths.imports, root / "imports")
             self.assertEqual(paths.config, root / "config")
             self.assertEqual(
                 paths.redaction_rules,
                 root / "config" / "local_redaction_rules.json",
+            )
+            self.assertEqual(
+                paths.gale_publish_state,
+                root / "config" / "gale_publish_state.json",
+            )
+            self.assertEqual(
+                paths.gale_publish_lock,
+                root / "config" / "gale_publish.lock",
             )
             self.assertFalse(root.exists())
 
@@ -68,11 +85,24 @@ class AppPathsTest(unittest.TestCase):
         self.assertEqual(MARKDOWN_EXPORT_DIR, EXPORTS_ROOT / "markdown")
         self.assertEqual(JSON_EXPORT_DIR, EXPORTS_ROOT / "json")
         self.assertEqual(AI_READBOX_DIR, EXPORTS_ROOT / "ai_readbox")
+        self.assertEqual(GALE_EXPORT_DIR, EXPORTS_ROOT / "gale")
+        self.assertEqual(
+            GALE_MIRROR_PATH,
+            GALE_EXPORT_DIR / "gale-mirror.db",
+        )
         self.assertEqual(IMPORTS_DIR, USER_DATA_ROOT / "imports")
         self.assertEqual(CONFIG_DIR, USER_DATA_ROOT / "config")
         self.assertEqual(
             REDACTION_RULES_PATH,
             CONFIG_DIR / "local_redaction_rules.json",
+        )
+        self.assertEqual(
+            GALE_PUBLISH_STATE_PATH,
+            CONFIG_DIR / "gale_publish_state.json",
+        )
+        self.assertEqual(
+            GALE_PUBLISH_LOCK_PATH,
+            CONFIG_DIR / "gale_publish.lock",
         )
 
     def test_runtime_modules_use_the_central_paths(self) -> None:

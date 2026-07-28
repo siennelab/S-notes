@@ -1,0 +1,28 @@
+#!/bin/sh
+
+set -eu
+umask 077
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+if [ "$#" -ne 2 ]; then
+    printf '%s\n' 'GALE_ACTIVATE_STATUS=FAILED' 'REASON=invalid_arguments' >&2
+    exit 20
+fi
+
+expected_sha256=$1
+expected_note_count=$2
+
+if ! printf '%s' "$expected_sha256" | grep -Eq '^[0-9a-f]{64}$'; then
+    printf '%s\n' 'GALE_ACTIVATE_STATUS=FAILED' 'REASON=invalid_sha256' >&2
+    exit 20
+fi
+if ! printf '%s' "$expected_note_count" | grep -Eq '^[1-9][0-9]*$'; then
+    printf '%s\n' 'GALE_ACTIVATE_STATUS=FAILED' 'REASON=invalid_note_count' >&2
+    exit 20
+fi
+
+cd /opt/snotes-gale-mcp-oidc-staging
+exec .venv/bin/python -m src.gale_publish remote-activate \
+    --expected-sha256 "$expected_sha256" \
+    --expected-note-count "$expected_note_count"

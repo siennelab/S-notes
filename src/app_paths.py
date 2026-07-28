@@ -36,6 +36,14 @@ class AppPaths:
         return self.exports / "ai_readbox"
 
     @property
+    def gale_exports(self) -> Path:
+        return self.exports / "gale"
+
+    @property
+    def gale_mirror(self) -> Path:
+        return self.gale_exports / "gale-mirror.db"
+
+    @property
     def imports(self) -> Path:
         return self.data_root / "imports"
 
@@ -46,6 +54,14 @@ class AppPaths:
     @property
     def redaction_rules(self) -> Path:
         return self.config / "local_redaction_rules.json"
+
+    @property
+    def gale_publish_state(self) -> Path:
+        return self.config / "gale_publish_state.json"
+
+    @property
+    def gale_publish_lock(self) -> Path:
+        return self.config / "gale_publish.lock"
 
 
 def default_data_root(home: Path | None = None) -> Path:
@@ -65,6 +81,10 @@ EXPORTS_ROOT = DEFAULT_PATHS.exports
 MARKDOWN_EXPORT_DIR = DEFAULT_PATHS.markdown_exports
 JSON_EXPORT_DIR = DEFAULT_PATHS.json_exports
 AI_READBOX_DIR = DEFAULT_PATHS.ai_readbox
+GALE_EXPORT_DIR = DEFAULT_PATHS.gale_exports
+GALE_MIRROR_PATH = DEFAULT_PATHS.gale_mirror
 IMPORTS_DIR = DEFAULT_PATHS.imports
 CONFIG_DIR = DEFAULT_PATHS.config
 REDACTION_RULES_PATH = DEFAULT_PATHS.redaction_rules
+GALE_PUBLISH_STATE_PATH = DEFAULT_PATHS.gale_publish_state
+GALE_PUBLISH_LOCK_PATH = DEFAULT_PATHS.gale_publish_lock
