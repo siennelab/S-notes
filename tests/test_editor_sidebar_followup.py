@@ -41,6 +41,13 @@ def _format_at(editor: NotesEditor, position: int = 0):
     return cursor.charFormat()
 
 
+def _format_for_text(editor: NotesEditor, text: str):
+    cursor = editor.document().find(text)
+    if cursor.isNull():
+        raise AssertionError(f"missing fictional test text: {text}")
+    return cursor.charFormat()
+
+
 def _select_all(editor: NotesEditor) -> None:
     cursor = editor.textCursor()
     cursor.select(QTextCursor.Document)
@@ -63,6 +70,26 @@ def _chatgpt_style_mime() -> QMimeData:
         "<blockquote>虚构引用</blockquote>"
         "<pre><code>fictional_code()</code></pre>"
         "</div>"
+    )
+    return mime
+
+
+def _strikethrough_mime() -> QMimeData:
+    mime = QMimeData()
+    mime.setText(
+        "fictional-s\n"
+        "fictional-strike\n"
+        "fictional-del\n"
+        "fictional-safe-link fictional-danger-link"
+    )
+    mime.setHtml(
+        '<p><s onclick="alert(1)"><strong>fictional-s</strong></s></p>'
+        '<p><strike style="color:red"><em>fictional-strike</em></strike></p>'
+        "<ul><li><del>fictional-del</del></li></ul>"
+        '<p><del><a href="https://example.invalid/strike">fictional-safe-link</a> '
+        '<a href="javascript:alert(1)" onmouseover="alert(2)">'
+        "fictional-danger-link</a></del></p>"
+        "<script>fictional-script()</script>"
     )
     return mime
 
@@ -531,6 +558,75 @@ class RichTextPasteFontTest(unittest.TestCase):
         self.assertEqual(_format_at(editor).font().pixelSize(), 11)
         editor.close()
 
+    def test_strikethrough_tags_normalize_and_preserve_safe_semantics(self) -> None:
+        canonical = [
+            NotesEditor.sanitize_html(
+                f"<p><{tag}>fictional</{tag}></p>"
+            )
+            for tag in ("s", "strike", "del")
+        ]
+        self.assertEqual(canonical, ["<p><s>fictional</s></p>"] * 3)
+
+        mime = _strikethrough_mime()
+        editor = NotesEditor()
+        editor.insertFromMimeData(mime)
+        self.assertEqual(editor.toPlainText(), mime.text())
+        plain_tokens = editor.toPlainText().split()
+        for text in (
+            "fictional-s",
+            "fictional-strike",
+            "fictional-del",
+            "fictional-safe-link",
+            "fictional-danger-link",
+        ):
+            self.assertEqual(plain_tokens.count(text), 1)
+            self.assertTrue(_format_for_text(editor, text).fontStrikeOut())
+
+        self.assertEqual(
+            _format_for_text(editor, "fictional-s").fontWeight(),
+            QFont.Bold,
+        )
+        self.assertTrue(
+            _format_for_text(editor, "fictional-strike").fontItalic()
+        )
+        list_cursor = editor.document().find("fictional-del")
+        self.assertIsNotNone(list_cursor.block().textList())
+        safe_link_format = _format_for_text(editor, "fictional-safe-link")
+        self.assertTrue(safe_link_format.isAnchor())
+        self.assertEqual(
+            safe_link_format.anchorHref(),
+            "https://example.invalid/strike",
+        )
+        self.assertFalse(
+            _format_for_text(editor, "fictional-danger-link").isAnchor()
+        )
+
+        saved_html = editor.note_content_html()
+        for unsafe_value in (
+            "onclick",
+            "onmouseover",
+            "javascript:",
+            "fictional-script",
+            "color:red",
+        ):
+            self.assertNotIn(unsafe_value, saved_html)
+        restored = NotesEditor()
+        restored.set_note_content(saved_html)
+        self.assertEqual(restored.toPlainText(), editor.toPlainText())
+        for text in ("fictional-s", "fictional-strike", "fictional-del"):
+            self.assertTrue(_format_for_text(restored, text).fontStrikeOut())
+        editor.close()
+        restored.close()
+
+    def test_plain_text_strikethrough_markup_remains_literal(self) -> None:
+        mime = QMimeData()
+        mime.setText("<s>fictional-literal</s>")
+        editor = NotesEditor()
+        editor.insertFromMimeData(mime)
+        self.assertEqual(editor.toPlainText(), "<s>fictional-literal</s>")
+        self.assertFalse(_format_at(editor).fontStrikeOut())
+        editor.close()
+
     def test_every_font_size_overrides_pasted_inline_point_size_and_round_trips(self) -> None:
         editor = NotesEditor()
         editor.insertFromMimeData(_chatgpt_style_mime())
@@ -587,6 +683,36 @@ class RichTextPasteFontTest(unittest.TestCase):
             _format_at(restored_window.body_edit).font().pixelSize(),
             20,
         )
+        restored_window.close()
+        self.app.processEvents()
+
+    def test_strikethrough_survives_save_switch_and_new_window(self) -> None:
+        first = create_note()
+        second = create_note()
+        window = MainWindow()
+        window.show()
+        window.load_note(first["id"])
+        window.body_edit.insertFromMimeData(_strikethrough_mime())
+        self.assertTrue(window.force_save_current_note(refresh_tree=False))
+        window.load_note(second["id"])
+        window.load_note(first["id"])
+        for text in ("fictional-s", "fictional-strike", "fictional-del"):
+            self.assertTrue(
+                _format_for_text(window.body_edit, text).fontStrikeOut()
+            )
+        window.close()
+        self.app.processEvents()
+
+        restored_window = MainWindow()
+        restored_window.show()
+        restored_window.load_note(first["id"])
+        for text in ("fictional-s", "fictional-strike", "fictional-del"):
+            self.assertTrue(
+                _format_for_text(
+                    restored_window.body_edit,
+                    text,
+                ).fontStrikeOut()
+            )
         restored_window.close()
         self.app.processEvents()
 

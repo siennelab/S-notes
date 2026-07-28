@@ -34,6 +34,9 @@ ALLOWED_HTML_TAGS = (
     "strong",
     "i",
     "em",
+    "s",
+    "strike",
+    "del",
     "ul",
     "ol",
     "li",
@@ -1114,6 +1117,8 @@ class NotesEditor(QTextEdit):
             tag = match.group(2).lower()
             if tag == "br":
                 return "<br>"
+            if tag in {"s", "strike", "del"}:
+                return f"<{slash}s>"
             if tag == "a" and not slash:
                 href_match = HREF_ATTRIBUTE_RE.search(match.group(3) or "")
                 href = cls._safe_link_target(
