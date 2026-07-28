@@ -53,6 +53,25 @@ Before a Task 13A schema migration, S-notes creates a timestamped full SQLite
 backup under `backups/migrations/`. The schema/value migration then runs in one
 transaction and records before/after counts plus unknown permission values.
 
+### Verified Manual Database Recovery
+
+Use this narrow manual path only with an already verified SQLite backup:
+
+1. Close S-notes normally and confirm it is no longer using the database.
+2. Preserve the current faulty `s_notes.db` as a separately named backup; do
+   not delete it.
+3. Select the intended verified backup from the application backup directory.
+4. Copy that backup to an isolated temporary directory and require
+   `PRAGMA integrity_check` to return `ok`.
+5. With S-notes still closed, copy the verified backup into place as the formal
+   `s_notes.db`.
+6. Restore the recorded owner and file mode of the formal database.
+7. Start S-notes normally.
+8. Confirm that the application database layer opens the database without a
+   schema or migration error.
+9. If validation fails, close S-notes and restore the separately preserved
+   faulty-database copy with its recorded owner and file mode.
+
 ## Regular Exports
 
 Regular exports belong under:
