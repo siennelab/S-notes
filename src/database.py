@@ -2039,17 +2039,70 @@ def list_todo_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def list_ai_visible_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
+def list_ai_visible_notes(
+    database_path: Path = DATABASE_PATH,
+    *,
+    actor_target_id: str | None = None,
+    query: str = "",
+) -> list[dict]:
+    actor = (
+        normalize_target_ids([actor_target_id])[0]
+        if actor_target_id is not None
+        else None
+    )
+    term = query.strip()
+    parameters: list[object] = []
+    clauses = [
+        "notes.is_deleted = 0",
+        (
+            "notes.ai_visibility IN "
+            "('full', 'redacted', '可直接给 AI', '脱敏后给 AI', "
+            "'AI完整可见', 'AI脱敏后可见')"
+        ),
+    ]
+    if actor is not None:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM note_ai_targets
+                WHERE note_ai_targets.note_id = notes.id
+                  AND note_ai_targets.target_id = ?
+            )
+            """
+        )
+        parameters.append(actor)
+    if term:
+        pattern = f"%{term}%"
+        clauses.append(
+            """
+            (
+                notes.title LIKE ?
+                OR notes.content_html LIKE ?
+                OR notes.main_category LIKE ?
+                OR notes.sub_category LIKE ?
+                OR notes.sub_sub_category LIKE ?
+                OR notes.tags LIKE ?
+                OR tags.name LIKE ?
+            )
+            """
+        )
+        parameters.extend([pattern] * 7)
+
     with _connect(database_path) as connection:
         rows = connection.execute(
-            """
-            SELECT id, title, main_category, sub_category, sub_sub_category, tags,
-                   ai_visibility, is_pinned, created_at, updated_at
+            f"""
+            SELECT DISTINCT notes.id, notes.title, notes.main_category,
+                   notes.sub_category, notes.sub_sub_category, notes.tags,
+                   notes.ai_visibility, notes.is_pinned, notes.created_at,
+                   notes.updated_at
             FROM notes
-            WHERE is_deleted = 0
-              AND ai_visibility IN ('full', 'redacted', '可直接给 AI', '脱敏后给 AI', 'AI完整可见', 'AI脱敏后可见')
-            ORDER BY updated_at DESC, created_at DESC, id DESC
-            """
+            LEFT JOIN note_tags ON note_tags.note_id = notes.id
+            LEFT JOIN tags ON tags.id = note_tags.tag_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            """,
+            parameters,
         ).fetchall()
     return [dict(row) for row in rows]
 

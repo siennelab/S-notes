@@ -5,6 +5,7 @@ import re
 import unicodedata
 from collections import Counter
 from difflib import SequenceMatcher
+from urllib.parse import urlsplit
 
 from PySide6.QtCore import QMimeData, QSignalBlocker, Qt
 from PySide6.QtGui import (
@@ -39,6 +40,7 @@ ALLOWED_HTML_TAGS = (
     "pre",
     "code",
     "blockquote",
+    "a",
     "div",
     "h1",
     "h2",
@@ -48,7 +50,12 @@ UNSAFE_HTML_BLOCK_RE = re.compile(
     r"(?is)<(script|style|object|iframe|embed|link|meta)[^>]*>.*?</\1\s*>"
 )
 UNSAFE_HTML_SINGLE_RE = re.compile(r"(?is)<(script|style|object|iframe|embed|link|meta)[^>]*>")
-HTML_ATTRIBUTE_RE = re.compile(r"""(?is)\s(?:style|class|id|on\w+|href|src|data-[\w-]+)=("[^"]*"|'[^']*'|[^\s>]+)""")
+HTML_ATTRIBUTE_RE = re.compile(
+    r"""(?is)\s(?:style|class|id|on\w+|src|data-[\w-]+)=("[^"]*"|'[^']*'|[^\s>]+)"""
+)
+HREF_ATTRIBUTE_RE = re.compile(
+    r"""(?is)\bhref\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"""
+)
 MARKDOWN_SIGNAL_RE = re.compile(
     r"(?m)^(#{1,3}\s+|[-*]\s+|\d+\.\s+|>\s+|```)|(\*\*[^*\n]+\*\*)|(`[^`\n]+`)"
 )
@@ -629,6 +636,9 @@ class NotesEditor(QTextEdit):
 
     def apply_font_size(self, pixel_size: int) -> None:
         cursor = self.textCursor()
+        if cursor.hasSelection():
+            self._apply_selected_font_size(cursor, pixel_size)
+            return
         char_format = QTextCharFormat()
         self._set_char_format_pixel_size(char_format, pixel_size)
         cursor.beginEditBlock()
@@ -637,6 +647,41 @@ class NotesEditor(QTextEdit):
             self.mergeCurrentCharFormat(char_format)
         finally:
             cursor.endEditBlock()
+
+    def _apply_selected_font_size(
+        self,
+        selection: QTextCursor,
+        pixel_size: int,
+    ) -> None:
+        start = selection.selectionStart()
+        end = selection.selectionEnd()
+        edit_cursor = QTextCursor(self.document())
+        edit_cursor.beginEditBlock()
+        try:
+            block = self.document().findBlock(start)
+            while block.isValid() and block.position() < end:
+                iterator = block.begin()
+                while not iterator.atEnd():
+                    fragment = iterator.fragment()
+                    fragment_start = max(start, fragment.position())
+                    fragment_end = min(end, fragment.position() + fragment.length())
+                    if fragment.isValid() and fragment_end > fragment_start:
+                        char_format = QTextCharFormat(fragment.charFormat())
+                        char_format.clearProperty(QTextFormat.FontPointSize)
+                        char_format.clearProperty(QTextFormat.FontPixelSize)
+                        self._set_char_format_pixel_size(char_format, pixel_size)
+                        range_cursor = QTextCursor(self.document())
+                        range_cursor.setPosition(fragment_start)
+                        range_cursor.setPosition(
+                            fragment_end,
+                            QTextCursor.KeepAnchor,
+                        )
+                        range_cursor.setCharFormat(char_format)
+                    iterator += 1
+                block = block.next()
+        finally:
+            edit_cursor.endEditBlock()
+        self.setTextCursor(selection)
 
     def apply_list(self, ordered: bool) -> None:
         cursor = self.textCursor()
@@ -1069,10 +1114,17 @@ class NotesEditor(QTextEdit):
             tag = match.group(2).lower()
             if tag == "br":
                 return "<br>"
+            if tag == "a" and not slash:
+                href_match = HREF_ATTRIBUTE_RE.search(match.group(3) or "")
+                href = cls._safe_link_target(
+                    href_match.group(1) if href_match else ""
+                )
+                if href:
+                    return f'<a href="{html.escape(href, quote=True)}">'
             return f"<{slash}{tag}>"
 
         clean = re.sub(
-            rf"(?is)<\s*(/?)\s*({allowed})\b[^>]*>",
+            rf"(?is)<\s*(/?)\s*({allowed})\b([^>]*)>",
             normalize_tag,
             clean,
         )
@@ -1080,8 +1132,19 @@ class NotesEditor(QTextEdit):
         return clean
 
     @staticmethod
+    def _safe_link_target(raw_value: str) -> str:
+        value = html.unescape((raw_value or "").strip().strip("\"'"))
+        if not value:
+            return ""
+        parsed = urlsplit(value)
+        if parsed.scheme.casefold() not in {"http", "https", "mailto"}:
+            return ""
+        return value
+
+    @staticmethod
     def _normalized_html_and_text(markup: str) -> tuple[str, str]:
         document = QTextDocument()
+        document.setDefaultFont(editor_document_font())
         document.setHtml(markup or "")
         return (
             document.toHtml(),

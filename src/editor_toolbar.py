@@ -3,11 +3,13 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt
 
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -15,6 +17,14 @@ from PySide6.QtWidgets import (
 
 from src.editor import NotesEditor
 from src.theme import themed_icon
+
+
+FONT_SIZE_OPTIONS = (
+    ("小字", 11),
+    ("正文大小", 15),
+    ("中大字", 20),
+    ("大字", 26),
+)
 
 
 class EditorToolbar(QWidget):
@@ -28,22 +38,61 @@ class EditorToolbar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        main_row = QHBoxLayout()
-        main_row.setContentsMargins(0, 0, 0, 0)
-        main_row.setSpacing(4)
-        layout.addLayout(main_row)
+        self.toolbar_rows: list[QWidget] = []
+        self.toolbar_row_layouts: list[QHBoxLayout] = []
+        for _index in range(5):
+            row = QWidget()
+            row.setObjectName("toolbarRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            row.setVisible(False)
+            layout.addWidget(row)
+            self.toolbar_rows.append(row)
+            self.toolbar_row_layouts.append(row_layout)
 
-        self.undo_button = self._button(main_row, "", "撤销", editor.undo, "undo.svg")
-        self.redo_button = self._button(main_row, "", "重做", editor.redo, "redo.svg")
-        main_row.addSpacing(8)
-        self.bold_button = self._button(main_row, "", "加粗", editor.apply_bold, "bold.svg")
-        self.italic_button = self._button(main_row, "", "斜体", editor.apply_italic, "italic.svg")
-        self.strike_button = self._button(main_row, "", "删除线", editor.apply_strike, "strikethrough.svg")
+        history_group, history_layout = self._group("history")
+        self.undo_button = self._button(
+            history_layout, "", "撤销", editor.undo, "undo.svg"
+        )
+        self.redo_button = self._button(
+            history_layout, "", "重做", editor.redo, "redo.svg"
+        )
+
+        appearance_group, appearance_layout = self._group("appearance")
+        self.font_size_button = QToolButton()
+        self.font_size_button.setText("字号")
+        self.font_size_button.setObjectName("toolbarButton")
+        self.font_size_button.setToolTip("文字大小")
+        self.font_size_button.setFixedSize(37, 29)
+        self.font_size_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.font_size_button.setMenu(self._build_font_size_menu())
+        self.font_size_button.setPopupMode(QToolButton.InstantPopup)
+        appearance_layout.addWidget(self.font_size_button)
+        self.bold_button = self._button(
+            appearance_layout, "", "加粗", editor.apply_bold, "bold.svg"
+        )
+        self.italic_button = self._button(
+            appearance_layout, "", "斜体", editor.apply_italic, "italic.svg"
+        )
+        self.strike_button = self._button(
+            appearance_layout,
+            "",
+            "删除线",
+            editor.apply_strike,
+            "strikethrough.svg",
+        )
+
+        cleanup_group, cleanup_layout = self._group("cleanup")
         self.clear_format_button = self._button(
-            main_row, "", "清除选区或全文格式", editor.clear_formatting, "eraser.svg"
+            cleanup_layout,
+            "",
+            "清除选区或全文格式",
+            editor.clear_formatting,
+            "eraser.svg",
         )
         self.clear_markdown_button = self._button(
-            main_row,
+            cleanup_layout,
             "",
             "清除 Markdown 标记",
             editor.clear_markdown_markup,
@@ -58,17 +107,19 @@ class EditorToolbar(QWidget):
         self.icon_buttons.append(self.compress_blank_lines_button)
         self.compress_blank_lines_button.setMenu(self._build_compress_blank_lines_menu())
         self.compress_blank_lines_button.setPopupMode(QToolButton.InstantPopup)
-        main_row.addWidget(self.compress_blank_lines_button)
-        main_row.addSpacing(8)
-        self.format_button = QToolButton()
-        self.format_button.setText("标题")
-        self.format_button.setObjectName("toolbarButton")
-        self.format_button.setToolTip("标题和字号")
-        self.format_button.setFixedSize(37, 29)
-        self.format_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.format_button.setMenu(self._build_format_menu())
-        self.format_button.setPopupMode(QToolButton.InstantPopup)
-        main_row.addWidget(self.format_button)
+        cleanup_layout.addWidget(self.compress_blank_lines_button)
+
+        structure_group, structure_layout = self._group("structure")
+        self.heading_button = QToolButton()
+        self.heading_button.setText("标题")
+        self.heading_button.setObjectName("toolbarButton")
+        self.heading_button.setToolTip("标题层级")
+        self.heading_button.setFixedSize(37, 29)
+        self.heading_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.heading_button.setMenu(self._build_heading_menu())
+        self.heading_button.setPopupMode(QToolButton.InstantPopup)
+        structure_layout.addWidget(self.heading_button)
+        self.format_button = self.heading_button
 
         for text, tooltip, callback, icon in (
             ("", "无序列表", lambda: editor.apply_list(False), "bullets.svg"),
@@ -76,13 +127,40 @@ class EditorToolbar(QWidget):
             ("", "引用", editor.apply_quote, "quote.svg"),
             ("", "代码块", editor.apply_code_block, "code.svg"),
         ):
-            self._button(main_row, text, tooltip, callback, icon)
-        main_row.addSpacing(8)
+            self._button(structure_layout, text, tooltip, callback, icon)
 
+        tools_group, tools_layout = self._group("tools")
         self.find_toggle_button = self._button(
-            main_row, "", "展开或收起查找替换", self.toggle_find_panel, "search.svg"
+            tools_layout,
+            "",
+            "展开或收起查找替换",
+            self.toggle_find_panel,
+            "search.svg",
         )
-        main_row.addStretch(1)
+        self.toolbar_groups = (
+            history_group,
+            appearance_group,
+            cleanup_group,
+            structure_group,
+            tools_group,
+        )
+        self.toolbar_group_names = (
+            "history",
+            "appearance",
+            "cleanup",
+            "structure",
+            "tools",
+        )
+        self.toolbar_separators: list[QFrame] = []
+        for _index in range(len(self.toolbar_groups) - 1):
+            separator = QFrame()
+            separator.setObjectName("toolbarSeparator")
+            separator.setFrameShape(QFrame.VLine)
+            separator.setFixedWidth(1)
+            separator.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            separator.setVisible(False)
+            self.toolbar_separators.append(separator)
+        self._relayout_toolbar_groups(10_000)
 
         self.find_panel = QWidget()
         self.find_panel.setObjectName("findPanel")
@@ -111,16 +189,68 @@ class EditorToolbar(QWidget):
         self.find_panel.setVisible(False)
         self.refresh_theme()
 
-    def _build_format_menu(self) -> QMenu:
+    def _build_heading_menu(self) -> QMenu:
         menu = QMenu(self)
         menu.addAction("正文", lambda: self.editor.apply_heading(0))
         menu.addAction("标题 1", lambda: self.editor.apply_heading(1))
         menu.addAction("标题 2", lambda: self.editor.apply_heading(2))
-        menu.addSeparator()
-        menu.addAction("小字", lambda: self.editor.apply_font_size(11))
-        menu.addAction("正文大小", lambda: self.editor.apply_font_size(15))
-        menu.addAction("大字", lambda: self.editor.apply_font_size(26))
         return menu
+
+    def _build_font_size_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for label, pixel_size in FONT_SIZE_OPTIONS:
+            menu.addAction(
+                label,
+                lambda checked=False, size=pixel_size: self.editor.apply_font_size(size),
+            )
+        return menu
+
+    @staticmethod
+    def _group(name: str) -> tuple[QWidget, QHBoxLayout]:
+        group = QWidget()
+        group.setObjectName("toolbarGroup")
+        group.setProperty("groupName", name)
+        group_layout = QHBoxLayout(group)
+        group_layout.setContentsMargins(0, 0, 0, 0)
+        group_layout.setSpacing(4)
+        return group, group_layout
+
+    def _relayout_toolbar_groups(self, available_width: int) -> None:
+        for row_layout in self.toolbar_row_layouts:
+            while row_layout.count():
+                row_layout.takeAt(0)
+        for separator in self.toolbar_separators:
+            separator.setVisible(False)
+
+        row_index = 0
+        used_width = 0
+        used_rows: set[int] = set()
+        separator_width = 9
+        for group_index, group in enumerate(self.toolbar_groups):
+            group_width = group.sizeHint().width()
+            required = group_width + (separator_width if used_width else 0)
+            if used_width and used_width + required > max(1, available_width):
+                self.toolbar_row_layouts[row_index].addStretch(1)
+                row_index += 1
+                used_width = 0
+            row_index = min(row_index, len(self.toolbar_row_layouts) - 1)
+            row_layout = self.toolbar_row_layouts[row_index]
+            if used_width:
+                separator = self.toolbar_separators[group_index - 1]
+                separator.setVisible(True)
+                row_layout.addWidget(separator)
+                used_width += separator_width
+            row_layout.addWidget(group)
+            group.setVisible(True)
+            used_width += group_width
+            used_rows.add(row_index)
+        self.toolbar_row_layouts[row_index].addStretch(1)
+        for index, row in enumerate(self.toolbar_rows):
+            row.setVisible(index in used_rows)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._relayout_toolbar_groups(max(1, event.size().width() - 16))
 
     def _build_compress_blank_lines_menu(self) -> QMenu:
         menu = QMenu(self)

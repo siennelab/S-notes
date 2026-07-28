@@ -328,7 +328,7 @@ QHeaderView::section {{
 
 #mainContentArea {{ background: {t.editor}; }}
 #sidebar {{ background: {t.sidebar}; }}
-#sidebarTitle {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
+#sidebarClock {{ color: {t.sidebar_text}; font-size: 12px; font-weight: 500; }}
 #themeSwatch {{ border: 1px solid transparent; border-radius: 7px; padding: 0; }}
 #themeSwatch[themeName="dark"] {{ background: {THEME_SWATCH_COLORS["dark"]}; }}
 #themeSwatch[themeName="light-slate"] {{ background: {THEME_SWATCH_COLORS["light-slate"]}; }}
@@ -343,11 +343,14 @@ QHeaderView::section {{
 #newNoteButton:hover {{ background: {t.focus}; }}
 #newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
 #sidebarSearch,
-#categoryFilter {{ background: {t.sidebar_control}; color: {t.sidebar_text}; }}
+#categoryFilter,
+#aiActorFilterCombo {{ background: {t.sidebar_control}; color: {t.sidebar_text}; }}
 #sidebarSearch:hover,
-#categoryFilter:hover {{ background: {t.sidebar_hover}; }}
+#categoryFilter:hover,
+#aiActorFilterCombo:hover {{ background: {t.sidebar_hover}; }}
 #sidebarSearch:focus,
-#categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
+#categoryFilter:focus,
+#aiActorFilterCombo:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
 #sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 0; }}
 #smartTabButton,
 #categoryManagerButton {{ color: {t.sidebar_text_muted}; font-size: 11px; }}
@@ -356,6 +359,9 @@ QHeaderView::section {{
 #smartTabButton:pressed,
 #categoryManagerButton:pressed {{ background: {t.accent_soft}; color: {t.sidebar_text}; }}
 #smartTabButton[active="true"] {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; font-weight: 600; }}
+#aiActorFilter,
+#aiActorFilter QWidget {{ background: transparent; }}
+#aiActorFilterLabel {{ color: {t.sidebar_text_muted}; font-size: 11px; }}
 #sidebarComboPopupView,
 #comboPopupView {{
     border: 0;
@@ -449,6 +455,9 @@ QHeaderView::section {{
 #metadataCollapseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #editorToolbar,
 #findPanel {{ background: {t.surface}; border-radius: 8px; }}
+#toolbarRow,
+#toolbarGroup {{ background: transparent; }}
+#toolbarSeparator {{ background: {t.editor_border}; margin: 4px 0; }}
 #editorActionBar {{ background: transparent; border-radius: 0; }}
 #editorToolbar {{ padding: 4px 8px; }}
 #toolbarButton {{ padding: 4px; color: {t.text_muted}; font-size: 12.5px; }}

@@ -4,7 +4,7 @@ import sys
 import time
 
 from PySide6.QtCore import QEvent, QSettings, QSize, QThread, QTimer, Qt
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,7 +36,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS, visibility_display
+from src.ai_targets import (
+    AI_TARGET_DEFINITIONS,
+    AI_TARGETS,
+    AI_VISIBILITY_OPTIONS,
+    visibility_display,
+)
 from src.ai_center_dialog import AiCenterDialog
 from src.app_paths import (
     APP_SETTINGS_PATH,
@@ -112,10 +117,17 @@ from src.theme import (
     save_theme,
     themed_icon,
 )
-from src.time_utils import format_display_datetime
+from src.time_utils import format_display_datetime, format_sidebar_clock
 
 
 class NoteTableDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        if index.column() == 1:
+            option.textElideMode = Qt.ElideNone
+        else:
+            option.textElideMode = Qt.ElideRight
+
     def paint(self, painter: QPainter, option, index) -> None:
         selected = bool(option.state & QStyle.State_Selected)
         if selected and index.column() == 0:
@@ -156,6 +168,19 @@ EDITOR_BOTTOM_MARGIN = 12
 TITLE_SEPARATOR_HEIGHT = 2
 THEME_SWATCH_SIZE = 14
 THEME_SWATCH_ACTIVE_SIZE = 16
+NOTE_DATE_HORIZONTAL_PADDING = 32
+
+
+def note_date_column_width(font_metrics: QFontMetrics) -> int:
+    return font_metrics.horizontalAdvance("00-00") + NOTE_DATE_HORIZONTAL_PADDING
+
+
+def compact_ai_target_summary(targets: list[str], limit: int = 3) -> str:
+    if not targets:
+        return "无"
+    if len(targets) <= limit:
+        return " / ".join(targets)
+    return f"{' / '.join(targets[:limit])} 等 {len(targets)} 项"
 
 
 def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
@@ -244,6 +269,9 @@ class MainWindow(QMainWindow):
         self.search_timer.setInterval(300)
         self.search_timer.setSingleShot(True)
         self.search_timer.timeout.connect(self.apply_search_filter)
+        self.sidebar_clock_timer = QTimer(self)
+        self.sidebar_clock_timer.setInterval(1000)
+        self.sidebar_clock_timer.timeout.connect(self.update_sidebar_clock)
         publish_state = load_publish_state(GALE_PUBLISH_STATE_PATH)
         self.gale_auto_scheduler = GaleAutoPublishScheduler(
             enabled=False,
@@ -262,6 +290,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("S-notes")
         self.resize(1360, 860)
         self.setCentralWidget(self._build_content())
+        self.update_sidebar_clock()
+        self.sidebar_clock_timer.start()
         self.reload_directory_cache()
         self.populate_filter_controls()
         self.refresh_directory_tree()
@@ -335,6 +365,8 @@ class MainWindow(QMainWindow):
         save_theme(theme_name)
         if hasattr(self, "body_edit"):
             self.body_edit.apply_theme()
+        if hasattr(self, "note_table"):
+            self.update_note_date_column_width()
         self._update_theme_button_states()
         self._refresh_theme_icons()
         if sidebar_width is not None:
@@ -384,6 +416,10 @@ class MainWindow(QMainWindow):
                     item.setIcon(pin_icon)
             self.note_table.viewport().update()
 
+    def update_sidebar_clock(self) -> None:
+        if hasattr(self, "sidebar_clock_label"):
+            self.sidebar_clock_label.setText(format_sidebar_clock())
+
     def eventFilter(self, watched, event) -> bool:
         if watched is getattr(self, "editor_root", None) and event.type() == QEvent.Resize:
             self._update_editor_margins(event.size().width())
@@ -419,11 +455,11 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(4)
-        title = QLabel("S-notes")
-        title.setObjectName("sidebarTitle")
-        title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        title.setFixedHeight(32)
-        header.addWidget(title)
+        self.sidebar_clock_label = QLabel()
+        self.sidebar_clock_label.setObjectName("sidebarClock")
+        self.sidebar_clock_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.sidebar_clock_label.setFixedHeight(32)
+        header.addWidget(self.sidebar_clock_label)
         header.addStretch(1)
 
         self.new_note_button = QPushButton()
@@ -463,6 +499,33 @@ class MainWindow(QMainWindow):
         self.receipt_inbox_button.clicked.connect(self.open_receipt_inbox)
         smart_row.addWidget(self.receipt_inbox_button, stretch=1)
         layout.addLayout(smart_row)
+
+        self.ai_actor_filter_widget = QWidget()
+        self.ai_actor_filter_widget.setObjectName("aiActorFilter")
+        ai_actor_filter_layout = QHBoxLayout(self.ai_actor_filter_widget)
+        ai_actor_filter_layout.setContentsMargins(0, 0, 0, 0)
+        ai_actor_filter_layout.setSpacing(6)
+        ai_actor_label = QLabel("AI 对象")
+        ai_actor_label.setObjectName("aiActorFilterLabel")
+        ai_actor_filter_layout.addWidget(ai_actor_label)
+        self.ai_actor_filter_combo = FloatingComboBox(popup_theme="dark")
+        self.ai_actor_filter_combo.setObjectName("aiActorFilterCombo")
+        self.ai_actor_filter_combo.setFixedHeight(28)
+        self.ai_actor_filter_combo.setMinimumWidth(0)
+        self.ai_actor_filter_combo.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        self.configure_combo_popup(self.ai_actor_filter_combo, 150)
+        self.ai_actor_filter_combo.addItem("全部", None)
+        for target in AI_TARGET_DEFINITIONS:
+            self.ai_actor_filter_combo.addItem(target.display_name, target.target_id)
+        self.ai_actor_filter_combo.currentIndexChanged.connect(
+            self.handle_ai_actor_filter_changed
+        )
+        ai_actor_filter_layout.addWidget(self.ai_actor_filter_combo, stretch=1)
+        layout.addWidget(self.ai_actor_filter_widget)
+        self.ai_actor_filter_widget.setVisible(False)
 
         filters = QGridLayout()
         filters.setContentsMargins(0, 0, 0, 0)
@@ -513,7 +576,7 @@ class MainWindow(QMainWindow):
         header = self.note_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.Fixed)
-        header.resizeSection(1, 64)
+        header.resizeSection(1, note_date_column_width(self.note_table.fontMetrics()))
         self.note_table.verticalHeader().setDefaultSectionSize(32)
         self.note_table.setItemDelegate(NoteTableDelegate(self.note_table))
         self.note_table.cellClicked.connect(self.handle_note_table_clicked)
@@ -992,6 +1055,7 @@ class MainWindow(QMainWindow):
         self.populate_note_table(notes, selected_note_id)
 
     def populate_note_table(self, notes: list[dict], selected_note_id: int | None = None) -> None:
+        self.update_note_date_column_width()
         notes = sorted(notes, key=lambda note: (bool(note.get("is_pinned")), note["updated_at"], note["id"]), reverse=True)
         self.note_table.blockSignals(True)
         self.note_table.setRowCount(len(notes))
@@ -1040,6 +1104,14 @@ class MainWindow(QMainWindow):
             self.note_table.scrollToItem(self.note_table.item(selected_row, 0))
         self.note_table.blockSignals(False)
         self.update_delete_button_state()
+
+    def update_note_date_column_width(self) -> None:
+        if not hasattr(self, "note_table"):
+            return
+        self.note_table.horizontalHeader().resizeSection(
+            1,
+            note_date_column_width(self.note_table.fontMetrics()),
+        )
 
     def handle_note_table_clicked(self, row: int, _column: int) -> None:
         item = self.note_table.item(row, 0)
@@ -1102,6 +1174,12 @@ class MainWindow(QMainWindow):
 
     def apply_search_filter(self) -> None:
         query = self.search_input.text().strip()
+        if (
+            self.current_sidebar_mode == "smart_view"
+            and self.current_filter_value == "ai"
+        ):
+            self.display_smart_view("ai")
+            return
         if not query:
             self.refresh_directory_tree(self.current_note["id"] if self.current_note else None)
             return
@@ -1142,7 +1220,20 @@ class MainWindow(QMainWindow):
         self.search_input.blockSignals(True)
         self.search_input.clear()
         self.search_input.blockSignals(False)
-        title, notes = get_smart_view_notes(view_name)
+        self.display_smart_view(view_name)
+
+    def display_smart_view(self, view_name: str) -> None:
+        actor_target_id = (
+            self.selected_ai_actor_id()
+            if view_name == "ai"
+            else None
+        )
+        query = self.search_input.text().strip() if view_name == "ai" else ""
+        title, notes = get_smart_view_notes(
+            view_name,
+            actor_target_id=actor_target_id,
+            query=query,
+        )
         self.display_flat_notes(
             f"智能视图：{title}",
             notes,
@@ -1150,6 +1241,17 @@ class MainWindow(QMainWindow):
             value=view_name,
             selected_note_id=self.current_note["id"] if self.current_note else None,
         )
+
+    def selected_ai_actor_id(self) -> str | None:
+        actor = self.ai_actor_filter_combo.currentData()
+        return str(actor) if actor else None
+
+    def handle_ai_actor_filter_changed(self, _index: int = 0) -> None:
+        if (
+            self.current_sidebar_mode == "smart_view"
+            and self.current_filter_value == "ai"
+        ):
+            self.display_smart_view("ai")
 
     def show_trash(self) -> None:
         if self.current_sidebar_mode != "trash":
@@ -1251,6 +1353,10 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.current_sidebar_mode = mode
         self.current_filter_value = value
+        if hasattr(self, "ai_actor_filter_widget"):
+            self.ai_actor_filter_widget.setVisible(
+                mode == "smart_view" and value == "ai"
+            )
         self.update_smart_tab_states()
 
     def update_smart_tab_states(self) -> None:
@@ -1731,8 +1837,12 @@ class MainWindow(QMainWindow):
             path_parts.append(sub_sub)
         tag_names = parse_tags(self.tags_input.text())
         tags = " ".join(f"#{tag}" for tag in tag_names) if tag_names else "无标签"
-        ai_text = f"AI: {self.ai_visibility_combo.currentText()}"
-        return f"{' / '.join(path_parts)} · {tags} · {ai_text}"
+        targets = compact_ai_target_summary(self.selected_ai_targets())
+        visibility = self.ai_visibility_combo.currentText()
+        return (
+            f"{' / '.join(path_parts)} · {tags} · "
+            f"AI对象：{targets} · AI可见性：{visibility}"
+        )
 
     def update_metadata_summary(self) -> None:
         if not hasattr(self, "metadata_summary_button"):
@@ -1863,6 +1973,7 @@ class MainWindow(QMainWindow):
         self.mark_note_dirty()
 
     def handle_ai_targets_changed(self, _state: int = 0) -> None:
+        self.update_metadata_summary()
         self.mark_note_dirty()
 
     def set_editor_enabled(self, enabled: bool, *, show_content: bool | None = None) -> None:
@@ -1969,7 +2080,7 @@ class MainWindow(QMainWindow):
         elif self.current_sidebar_mode == "tag":
             self.show_tag_results(self.current_filter_value)
         elif self.current_sidebar_mode == "smart_view":
-            self.show_smart_view(self.current_filter_value)
+            self.display_smart_view(self.current_filter_value)
         elif self.current_sidebar_mode == "trash":
             self.show_trash()
         else:
@@ -2331,8 +2442,10 @@ class MainWindow(QMainWindow):
         self.main_category_combo.clear()
         self.sub_category_combo.clear()
         self.sub_sub_category_combo.clear()
+        self.tags_input.clear()
         self.set_ai_visibility_control(AI_VISIBILITY_OPTIONS[0])
         self.set_ai_target_controls([])
+        self.update_metadata_summary()
         self.status_label.setText("未选择笔记")
         self.has_unsaved_changes = False
         self.autosave_retry_count = 0
@@ -2406,6 +2519,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.force_save_current_note(refresh_tree=False):
+            self.sidebar_clock_timer.stop()
             self._save_sidebar_width()
             self.settings.sync()
             event.accept()

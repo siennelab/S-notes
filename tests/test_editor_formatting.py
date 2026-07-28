@@ -60,7 +60,7 @@ class NotesEditorFormattingTest(unittest.TestCase):
                 self.assertEqual(char_format.fontWeight(), weight)
 
     def test_apply_font_size_sets_real_selected_text_pixel_size(self) -> None:
-        for pixel_size in (11, 15, 26):
+        for pixel_size in (11, 15, 20, 26):
             with self.subTest(pixel_size=pixel_size):
                 self.editor.setPlainText("sized text")
                 self._select_all()
@@ -73,11 +73,27 @@ class NotesEditorFormattingTest(unittest.TestCase):
 
                 char_format = self._char_format_at(0)
                 self._assert_pixel_size(char_format, pixel_size)
-                self.assertEqual(
-                    char_format.property(QTextFormat.FontPointSize),
-                    12.0,
+                self.assertFalse(
+                    char_format.hasProperty(QTextFormat.FontPointSize)
                 )
                 self.assertEqual(char_format.font().pointSizeF(), -1.0)
+
+    def test_font_size_changes_only_the_selected_text(self) -> None:
+        self.editor.setPlainText("before target after")
+        cursor = self.editor.textCursor()
+        cursor.setPosition(7)
+        cursor.setPosition(13, QTextCursor.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+
+        self.editor.apply_font_size(20)
+
+        before_format = self._char_format_at(0)
+        self.assertEqual(before_format.font().pixelSize(), 15)
+        self.assertFalse(before_format.hasProperty(QTextFormat.FontPixelSize))
+        self._assert_pixel_size(self._char_format_at(7), 20)
+        after_format = self._char_format_at(14)
+        self.assertEqual(after_format.font().pixelSize(), 15)
+        self.assertFalse(after_format.hasProperty(QTextFormat.FontPixelSize))
 
     def test_heading_without_selection_updates_block_and_future_input(self) -> None:
         self.editor.setPlainText("paragraph")

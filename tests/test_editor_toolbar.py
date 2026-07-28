@@ -11,7 +11,7 @@ from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from src.editor import NotesEditor
-from src.editor_toolbar import EditorToolbar
+from src.editor_toolbar import FONT_SIZE_OPTIONS, EditorToolbar
 
 
 class EditorToolbarFormatMenuTest(unittest.TestCase):
@@ -36,7 +36,7 @@ class EditorToolbarFormatMenuTest(unittest.TestCase):
         self.assertIsInstance(button, QToolButton)
         self.assertEqual(button.text(), "标题")
         self.assertEqual(button.objectName(), "toolbarButton")
-        self.assertEqual(button.toolTip(), "标题和字号")
+        self.assertEqual(button.toolTip(), "标题层级")
         self.assertEqual((button.width(), button.height()), (37, 29))
         self.assertEqual(button.toolButtonStyle(), Qt.ToolButtonTextOnly)
         self.assertEqual(button.popupMode(), QToolButton.InstantPopup)
@@ -55,7 +55,25 @@ class EditorToolbarFormatMenuTest(unittest.TestCase):
         self.assertEqual(shown.count(), 1)
         self.assertEqual(
             [action.text() for action in menu.actions() if not action.isSeparator()],
-            ["正文", "标题 1", "标题 2", "小字", "正文大小", "大字"],
+            ["正文", "标题 1", "标题 2"],
+        )
+
+    def test_font_size_menu_has_the_complete_ordered_pixel_options(self) -> None:
+        menu = self.toolbar.font_size_button.menu()
+        self.assertIsNotNone(menu)
+        assert menu is not None
+        self.assertEqual(
+            [action.text() for action in menu.actions()],
+            [label for label, _pixel_size in FONT_SIZE_OPTIONS],
+        )
+        self.assertEqual(
+            FONT_SIZE_OPTIONS,
+            (
+                ("小字", 11),
+                ("正文大小", 15),
+                ("中大字", 20),
+                ("大字", 26),
+            ),
         )
 
     def test_heading_one_action_applies_real_text_format(self) -> None:
