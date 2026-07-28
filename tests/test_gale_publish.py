@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import inspect
 import io
 import json
@@ -27,6 +28,7 @@ from src.services.gale_publish_service import (
     RemoteActivationResult,
     activate_remote_mirror,
     load_publish_state,
+    operator_rollback_remote_mirror,
     publish_gale_mirror,
     sha256_file,
     validate_activated_mirror,
@@ -155,6 +157,40 @@ class GalePublishTest(unittest.TestCase):
             else 3
         )
         return digest, note_count, candidate
+
+    def rollback_layout(
+        self,
+    ) -> tuple[RemoteActivationConfig, str, str]:
+        config = self.remote_layout(current_source=self.mirror_v2)
+        shutil.copy2(self.mirror_v1, config.previous_mirror)
+        os.chmod(config.previous_mirror, 0o600)
+        return (
+            config,
+            sha256_file(config.current_mirror),
+            sha256_file(config.previous_mirror),
+        )
+
+    def run_operator_rollback(
+        self,
+        config: RemoteActivationConfig,
+        current_hash: str,
+        previous_hash: str,
+        **overrides,
+    ):
+        options = {
+            "service_is_active": lambda _name: True,
+            "stop_service": lambda _name: True,
+            "start_service": lambda _name: True,
+            "service_probe": self.probe,
+            "event_logger": lambda *_args: None,
+        }
+        options.update(overrides)
+        return operator_rollback_remote_mirror(
+            config,
+            expected_current_sha256=current_hash,
+            expected_previous_sha256=previous_hash,
+            **options,
+        )
 
     @staticmethod
     def probe(
@@ -477,6 +513,337 @@ class GalePublishTest(unittest.TestCase):
 
         self.assertEqual(first_result.status, "success")
         self.assertEqual(second_result.reason, "publisher_busy")
+
+    def test_operator_rollback_swaps_and_second_run_restores_layout(self) -> None:
+        config, real_hash, fictional_hash = self.rollback_layout()
+        transitions: list[str] = []
+
+        first = self.run_operator_rollback(
+            config,
+            real_hash,
+            fictional_hash,
+            stop_service=lambda _name: transitions.append("stop") or True,
+            start_service=lambda _name: transitions.append("start") or True,
+            service_probe=lambda *args: (
+                transitions.append("probe") or self.probe(*args)
+            ),
+        )
+
+        self.assertEqual(first.status, "success")
+        self.assertEqual(sha256_file(config.current_mirror), fictional_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), real_hash)
+        self.assertEqual(transitions, ["stop", "start", "probe"])
+        self.assertEqual(
+            stat.S_IMODE(config.current_mirror.stat().st_mode),
+            0o600,
+        )
+        self.assertEqual(
+            stat.S_IMODE(config.previous_mirror.stat().st_mode),
+            0o600,
+        )
+        self.assertFalse(
+            list(config.current_dir.glob(".gale-mirror.operator-swap.*"))
+        )
+
+        second = self.run_operator_rollback(
+            config,
+            fictional_hash,
+            real_hash,
+        )
+
+        self.assertEqual(second.status, "success")
+        self.assertEqual(sha256_file(config.current_mirror), real_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), fictional_hash)
+        self.assertFalse(
+            list(config.current_dir.glob(".gale-mirror.operator-swap.*"))
+        )
+
+    def test_operator_rollback_rejects_each_expected_hash_mismatch(self) -> None:
+        for mismatch in ("current", "previous"):
+            with self.subTest(mismatch=mismatch):
+                config, current_hash, previous_hash = self.rollback_layout()
+                result = self.run_operator_rollback(
+                    config,
+                    "0" * 64 if mismatch == "current" else current_hash,
+                    "f" * 64 if mismatch == "previous" else previous_hash,
+                    stop_service=lambda _name: self.fail("stop called"),
+                )
+
+                self.assertEqual(
+                    result.reason,
+                    f"{mismatch}_hash_mismatch",
+                )
+                self.assertEqual(
+                    sha256_file(config.current_mirror),
+                    current_hash,
+                )
+                self.assertEqual(
+                    sha256_file(config.previous_mirror),
+                    previous_hash,
+                )
+
+    def test_operator_rollback_rejects_missing_previous(self) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        config.previous_mirror.unlink()
+
+        result = self.run_operator_rollback(
+            config,
+            current_hash,
+            previous_hash,
+            stop_service=lambda _name: self.fail("stop called"),
+        )
+
+        self.assertEqual(result.reason, "previous_missing")
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+
+    def test_operator_rollback_rejects_invalid_mirror_before_stop(self) -> None:
+        for target in ("current", "previous"):
+            with self.subTest(target=target):
+                config, current_hash, previous_hash = self.rollback_layout()
+                path = (
+                    config.current_mirror
+                    if target == "current"
+                    else config.previous_mirror
+                )
+                path.write_bytes(b"fictional corrupt mirror")
+                os.chmod(path, 0o600)
+                corrupt_hash = sha256_file(path)
+
+                result = self.run_operator_rollback(
+                    config,
+                    corrupt_hash if target == "current" else current_hash,
+                    (
+                        corrupt_hash
+                        if target == "previous"
+                        else previous_hash
+                    ),
+                    stop_service=lambda _name: self.fail("stop called"),
+                )
+
+                self.assertEqual(result.reason, f"{target}_verify_failed")
+
+    def test_operator_rollback_requires_empty_incoming_without_cleanup(self) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        unexpected = config.incoming_dir / "do-not-delete.db"
+        unexpected.write_bytes(b"fictional incoming blocker")
+
+        result = self.run_operator_rollback(
+            config,
+            current_hash,
+            previous_hash,
+            stop_service=lambda _name: self.fail("stop called"),
+        )
+
+        self.assertEqual(result.reason, "incoming_not_empty")
+        self.assertTrue(unexpected.is_file())
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), previous_hash)
+
+    def test_operator_rollback_rejects_unsafe_mode_or_sqlite_sidecar(
+        self,
+    ) -> None:
+        for condition in ("mode", "sidecar"):
+            with self.subTest(condition=condition):
+                shutil.rmtree(self.root / "remote", ignore_errors=True)
+                config, current_hash, previous_hash = self.rollback_layout()
+                if condition == "mode":
+                    os.chmod(config.previous_mirror, 0o640)
+                    expected_reason = "previous_unsafe"
+                else:
+                    Path(f"{config.current_mirror}-wal").touch()
+                    expected_reason = "current_sidecar_present"
+
+                result = self.run_operator_rollback(
+                    config,
+                    current_hash,
+                    previous_hash,
+                    stop_service=lambda _name: self.fail("stop called"),
+                )
+
+                self.assertEqual(result.reason, expected_reason)
+                self.assertEqual(
+                    sha256_file(config.current_mirror),
+                    current_hash,
+                )
+                self.assertEqual(
+                    sha256_file(config.previous_mirror),
+                    previous_hash,
+                )
+
+    def test_operator_rollback_rejects_current_or_previous_symlink(self) -> None:
+        for target in ("current", "previous"):
+            with self.subTest(target=target):
+                shutil.rmtree(self.root / "remote", ignore_errors=True)
+                config, current_hash, previous_hash = self.rollback_layout()
+                path = (
+                    config.current_mirror
+                    if target == "current"
+                    else config.previous_mirror
+                )
+                replacement = path.with_name(f"{target}-target.db")
+                path.replace(replacement)
+                path.symlink_to(replacement)
+
+                result = self.run_operator_rollback(
+                    config,
+                    current_hash,
+                    previous_hash,
+                    stop_service=lambda _name: self.fail("stop called"),
+                )
+
+                self.assertEqual(result.reason, f"{target}_unsafe")
+                self.assertTrue(path.is_symlink())
+
+    def test_operator_rollback_health_failure_restores_original_layout(
+        self,
+    ) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        probe_results = iter((False, True))
+        stop_calls = 0
+
+        def stop_service(_name: str) -> bool:
+            nonlocal stop_calls
+            stop_calls += 1
+            return True
+
+        result = self.run_operator_rollback(
+            config,
+            current_hash,
+            previous_hash,
+            stop_service=stop_service,
+            service_probe=lambda *_args: next(probe_results),
+        )
+
+        self.assertEqual(result.reason, "health_check_failed_restored")
+        self.assertTrue(result.auto_restored)
+        self.assertEqual(stop_calls, 2)
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), previous_hash)
+        self.assertFalse(
+            list(config.current_dir.glob(".gale-mirror.operator-swap.*"))
+        )
+
+    def test_operator_rollback_swap_exception_restores_original_layout(
+        self,
+    ) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        real_replace = os.replace
+        replace_calls = 0
+
+        def fail_second_replace_once(source: Path, destination: Path) -> None:
+            nonlocal replace_calls
+            replace_calls += 1
+            if replace_calls == 2:
+                raise OSError("fictional swap failure")
+            real_replace(source, destination)
+
+        with patch(
+            "src.services.gale_publish_service.os.replace",
+            side_effect=fail_second_replace_once,
+        ):
+            result = self.run_operator_rollback(
+                config,
+                current_hash,
+                previous_hash,
+            )
+
+        self.assertEqual(result.reason, "swap_failed_restored")
+        self.assertTrue(result.auto_restored)
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), previous_hash)
+        self.assertFalse(
+            list(config.current_dir.glob(".gale-mirror.operator-swap.*"))
+        )
+
+    def test_operator_rollback_rejects_shared_lock_conflict(self) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        with config.lock_path.open("a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_operator_rollback(
+                config,
+                current_hash,
+                previous_hash,
+                service_is_active=lambda _name: self.fail(
+                    "service state checked"
+                ),
+            )
+
+        self.assertEqual(result.reason, "publisher_busy")
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), previous_hash)
+
+    def test_operator_rollback_requires_active_service_before_stop(self) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+
+        result = self.run_operator_rollback(
+            config,
+            current_hash,
+            previous_hash,
+            service_is_active=lambda _name: False,
+            stop_service=lambda _name: self.fail("stop called"),
+        )
+
+        self.assertEqual(result.reason, "service_not_active")
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), previous_hash)
+
+    def test_operator_rollback_stop_failure_keeps_original_layout(self) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        recovery_events: list[str] = []
+
+        result = self.run_operator_rollback(
+            config,
+            current_hash,
+            previous_hash,
+            stop_service=lambda _name: False,
+            start_service=lambda _name: recovery_events.append("start") or True,
+            service_probe=lambda *args: (
+                recovery_events.append("probe") or self.probe(*args)
+            ),
+        )
+
+        self.assertEqual(result.reason, "service_stop_failed")
+        self.assertEqual(recovery_events, ["start", "probe"])
+        self.assertEqual(sha256_file(config.current_mirror), current_hash)
+        self.assertEqual(sha256_file(config.previous_mirror), previous_hash)
+
+    def test_operator_rollback_log_fields_exclude_note_content(self) -> None:
+        config, current_hash, previous_hash = self.rollback_layout()
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger = logging.getLogger("snotes_gale_publish")
+        previous_level = logger.level
+        logger.setLevel(logging.INFO)
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        self.addCleanup(logger.setLevel, previous_level)
+
+        with patch(
+            "src.services.gale_publish_service.subprocess.run"
+        ) as system_logger:
+            result = operator_rollback_remote_mirror(
+                config,
+                expected_current_sha256=current_hash,
+                expected_previous_sha256=previous_hash,
+                service_is_active=lambda _name: True,
+                stop_service=lambda _name: True,
+                start_service=lambda _name: True,
+                service_probe=self.probe,
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(system_logger.call_count, 1)
+        combined = stream.getvalue() + repr(system_logger.call_args)
+        for private_text in (
+            "FICTIONAL_PACKAGE_C_NEW",
+            "FICTIONAL_PACKAGE_C_SEARCH",
+            "FICTIONAL_PACKAGE_C_TAG",
+            "FICTIONAL_PACKAGE_C_DIRECTORY",
+            "token",
+            "client_secret",
+            "password",
+        ):
+            self.assertNotIn(private_text, combined)
 
     def test_auto_publish_quiet_fifteen_minutes(self) -> None:
         digest = sha256_file(self.mirror_v2)

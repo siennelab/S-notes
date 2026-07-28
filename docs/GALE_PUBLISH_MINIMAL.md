@@ -86,9 +86,36 @@ Activation performs:
 5. automatic restoration and restart of the previous mirror if any post-switch
    check fails.
 
-Events contain only UTC time, SHA-256, note count, status, and a short reason
-code. Note titles, bodies, directories, tags, OAuth material, SSH details, and
-environment values are not logged.
+## Operator rollback
+
+The installed activation wrapper also exposes one server-local rollback
+subcommand:
+
+```bash
+sudo /usr/local/sbin/snotes-gale-activate rollback \
+  --expected-current-sha256 <current-sha256> \
+  --expected-previous-sha256 <previous-sha256>
+```
+
+Both expected hashes are mandatory. There is no ignore-hash option. Under the
+same non-blocking activation lock, the command requires an empty `incoming`
+directory, verifies both regular non-symlink mirrors and their `0600` modes,
+owners, hashes, SQLite/FTS structures, and same-filesystem layout, then stops
+only the 8877 service and atomically exchanges `current` and `previous` through
+a private temporary name.
+
+The command starts and probes 8877 against the new `current`. A swap error or
+post-swap health failure stops 8877 again, restores the original two-file
+layout, and restores the service. It never uploads, copies, deletes, or queries
+note content through a public or operator-supplied query. The fixed local
+service probe remains the existing activation probe. The command does not
+change 8767, Caddy, Auth0, DNS, OCI, or systemd enablement.
+
+Publish events contain only UTC time, SHA-256, note count, status, and a short
+reason code. Operator rollback events contain only an operation ID, status,
+both SHA-256 values and note counts, a fixed reason code, and duration. Note
+titles, bodies, directories, tags, OAuth material, SSH details, environment
+values, and query terms are not logged.
 
 ## Dependencies and boundaries
 

@@ -5,6 +5,12 @@ umask 077
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
+if [ "${1-}" = "rollback" ]; then
+    shift
+    cd /opt/snotes-gale-mcp-oidc-staging
+    exec .venv/bin/python -m src.gale_publish remote-rollback "$@"
+fi
+
 if [ "$#" -ne 2 ]; then
     printf '%s\n' 'GALE_ACTIVATE_STATUS=FAILED' 'REASON=invalid_arguments' >&2
     exit 20

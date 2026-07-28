@@ -12,6 +12,7 @@ import stat
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Callable, Protocol
 from src.services.gale_mirror_service import (
     GALE_ACTOR_ID,
     GaleMirrorError,
+    GaleMirrorVerification,
     verify_gale_mirror,
 )
 from src.services.gale_remote_service import (
@@ -129,6 +131,17 @@ class RemoteActivationResult:
     note_count: int
     rolled_back: bool = False
     previous_preserved: bool = True
+
+
+@dataclass(frozen=True)
+class OperatorRollbackResult:
+    status: str
+    reason: str
+    current_sha256: str
+    previous_sha256: str
+    current_note_count: int
+    previous_note_count: int
+    auto_restored: bool = False
 
 
 class PublishTransport(Protocol):
@@ -651,8 +664,11 @@ def activate_remote_mirror(
             )
 
         try:
-            os.replace(config.previous_mirror, config.current_mirror)
-        except OSError:
+            _atomic_swap_current_previous(
+                config,
+                operation_id=f"auto-{uuid.uuid4().hex}",
+            )
+        except GalePublishError:
             record_event(
                 "failed",
                 expected_sha256,
@@ -705,6 +721,200 @@ def activate_remote_mirror(
             rolled_back=True,
             previous_preserved=False,
         )
+
+
+def operator_rollback_remote_mirror(
+    config: RemoteActivationConfig,
+    *,
+    expected_current_sha256: str,
+    expected_previous_sha256: str,
+    service_is_active: Callable[[str], bool] | None = None,
+    stop_service: Callable[[str], bool] | None = None,
+    start_service: Callable[[str], bool] | None = None,
+    service_probe: Callable[[Path, Path, str, int], bool] | None = None,
+    event_logger: (
+        Callable[[str, str, str, str, int, int, str, int], None] | None
+    ) = None,
+) -> OperatorRollbackResult:
+    """Atomically exchange validated current/previous mirrors under the publish lock."""
+    _validate_sha256(expected_current_sha256)
+    _validate_sha256(expected_previous_sha256)
+    active = service_is_active or _system_service_is_active
+    stop = stop_service or _stop_system_service
+    start = start_service or _start_system_service
+    probe = service_probe or _probe_activated_service
+    record_event = event_logger or _log_operator_rollback_event
+    operation_id = uuid.uuid4().hex
+    started_at = time.monotonic()
+
+    config.lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    with config.lock_path.open("a+b") as lock_file:
+        os.chmod(config.lock_path, 0o600)
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            result = _operator_rollback_failure(
+                "publisher_busy",
+                expected_current_sha256,
+                expected_previous_sha256,
+            )
+            _record_operator_rollback_event(
+                record_event,
+                operation_id,
+                result,
+                started_at,
+            )
+            return result
+
+        try:
+            current_verification, previous_verification = (
+                _validate_operator_rollback_preconditions(
+                    config,
+                    expected_current_sha256=expected_current_sha256,
+                    expected_previous_sha256=expected_previous_sha256,
+                )
+            )
+            if not active(config.service_name):
+                raise GalePublishError("service_not_active")
+        except (GaleMirrorError, GalePublishError, OSError) as error:
+            reason = (
+                error.code
+                if isinstance(error, GalePublishError)
+                else "remote_validation_failed"
+            )
+            result = _operator_rollback_failure(
+                reason,
+                expected_current_sha256,
+                expected_previous_sha256,
+            )
+            _record_operator_rollback_event(
+                record_event,
+                operation_id,
+                result,
+                started_at,
+            )
+            return result
+
+        if not stop(config.service_name):
+            _attempt_restart_and_probe(
+                start,
+                probe,
+                config.service_name,
+                config.current_mirror,
+                config.current_dir,
+                expected_current_sha256,
+                current_verification.note_count,
+            )
+            result = _operator_rollback_failure(
+                "service_stop_failed",
+                expected_current_sha256,
+                expected_previous_sha256,
+                current_note_count=current_verification.note_count,
+                previous_note_count=previous_verification.note_count,
+            )
+            _record_operator_rollback_event(
+                record_event,
+                operation_id,
+                result,
+                started_at,
+            )
+            return result
+
+        try:
+            _atomic_swap_current_previous(config, operation_id=operation_id)
+            _verify_exact_mirror(
+                config.current_mirror,
+                expected_sha256=expected_previous_sha256,
+                expected_note_count=previous_verification.note_count,
+            )
+            _verify_exact_mirror(
+                config.previous_mirror,
+                expected_sha256=expected_current_sha256,
+                expected_note_count=current_verification.note_count,
+            )
+        except (GaleMirrorError, GalePublishError, OSError) as error:
+            restored = _restore_operator_layout_and_service(
+                config,
+                operation_id=operation_id,
+                expected_current_sha256=expected_current_sha256,
+                expected_current_note_count=current_verification.note_count,
+                stop_service=stop,
+                start_service=start,
+                service_probe=probe,
+            )
+            reason = "swap_failed_restored" if restored else "rollback_failed"
+            if isinstance(error, GalePublishError) and not error.previous_preserved:
+                reason = "rollback_failed"
+            result = _operator_rollback_failure(
+                reason,
+                expected_current_sha256,
+                expected_previous_sha256,
+                current_note_count=current_verification.note_count,
+                previous_note_count=previous_verification.note_count,
+                auto_restored=restored,
+            )
+            _record_operator_rollback_event(
+                record_event,
+                operation_id,
+                result,
+                started_at,
+            )
+            return result
+
+        healthy = _attempt_restart_and_probe(
+            start,
+            probe,
+            config.service_name,
+            config.current_mirror,
+            config.current_dir,
+            expected_previous_sha256,
+            previous_verification.note_count,
+        )
+        if not healthy:
+            restored = _restore_operator_layout_and_service(
+                config,
+                operation_id=operation_id,
+                expected_current_sha256=expected_current_sha256,
+                expected_current_note_count=current_verification.note_count,
+                stop_service=stop,
+                start_service=start,
+                service_probe=probe,
+            )
+            result = _operator_rollback_failure(
+                (
+                    "health_check_failed_restored"
+                    if restored
+                    else "rollback_failed"
+                ),
+                expected_current_sha256,
+                expected_previous_sha256,
+                current_note_count=current_verification.note_count,
+                previous_note_count=previous_verification.note_count,
+                auto_restored=restored,
+            )
+            _record_operator_rollback_event(
+                record_event,
+                operation_id,
+                result,
+                started_at,
+            )
+            return result
+
+        result = OperatorRollbackResult(
+            status="success",
+            reason="none",
+            current_sha256=expected_previous_sha256,
+            previous_sha256=expected_current_sha256,
+            current_note_count=previous_verification.note_count,
+            previous_note_count=current_verification.note_count,
+        )
+        _record_operator_rollback_event(
+            record_event,
+            operation_id,
+            result,
+            started_at,
+        )
+        return result
 
 
 def validate_activated_mirror(
@@ -777,6 +987,229 @@ def _validate_remote_layout(
         raise GalePublishError("current_missing")
     if config.previous_mirror.is_symlink():
         raise GalePublishError("previous_unsafe")
+
+
+def _validate_operator_rollback_preconditions(
+    config: RemoteActivationConfig,
+    *,
+    expected_current_sha256: str,
+    expected_previous_sha256: str,
+) -> tuple[GaleMirrorVerification, GaleMirrorVerification]:
+    for directory in (
+        config.incoming_dir,
+        config.current_dir,
+        config.previous_dir,
+    ):
+        if not directory.is_dir() or directory.is_symlink():
+            raise GalePublishError("remote_layout_invalid")
+    if (
+        config.current_mirror.parent != config.current_dir
+        or config.previous_mirror.parent != config.previous_dir
+        or config.current_mirror.name != "gale-mirror.db"
+        or config.previous_mirror.name != "gale-mirror.db"
+    ):
+        raise GalePublishError("remote_layout_invalid")
+    _require_safe_operator_mirror(
+        config.current_mirror,
+        missing_reason="current_missing",
+        unsafe_reason="current_unsafe",
+        config=config,
+    )
+    _require_safe_operator_mirror(
+        config.previous_mirror,
+        missing_reason="previous_missing",
+        unsafe_reason="previous_unsafe",
+        config=config,
+    )
+    if any(config.incoming_dir.iterdir()):
+        raise GalePublishError("incoming_not_empty")
+    if not (
+        config.current_dir.stat().st_dev
+        == config.previous_dir.stat().st_dev
+        == config.current_mirror.stat().st_dev
+        == config.previous_mirror.stat().st_dev
+    ):
+        raise GalePublishError("mirror_filesystem_mismatch")
+    if _sqlite_sidecars_present(config.current_mirror):
+        raise GalePublishError("current_sidecar_present")
+    if _sqlite_sidecars_present(config.previous_mirror):
+        raise GalePublishError("previous_sidecar_present")
+    if sha256_file(config.current_mirror) != expected_current_sha256:
+        raise GalePublishError("current_hash_mismatch")
+    if sha256_file(config.previous_mirror) != expected_previous_sha256:
+        raise GalePublishError("previous_hash_mismatch")
+    try:
+        current_verification = verify_gale_mirror(
+            config.current_mirror,
+            expected_actor=GALE_ACTOR_ID,
+        )
+    except GaleMirrorError as error:
+        raise GalePublishError("current_verify_failed") from error
+    try:
+        previous_verification = verify_gale_mirror(
+            config.previous_mirror,
+            expected_actor=GALE_ACTOR_ID,
+        )
+    except GaleMirrorError as error:
+        raise GalePublishError("previous_verify_failed") from error
+    return current_verification, previous_verification
+
+
+def _require_safe_operator_mirror(
+    path: Path,
+    *,
+    missing_reason: str,
+    unsafe_reason: str,
+    config: RemoteActivationConfig,
+) -> None:
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError as error:
+        raise GalePublishError(missing_reason) from error
+    if not stat.S_ISREG(file_stat.st_mode) or path.is_symlink():
+        raise GalePublishError(unsafe_reason)
+    if (
+        file_stat.st_uid != config.owner_uid
+        or file_stat.st_gid != config.owner_gid
+        or stat.S_IMODE(file_stat.st_mode) != 0o600
+    ):
+        raise GalePublishError(unsafe_reason)
+
+
+def _sqlite_sidecars_present(path: Path) -> bool:
+    return any(
+        Path(f"{path}{suffix}").exists()
+        for suffix in ("-wal", "-shm", "-journal")
+    )
+
+
+def _atomic_swap_current_previous(
+    config: RemoteActivationConfig,
+    *,
+    operation_id: str,
+) -> None:
+    safe_operation_id = re.sub(r"[^a-z0-9-]", "", operation_id.lower())[:64]
+    if not safe_operation_id:
+        raise GalePublishError("invalid_operation_id")
+    placeholder = (
+        config.current_dir
+        / f".gale-mirror.operator-swap.{safe_operation_id}.tmp"
+    )
+    if placeholder.exists() or placeholder.is_symlink():
+        raise GalePublishError("swap_placeholder_unsafe")
+
+    stage = 0
+    try:
+        os.replace(config.current_mirror, placeholder)
+        stage = 1
+        os.replace(config.previous_mirror, config.current_mirror)
+        stage = 2
+        os.replace(placeholder, config.previous_mirror)
+        stage = 3
+        os.chmod(config.current_mirror, 0o600)
+        os.chmod(config.previous_mirror, 0o600)
+    except OSError as error:
+        try:
+            if stage == 1:
+                os.replace(placeholder, config.current_mirror)
+            elif stage == 2:
+                os.replace(config.current_mirror, config.previous_mirror)
+                os.replace(placeholder, config.current_mirror)
+        except OSError as restore_error:
+            raise GalePublishError(
+                "rollback_failed",
+                previous_preserved=False,
+            ) from restore_error
+        raise GalePublishError("swap_failed_restored") from error
+    finally:
+        if stage == 3 and placeholder.exists():
+            raise GalePublishError(
+                "swap_placeholder_retained",
+                previous_preserved=False,
+            )
+
+
+def _restore_operator_layout_and_service(
+    config: RemoteActivationConfig,
+    *,
+    operation_id: str,
+    expected_current_sha256: str,
+    expected_current_note_count: int,
+    stop_service: Callable[[str], bool],
+    start_service: Callable[[str], bool],
+    service_probe: Callable[[Path, Path, str, int], bool],
+) -> bool:
+    current_hash = ""
+    try:
+        current_hash = sha256_file(config.current_mirror)
+    except OSError:
+        pass
+    if current_hash != expected_current_sha256:
+        if not stop_service(config.service_name):
+            return False
+        try:
+            _atomic_swap_current_previous(
+                config,
+                operation_id=f"restore-{operation_id}",
+            )
+        except GalePublishError:
+            return False
+    try:
+        _verify_exact_mirror(
+            config.current_mirror,
+            expected_sha256=expected_current_sha256,
+            expected_note_count=expected_current_note_count,
+        )
+    except (GaleMirrorError, GalePublishError, OSError):
+        return False
+    return _attempt_restart_and_probe(
+        start_service,
+        service_probe,
+        config.service_name,
+        config.current_mirror,
+        config.current_dir,
+        expected_current_sha256,
+        expected_current_note_count,
+    )
+
+
+def _operator_rollback_failure(
+    reason: str,
+    current_sha256: str,
+    previous_sha256: str,
+    *,
+    current_note_count: int = 0,
+    previous_note_count: int = 0,
+    auto_restored: bool = False,
+) -> OperatorRollbackResult:
+    return OperatorRollbackResult(
+        status="failed",
+        reason=_safe_reason_text(reason),
+        current_sha256=current_sha256,
+        previous_sha256=previous_sha256,
+        current_note_count=int(current_note_count),
+        previous_note_count=int(previous_note_count),
+        auto_restored=auto_restored,
+    )
+
+
+def _record_operator_rollback_event(
+    event_logger: Callable[[str, str, str, str, int, int, str, int], None],
+    operation_id: str,
+    result: OperatorRollbackResult,
+    started_at: float,
+) -> None:
+    duration_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    event_logger(
+        operation_id,
+        result.status,
+        result.current_sha256,
+        result.previous_sha256,
+        result.current_note_count,
+        result.previous_note_count,
+        result.reason,
+        duration_ms,
+    )
 
 
 def _verify_exact_mirror(
@@ -882,12 +1315,46 @@ def _attempt_restart_and_probe(
 
 
 def _restart_system_service(service_name: str) -> bool:
+    return _run_systemctl_action("restart", service_name)
+
+
+def _start_system_service(service_name: str) -> bool:
+    return _run_systemctl_action("start", service_name)
+
+
+def _stop_system_service(service_name: str) -> bool:
+    return _run_systemctl_action("stop", service_name)
+
+
+def _system_service_is_active(service_name: str) -> bool:
     if service_name != REMOTE_SERVICE_NAME:
         return False
     try:
         return (
             subprocess.run(
-                ["/usr/bin/systemctl", "restart", service_name],
+                ["/usr/bin/systemctl", "is-active", "--quiet", service_name],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=30,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _run_systemctl_action(action: str, service_name: str) -> bool:
+    if (
+        service_name != REMOTE_SERVICE_NAME
+        or action not in {"start", "stop", "restart"}
+    ):
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["/usr/bin/systemctl", action, service_name],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -998,6 +1465,36 @@ def _log_remote_event(
         f"note_count={int(note_count)} status={_safe_reason_text(status)} "
         f"reason={_safe_reason_text(reason)}"
     )
+    subprocess.run(
+        ["/usr/bin/logger", "-t", "snotes-gale-publish", safe_message],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _log_operator_rollback_event(
+    operation_id: str,
+    status: str,
+    current_sha256: str,
+    previous_sha256: str,
+    current_note_count: int,
+    previous_note_count: int,
+    reason: str,
+    duration_ms: int,
+) -> None:
+    safe_message = (
+        f"operation_id={_safe_state_text(operation_id)} "
+        f"status={_safe_reason_text(status)} "
+        f"current_sha256={_safe_hash_text(current_sha256)} "
+        f"previous_sha256={_safe_hash_text(previous_sha256)} "
+        f"current_note_count={int(current_note_count)} "
+        f"previous_note_count={int(previous_note_count)} "
+        f"reason={_safe_reason_text(reason)} "
+        f"duration_ms={max(0, int(duration_ms))}"
+    )
+    LOGGER.info("operator_rollback_event %s", safe_message)
     subprocess.run(
         ["/usr/bin/logger", "-t", "snotes-gale-publish", safe_message],
         stdin=subprocess.DEVNULL,

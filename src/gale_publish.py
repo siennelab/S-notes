@@ -11,6 +11,7 @@ from src.services.gale_publish_service import (
     GalePublishError,
     activate_remote_mirror,
     load_publish_state,
+    operator_rollback_remote_mirror,
     production_remote_activation_config,
     publish_gale_mirror,
 )
@@ -68,6 +69,27 @@ def main(argv: list[str] | None = None) -> int:
                 "remote_privilege_required",
                 previous_preserved=False,
             )
+        if args.command == "remote-rollback":
+            rollback = operator_rollback_remote_mirror(
+                production_remote_activation_config(),
+                expected_current_sha256=args.expected_current_sha256,
+                expected_previous_sha256=args.expected_previous_sha256,
+            )
+            _print_fields(
+                {
+                    "GALE_ROLLBACK_STATUS": rollback.status.upper(),
+                    "REASON": rollback.reason,
+                    "CURRENT_SHA256": rollback.current_sha256,
+                    "CURRENT_NOTE_COUNT": rollback.current_note_count,
+                    "PREVIOUS_SHA256": rollback.previous_sha256,
+                    "PREVIOUS_NOTE_COUNT": rollback.previous_note_count,
+                    "AUTO_RESTORED": _yes_no(rollback.auto_restored),
+                }
+            )
+            return _operator_rollback_exit_code(
+                rollback.reason,
+                rollback.status,
+            )
         activation = activate_remote_mirror(
             production_remote_activation_config(),
             expected_sha256=args.expected_sha256,
@@ -87,10 +109,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _activation_exit_code(activation.reason, activation.status)
     except GalePublishError as error:
-        _print_failure(error.code, error.previous_preserved)
+        if args.command == "remote-rollback":
+            _print_operator_rollback_failure(error.code)
+        else:
+            _print_failure(error.code, error.previous_preserved)
         return 2
     except Exception:
-        _print_failure("unexpected_failure", False)
+        if args.command == "remote-rollback":
+            _print_operator_rollback_failure("unexpected_failure")
+        else:
+            _print_failure("unexpected_failure", False)
         return 2
 
 
@@ -132,6 +160,18 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         type=int,
     )
+    rollback_parser = subparsers.add_parser(
+        "remote-rollback",
+        help=argparse.SUPPRESS,
+    )
+    rollback_parser.add_argument(
+        "--expected-current-sha256",
+        required=True,
+    )
+    rollback_parser.add_argument(
+        "--expected-previous-sha256",
+        required=True,
+    )
     return parser
 
 
@@ -151,12 +191,38 @@ def _activation_exit_code(reason: str, status: str) -> int:
     return 20
 
 
+def _operator_rollback_exit_code(reason: str, status: str) -> int:
+    if status == "success":
+        return 0
+    if reason == "publisher_busy":
+        return 10
+    if reason in {
+        "health_check_failed_restored",
+        "service_stop_failed",
+        "swap_failed_restored",
+    }:
+        return 30
+    if reason == "rollback_failed":
+        return 31
+    return 20
+
+
 def _print_failure(reason: str, previous_preserved: bool) -> None:
     _print_fields(
         {
             "GALE_PUBLISH_STATUS": "FAILED",
             "REASON": reason,
             "PREVIOUS_PRESERVED": _yes_no(previous_preserved),
+        },
+        stream=sys.stderr,
+    )
+
+
+def _print_operator_rollback_failure(reason: str) -> None:
+    _print_fields(
+        {
+            "GALE_ROLLBACK_STATUS": "FAILED",
+            "REASON": reason,
         },
         stream=sys.stderr,
     )
