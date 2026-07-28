@@ -169,10 +169,15 @@ TITLE_SEPARATOR_HEIGHT = 2
 THEME_SWATCH_SIZE = 14
 THEME_SWATCH_ACTIVE_SIZE = 16
 NOTE_DATE_HORIZONTAL_PADDING = 32
+SIDEBAR_CLOCK_WIDEST_TIME = "88:88:88"
 
 
 def note_date_column_width(font_metrics: QFontMetrics) -> int:
     return font_metrics.horizontalAdvance("00-00") + NOTE_DATE_HORIZONTAL_PADDING
+
+
+def sidebar_clock_time_width(font_metrics: QFontMetrics) -> int:
+    return font_metrics.horizontalAdvance(SIDEBAR_CLOCK_WIDEST_TIME)
 
 
 def compact_ai_target_summary(targets: list[str], limit: int = 3) -> str:
@@ -367,6 +372,8 @@ class MainWindow(QMainWindow):
             self.body_edit.apply_theme()
         if hasattr(self, "note_table"):
             self.update_note_date_column_width()
+        if hasattr(self, "sidebar_clock_time_label"):
+            self.update_sidebar_clock_metrics()
         self._update_theme_button_states()
         self._refresh_theme_icons()
         if sidebar_width is not None:
@@ -417,8 +424,21 @@ class MainWindow(QMainWindow):
             self.note_table.viewport().update()
 
     def update_sidebar_clock(self) -> None:
-        if hasattr(self, "sidebar_clock_label"):
-            self.sidebar_clock_label.setText(format_sidebar_clock())
+        if not hasattr(self, "sidebar_clock_time_label"):
+            return
+        time_text, date_text = format_sidebar_clock().split(" ", 1)
+        self.sidebar_clock_time_label.setText(time_text)
+        self.sidebar_clock_date_label.setText(date_text)
+
+    def update_sidebar_clock_metrics(self) -> None:
+        if not hasattr(self, "sidebar_clock_time_label"):
+            return
+        self.sidebar_clock_time_label.ensurePolished()
+        self.sidebar_clock_time_label.setFixedWidth(
+            sidebar_clock_time_width(
+                self.sidebar_clock_time_label.fontMetrics()
+            )
+        )
 
     def eventFilter(self, watched, event) -> bool:
         if watched is getattr(self, "editor_root", None) and event.type() == QEvent.Resize:
@@ -455,11 +475,28 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(4)
-        self.sidebar_clock_label = QLabel()
-        self.sidebar_clock_label.setObjectName("sidebarClock")
-        self.sidebar_clock_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.sidebar_clock_label.setFixedHeight(32)
-        header.addWidget(self.sidebar_clock_label)
+        self.sidebar_clock_widget = QWidget()
+        self.sidebar_clock_widget.setObjectName("sidebarClock")
+        self.sidebar_clock_widget.setFixedHeight(32)
+        sidebar_clock_layout = QHBoxLayout(self.sidebar_clock_widget)
+        sidebar_clock_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_clock_layout.setSpacing(4)
+        self.sidebar_clock_time_label = QLabel()
+        self.sidebar_clock_time_label.setObjectName("sidebarClockTime")
+        self.sidebar_clock_time_label.setAlignment(
+            Qt.AlignVCenter | Qt.AlignLeft
+        )
+        self.sidebar_clock_time_label.setFixedHeight(32)
+        sidebar_clock_layout.addWidget(self.sidebar_clock_time_label)
+        self.sidebar_clock_date_label = QLabel()
+        self.sidebar_clock_date_label.setObjectName("sidebarClockDate")
+        self.sidebar_clock_date_label.setAlignment(
+            Qt.AlignVCenter | Qt.AlignLeft
+        )
+        self.sidebar_clock_date_label.setFixedHeight(32)
+        sidebar_clock_layout.addWidget(self.sidebar_clock_date_label)
+        self.update_sidebar_clock_metrics()
+        header.addWidget(self.sidebar_clock_widget)
         header.addStretch(1)
 
         self.new_note_button = QPushButton()

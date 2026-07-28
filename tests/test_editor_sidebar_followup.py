@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtCore import QMimeData, QPoint, Qt
 from PySide6.QtGui import QFont, QTextCursor, QTextFormat
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
@@ -28,6 +28,7 @@ from src.main_window import (
     MainWindow,
     compact_ai_target_summary,
     note_date_column_width,
+    sidebar_clock_time_width,
 )
 from src.theme import THEMES, build_app_style
 from src.time_utils import CHINESE_WEEKDAYS, SHANGHAI_TZ, format_sidebar_clock
@@ -168,12 +169,32 @@ class EditorSidebarUiTest(unittest.TestCase):
     def test_clock_timer_refreshes_and_stops_on_close(self) -> None:
         self.assertTrue(self.window.sidebar_clock_timer.isActive())
         self.assertEqual(self.window.sidebar_clock_timer.interval(), 1000)
-        self.assertEqual(self.window.sidebar_clock_label.font().pixelSize(), 15)
-        self.assertEqual(self.window.sidebar_clock_label.height(), 32)
+        self.assertEqual(
+            self.window.sidebar_clock_time_label.font().pixelSize(),
+            15,
+        )
+        self.assertEqual(
+            self.window.sidebar_clock_date_label.font().pixelSize(),
+            15,
+        )
+        self.assertEqual(self.window.sidebar_clock_widget.height(), 32)
+        self.assertEqual(self.window.sidebar_clock_time_label.height(), 32)
+        self.assertEqual(self.window.sidebar_clock_date_label.height(), 32)
+        expected_time_width = sidebar_clock_time_width(
+            self.window.sidebar_clock_time_label.fontMetrics()
+        )
+        self.assertEqual(
+            self.window.sidebar_clock_time_label.minimumWidth(),
+            expected_time_width,
+        )
+        self.assertEqual(
+            self.window.sidebar_clock_time_label.maximumWidth(),
+            expected_time_width,
+        )
         self.assertGreaterEqual(
-            self.window.sidebar_clock_label.width(),
-            self.window.sidebar_clock_label.fontMetrics().horizontalAdvance(
-                self.window.sidebar_clock_label.text()
+            self.window.sidebar_clock_date_label.width(),
+            self.window.sidebar_clock_date_label.fontMetrics().horizontalAdvance(
+                self.window.sidebar_clock_date_label.text()
             ),
         )
         self.assertTrue(self.window.new_note_button.isVisible())
@@ -186,12 +207,58 @@ class EditorSidebarUiTest(unittest.TestCase):
         ):
             self.window.update_sidebar_clock()
         self.assertEqual(
-            self.window.sidebar_clock_label.text(),
-            "01:02:03 2026/07/28 周二",
+            self.window.sidebar_clock_time_label.text(),
+            "01:02:03",
+        )
+        self.assertEqual(
+            self.window.sidebar_clock_date_label.text(),
+            "2026/07/28 周二",
         )
         self.window.close()
         self.app.processEvents()
         self.assertFalse(self.window.sidebar_clock_timer.isActive())
+
+    def test_clock_date_position_is_stable_for_different_digits(self) -> None:
+        for theme_name in THEMES:
+            self.window.set_theme(theme_name)
+            self.app.processEvents()
+            self.assertEqual(
+                self.window.sidebar_clock_time_label.font().pixelSize(),
+                15,
+            )
+            self.assertEqual(
+                self.window.sidebar_clock_date_label.font().pixelSize(),
+                15,
+            )
+            self.assertEqual(self.window.sidebar_clock_widget.height(), 32)
+            self.assertGreaterEqual(
+                self.window.sidebar_clock_date_label.width(),
+                self.window.sidebar_clock_date_label.fontMetrics().horizontalAdvance(
+                    self.window.sidebar_clock_date_label.text()
+                ),
+            )
+            self.assertTrue(self.window.new_note_button.isVisible())
+            date_positions = []
+            for timestamp in ("11:11:11", "18:18:18", "20:00:00"):
+                with patch(
+                    "src.main_window.format_sidebar_clock",
+                    return_value=f"{timestamp} 2026/07/28 周二",
+                ):
+                    self.window.update_sidebar_clock()
+                self.app.processEvents()
+                date_positions.append(
+                    self.window.sidebar_clock_date_label.mapTo(
+                        self.window,
+                        QPoint(0, 0),
+                    ).x()
+                )
+                self.assertEqual(
+                    self.window.sidebar_clock_time_label.width(),
+                    sidebar_clock_time_width(
+                        self.window.sidebar_clock_time_label.fontMetrics()
+                    ),
+                )
+            self.assertEqual(len(set(date_positions)), 1)
 
     def test_date_column_never_elides_and_extra_width_goes_to_title(self) -> None:
         self.window.populate_note_table(
@@ -380,7 +447,8 @@ class EditorToolbarGroupingTest(unittest.TestCase):
             style = build_app_style(theme_name)
             self.assertIn(
                 (
-                    f"#sidebarClock {{ color: {THEMES[theme_name].sidebar_text}; "
+                    "#sidebarClockTime,\n"
+                    f"#sidebarClockDate {{ color: {THEMES[theme_name].sidebar_text}; "
                     "font-size: 15px; font-weight: 500; }"
                 ),
                 style,
