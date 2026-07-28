@@ -19,20 +19,35 @@ class FloatingComboItemDelegate(QStyledItemDelegate):
         super().__init__(combo.view())
         self.combo = combo
 
-    def paint(self, painter: QPainter, option, index) -> None:
+    def item_colors(self, state: QStyle.StateFlag) -> tuple[QColor, QColor]:
         tokens = current_theme()
         sidebar = self.combo.surface_role == "sidebar"
-        background = QColor(tokens.sidebar if sidebar else tokens.surface)
-        hover = QColor(tokens.sidebar_selected if sidebar else tokens.surface_hover)
-        text_color = QColor(tokens.text)
+        active = bool(state & (QStyle.State_MouseOver | QStyle.State_Selected))
+        enabled = bool(state & QStyle.State_Enabled)
+        if sidebar:
+            background = tokens.sidebar_selected if active else tokens.sidebar
+            text = tokens.sidebar_text if enabled else tokens.sidebar_text_subtle
+        else:
+            background = tokens.surface_hover if active else tokens.surface
+            text = tokens.text if enabled else tokens.disabled
+        return QColor(background), QColor(text)
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        background, text_color = self.item_colors(option.state)
+        tokens = current_theme()
+        base_background = QColor(
+            tokens.sidebar
+            if self.combo.surface_role == "sidebar"
+            else tokens.surface
+        )
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.fillRect(option.rect, background)
+        painter.fillRect(option.rect, base_background)
 
-        if option.state & QStyle.State_MouseOver:
+        if option.state & (QStyle.State_MouseOver | QStyle.State_Selected):
             hover_rect = option.rect.adjusted(4, 0, -4, 0)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(hover)
+            painter.setBrush(background)
             painter.drawRoundedRect(hover_rect, 6, 6)
 
         text_rect = option.rect.adjusted(12, 0, -32, 0)
@@ -81,7 +96,13 @@ class FloatingComboBox(QComboBox):
     @property
     def check_icon(self) -> QIcon:
         filename = "combo-check-sidebar.svg" if self.surface_role == "sidebar" else "combo-check.svg"
-        return themed_icon(filename, "accent")
+        return themed_icon(filename, self.check_icon_role)
+
+    @property
+    def check_icon_role(self) -> str:
+        if self.surface_role == "sidebar" and current_theme().name == "light-slate":
+            return "sidebar_text_muted"
+        return "accent"
 
     def configure_popup(self, minimum_width: int, *, theme: str | None = None) -> None:
         self.minimum_popup_width = minimum_width

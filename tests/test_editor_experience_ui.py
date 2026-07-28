@@ -14,6 +14,8 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout
 from src.database import create_note, get_note, initialize_database
 from src.main_window import (
     EDITOR_BOTTOM_MARGIN,
+    THEME_SWATCH_ACTIVE_SIZE,
+    THEME_SWATCH_SIZE,
     TITLE_SEPARATOR_HEIGHT,
     MainWindow,
 )
@@ -98,7 +100,18 @@ class EditorExperienceUiTest(unittest.TestCase):
         self.assertTrue(
             all(button.objectName() == "themeSwatch" for button in swatches)
         )
-        self.assertTrue(all(button.size().width() == 20 for button in swatches))
+        self.assertLess(THEME_SWATCH_SIZE, 20)
+        self.assertEqual(THEME_SWATCH_ACTIVE_SIZE, THEME_SWATCH_SIZE + 2)
+        for theme_name, button in self.window.theme_buttons.items():
+            expected_size = (
+                THEME_SWATCH_ACTIVE_SIZE
+                if theme_name == self.window.current_theme_name
+                else THEME_SWATCH_SIZE
+            )
+            self.assertEqual(
+                (button.width(), button.height()),
+                (expected_size, expected_size),
+            )
         self.assertEqual(
             [footer_layout.indexOf(button) for button in swatches],
             [1, 2, 3],
@@ -120,9 +133,18 @@ class EditorExperienceUiTest(unittest.TestCase):
                     self.app.processEvents()
                     self.assertEqual(self.window.current_theme_name, theme_name)
                     for candidate, button in self.window.theme_buttons.items():
+                        expected_size = (
+                            THEME_SWATCH_ACTIVE_SIZE
+                            if candidate == theme_name
+                            else THEME_SWATCH_SIZE
+                        )
                         self.assertEqual(
                             button.property("active"),
                             candidate == theme_name,
+                        )
+                        self.assertEqual(
+                            (button.width(), button.height()),
+                            (expected_size, expected_size),
                         )
                 self.assertEqual(load_saved_theme(), "light-clay")
                 self.assertTrue(settings_path.is_file())

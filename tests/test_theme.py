@@ -11,9 +11,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QTextCursor, QTextFormat
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyle
 
 from src.editor import NotesEditor
+from src.floating_combo import FloatingComboBox
 from src.main_window import (
     EDITOR_BOTTOM_MARGIN,
     EDITOR_MEDIUM_SIDE_MARGIN,
@@ -27,11 +28,14 @@ from src.theme import (
     ICON_DIR,
     THEMES,
     THEME_SWATCH_COLORS,
+    THEME_SWATCH_RING_COLORS,
     THEME_SETTINGS_PATH,
     apply_theme,
     build_app_style,
+    current_theme,
     load_saved_theme,
     save_theme,
+    set_current_theme,
 )
 
 
@@ -122,6 +126,64 @@ class ThemeSystemTest(unittest.TestCase):
             f"#noteTable::item:selected {{ background: {tokens.sidebar_selected};",
             style,
         )
+        self.assertIn(
+            f"#sidebarComboPopupView::item:hover,\n"
+            f"#sidebarComboPopupView::item:selected {{ background: {tokens.sidebar_selected}; "
+            f"color: {tokens.sidebar_text}; }}",
+            style,
+        )
+        self.assertIn(
+            f"#sidebarComboPopupView::item:disabled {{ color: "
+            f"{tokens.sidebar_text_subtle}; }}",
+            style,
+        )
+
+    def test_sidebar_combo_popup_uses_readable_theme_specific_item_colors(self) -> None:
+        previous_theme = current_theme().name
+        combo = FloatingComboBox(popup_theme="dark")
+        delegate = combo.view().itemDelegate()
+        try:
+            for theme_name in ("dark", "light-slate", "light-clay"):
+                tokens = set_current_theme(theme_name)
+                normal_background, normal_text = delegate.item_colors(
+                    QStyle.State_Enabled
+                )
+                hover_background, hover_text = delegate.item_colors(
+                    QStyle.State_Enabled | QStyle.State_MouseOver
+                )
+                selected_background, selected_text = delegate.item_colors(
+                    QStyle.State_Enabled | QStyle.State_Selected
+                )
+                disabled_background, disabled_text = delegate.item_colors(
+                    QStyle.State_None
+                )
+                self.assertEqual(normal_background.name().upper(), tokens.sidebar)
+                self.assertEqual(normal_text.name().upper(), tokens.sidebar_text)
+                self.assertEqual(
+                    hover_background.name().upper(), tokens.sidebar_selected
+                )
+                self.assertEqual(hover_text.name().upper(), tokens.sidebar_text)
+                self.assertEqual(
+                    selected_background.name().upper(), tokens.sidebar_selected
+                )
+                self.assertEqual(selected_text.name().upper(), tokens.sidebar_text)
+                self.assertEqual(disabled_background.name().upper(), tokens.sidebar)
+                self.assertEqual(
+                    disabled_text.name().upper(), tokens.sidebar_text_subtle
+                )
+                self.assertGreaterEqual(
+                    contrast_ratio(tokens.sidebar_text, tokens.sidebar_selected),
+                    4.5,
+                    theme_name,
+                )
+
+            set_current_theme("light-slate")
+            self.assertEqual(combo.check_icon_role, "sidebar_text_muted")
+            for theme_name in ("dark", "light-clay"):
+                set_current_theme(theme_name)
+                self.assertEqual(combo.check_icon_role, "accent")
+        finally:
+            set_current_theme(previous_theme)
 
     def test_all_editor_surfaces_use_approved_single_original_color(self) -> None:
         expected_editor_colors = {
@@ -149,7 +211,34 @@ class ThemeSystemTest(unittest.TestCase):
                 f'#themeSwatch[themeName="{theme_name}"] {{ background: {color}; }}',
                 style,
             )
-        self.assertIn('#themeSwatch[active="true"] { border: 2px solid', style)
+        self.assertEqual(
+            THEME_SWATCH_RING_COLORS,
+            {
+                "dark": "#555B60",
+                "light-slate": "#8FA1B1",
+                "light-clay": "#C6816A",
+            },
+        )
+        self.assertTrue(
+            all(
+                color.upper() not in {"#FFFFFF", "#FFF"}
+                for color in THEME_SWATCH_RING_COLORS.values()
+            )
+        )
+        self.assertIn(
+            '#themeSwatch { border: 1px solid transparent; border-radius: 7px;',
+            style,
+        )
+        self.assertIn(
+            '#themeSwatch[active="true"] { border-width: 1px; border-radius: 8px;',
+            style,
+        )
+        for theme_name, color in THEME_SWATCH_RING_COLORS.items():
+            self.assertIn(
+                f'#themeSwatch[active="true"][themeName="{theme_name}"] '
+                f'{{ border-color: {color}; }}',
+                style,
+            )
 
     def test_editor_widens_with_a_stable_left_axis(self) -> None:
         editor_root_width = 1600

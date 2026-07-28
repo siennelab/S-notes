@@ -154,6 +154,8 @@ EDITOR_MEDIUM_SIDE_MARGIN = 16
 EDITOR_NARROW_SIDE_MARGIN = 12
 EDITOR_BOTTOM_MARGIN = 12
 TITLE_SEPARATOR_HEIGHT = 2
+THEME_SWATCH_SIZE = 14
+THEME_SWATCH_ACTIVE_SIZE = 16
 
 
 def editor_horizontal_metrics(width: int) -> tuple[int, int, int]:
@@ -347,7 +349,10 @@ class MainWindow(QMainWindow):
 
     def _update_theme_button_states(self) -> None:
         for theme_name, button in getattr(self, "theme_buttons", {}).items():
-            button.setProperty("active", theme_name == self.current_theme_name)
+            active = theme_name == self.current_theme_name
+            button.setProperty("active", active)
+            size = THEME_SWATCH_ACTIVE_SIZE if active else THEME_SWATCH_SIZE
+            button.setFixedSize(size, size)
             repolish(button)
 
     def _refresh_theme_icons(self) -> None:
@@ -575,7 +580,7 @@ class MainWindow(QMainWindow):
             button = QPushButton()
             button.setObjectName("themeSwatch")
             button.setProperty("themeName", theme_name)
-            button.setFixedSize(20, 20)
+            button.setFixedSize(THEME_SWATCH_SIZE, THEME_SWATCH_SIZE)
             button.setToolTip(label)
             button.setAccessibleName(label)
             button.clicked.connect(

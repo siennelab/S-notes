@@ -166,6 +166,11 @@ THEME_SWATCH_COLORS = {
     "light-slate": "#5F768B",
     "light-clay": "#A84B2F",
 }
+THEME_SWATCH_RING_COLORS = {
+    "dark": "#555B60",
+    "light-slate": "#8FA1B1",
+    "light-clay": "#C6816A",
+}
 ICON_DIR = Path(__file__).with_name("icons")
 _current_theme_name = DEFAULT_THEME
 
@@ -324,13 +329,16 @@ QHeaderView::section {{
 #mainContentArea {{ background: {t.editor}; }}
 #sidebar {{ background: {t.sidebar}; }}
 #sidebarTitle {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
-#themeSwatch {{ border: 1px solid transparent; border-radius: 5px; padding: 0; }}
+#themeSwatch {{ border: 1px solid transparent; border-radius: 7px; padding: 0; }}
 #themeSwatch[themeName="dark"] {{ background: {THEME_SWATCH_COLORS["dark"]}; }}
 #themeSwatch[themeName="light-slate"] {{ background: {THEME_SWATCH_COLORS["light-slate"]}; }}
 #themeSwatch[themeName="light-clay"] {{ background: {THEME_SWATCH_COLORS["light-clay"]}; }}
-#themeSwatch:hover {{ border-color: {t.sidebar_text_muted}; }}
-#themeSwatch:pressed {{ border-color: {t.sidebar_text}; }}
-#themeSwatch[active="true"] {{ border: 2px solid {t.sidebar_text}; }}
+#themeSwatch:hover {{ border-color: {t.sidebar_text_subtle}; }}
+#themeSwatch:pressed {{ border-color: {t.sidebar_text_muted}; }}
+#themeSwatch[active="true"] {{ border-width: 1px; border-radius: 8px; }}
+#themeSwatch[active="true"][themeName="dark"] {{ border-color: {THEME_SWATCH_RING_COLORS["dark"]}; }}
+#themeSwatch[active="true"][themeName="light-slate"] {{ border-color: {THEME_SWATCH_RING_COLORS["light-slate"]}; }}
+#themeSwatch[active="true"][themeName="light-clay"] {{ border-color: {THEME_SWATCH_RING_COLORS["light-clay"]}; }}
 #newNoteButton {{ background: {t.accent}; color: {t.accent_text}; padding: 0; }}
 #newNoteButton:hover {{ background: {t.focus}; }}
 #newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
@@ -370,7 +378,9 @@ QHeaderView::section {{
 #comboPopupView::item {{ min-height: 32px; padding: 0; background: transparent; }}
 #sidebarComboPopupView::item {{ color: {t.sidebar_text}; }}
 #comboPopupView::item {{ color: {t.text}; }}
-#sidebarComboPopupView::item:selected {{ background: transparent; color: {t.sidebar_text}; }}
+#sidebarComboPopupView::item:hover,
+#sidebarComboPopupView::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#sidebarComboPopupView::item:disabled {{ color: {t.sidebar_text_subtle}; }}
 #comboPopupView::item:selected {{ background: transparent; color: {t.text}; }}
 #floatingComboPopup {{ background: transparent; border: 0; }}
 #mainSplitter::handle {{ background: {t.sidebar_separator}; }}
