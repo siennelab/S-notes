@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
@@ -364,15 +365,31 @@ def _database_needs_ai_foundation(database_path: Path) -> bool:
 def _backup_database_for_migration(database_path: Path) -> Path:
     backup_dir = database_path.parent / "backups" / "migrations"
     backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.chmod(0o700)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup_path = backup_dir / f"s_notes_pre_task13a_{timestamp}.db"
-    source = _connect(database_path)
-    destination = sqlite3.connect(backup_path)
+    descriptor = os.open(
+        backup_path,
+        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+        0o600,
+    )
+    os.close(descriptor)
+    source = None
+    destination = None
     try:
+        source = _connect(database_path)
+        destination = sqlite3.connect(backup_path)
         source.backup(destination)
+        destination.commit()
+        backup_path.chmod(0o600)
+    except Exception:
+        backup_path.unlink(missing_ok=True)
+        raise
     finally:
-        destination.close()
-        source.close()
+        if destination is not None:
+            destination.close()
+        if source is not None:
+            source.close()
     return backup_path
 
 
