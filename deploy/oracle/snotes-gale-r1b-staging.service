@@ -1,0 +1,37 @@
+[Unit]
+Description=S-notes Gale R1B submission staging
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=snotes-gale
+Group=snotes-gale
+WorkingDirectory=/opt/snotes-gale-r1b-staging
+EnvironmentFile=/etc/snotes-gale-r1b-staging/service.env
+ExecStart=/opt/snotes-gale-r1b-staging/.venv/bin/python -m src.gale_submission_staging_mcp serve
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+UMask=0077
+SyslogIdentifier=snotes-gale-r1b-staging
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+ReadOnlyPaths=/opt/snotes-gale-r1b-staging
+ReadWritePaths=/var/lib/snotes-gale-r1b-staging
+RuntimeDirectory=snotes-gale-r1b-staging
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

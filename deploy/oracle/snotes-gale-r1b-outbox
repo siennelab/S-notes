@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+cd /opt/snotes-gale-r1b-staging
+
+exec /opt/snotes-gale-r1b-staging/.venv/bin/python \
+    -m src.services.gale_submission_outbox \
+    --database /var/lib/snotes-gale-r1b-staging/outbox.db \
+    "$@"
