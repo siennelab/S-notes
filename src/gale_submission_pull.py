@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -28,6 +29,7 @@ REMOTE_OUTBOX_COMMAND = "/usr/local/sbin/snotes-gale-r1b-outbox"
 MAX_TRANSPORT_BYTES = 6 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30
 ISOLATED_ROOT_PREFIX = "snotes-r1b-"
+LOCAL_RECEIPT_ID_PATTERN = re.compile(r"^[1-9][0-9]{0,18}$")
 
 
 class GaleSubmissionPullError(RuntimeError):
@@ -77,7 +79,7 @@ class SystemSshSubmissionTransport:
         local_receipt_id: str,
     ) -> None:
         normalized_uuid = _validated_uuid(submission_uuid)
-        receipt_id = _required_text(local_receipt_id, 200, "local_receipt_id")
+        receipt_id = _validated_local_receipt_id(local_receipt_id)
         self._run_remote("ack", normalized_uuid, receipt_id)
 
     def status(self) -> bytes:
@@ -370,6 +372,12 @@ def _validated_uuid(value: object) -> str:
         return str(uuid.UUID(str(value)))
     except (ValueError, TypeError, AttributeError) as error:
         raise GaleSubmissionPullError("submission_uuid_invalid") from error
+
+
+def _validated_local_receipt_id(value: object) -> str:
+    if not isinstance(value, str) or not LOCAL_RECEIPT_ID_PATTERN.fullmatch(value):
+        raise GaleSubmissionPullError("local_receipt_id_invalid")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:

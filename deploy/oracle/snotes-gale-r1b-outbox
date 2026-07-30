@@ -3,6 +3,40 @@ set -eu
 
 cd /opt/snotes-gale-r1b-staging
 
+case "${1-}" in
+    export|status)
+        if [ "$#" -ne 1 ]; then
+            echo "OUTBOX_STATUS=FAIL" >&2
+            echo "ERROR_CODE=invalid_command" >&2
+            exit 2
+        fi
+        ;;
+    ack)
+        if [ "$#" -ne 3 ]; then
+            echo "OUTBOX_STATUS=FAIL" >&2
+            echo "ERROR_CODE=invalid_command" >&2
+            exit 2
+        fi
+        case "$3" in
+            ""|0*|*[^0-9]*)
+                echo "OUTBOX_STATUS=FAIL" >&2
+                echo "ERROR_CODE=invalid_receipt_id" >&2
+                exit 2
+                ;;
+        esac
+        if [ "${#3}" -gt 19 ]; then
+            echo "OUTBOX_STATUS=FAIL" >&2
+            echo "ERROR_CODE=invalid_receipt_id" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        echo "OUTBOX_STATUS=FAIL" >&2
+        echo "ERROR_CODE=invalid_command" >&2
+        exit 2
+        ;;
+esac
+
 exec /opt/snotes-gale-r1b-staging/.venv/bin/python \
     -m src.services.gale_submission_outbox \
     --database /var/lib/snotes-gale-r1b-staging/outbox.db \

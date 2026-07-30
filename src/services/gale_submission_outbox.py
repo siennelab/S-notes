@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
@@ -23,6 +24,7 @@ MAX_TAG_LENGTH = 50
 MAX_TAG_COUNT = 20
 MAX_IDEMPOTENCY_KEY_LENGTH = 200
 MAX_EXPORT_COUNT = 100
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 
 
 class GaleSubmissionOutboxError(RuntimeError):
@@ -157,17 +159,15 @@ def create_submission(
     path = _validated_database_path(database_path)
     normalized_title = _required_text(title, "title", MAX_TITLE_LENGTH)
     normalized_content = _required_text(content, "content", MAX_CONTENT_LENGTH)
-    normalized_directory = _optional_text(
-        suggested_directory,
-        "suggested_directory",
-        MAX_DIRECTORY_LENGTH,
-    )
+    normalized_directory = _normalize_directory(suggested_directory)
     normalized_tags = _normalize_tags(suggested_tags or ())
     normalized_key = _optional_text(
         idempotency_key,
         "idempotency_key",
         MAX_IDEMPOTENCY_KEY_LENGTH,
     )
+    if normalized_key and not IDEMPOTENCY_KEY_PATTERN.fullmatch(normalized_key):
+        raise GaleSubmissionOutboxError("idempotency_key_invalid")
 
     submission_uuid = str(uuid.uuid4())
     stable_key = normalized_key or submission_uuid
@@ -390,6 +390,8 @@ def get_submission(
 
 def outbox_status(database_path: Path) -> dict[str, int]:
     path = _validated_database_path(database_path)
+    if not path.is_file():
+        raise GaleSubmissionOutboxError("outbox_missing")
     connection = _connect(path)
     try:
         counts = {"queued": 0, "delivered": 0, "acknowledged": 0}
@@ -431,7 +433,9 @@ def _validated_database_path(database_path: Path) -> Path:
 
 
 def _required_text(value: object, field: str, maximum: int) -> str:
-    text = str(value or "").strip()
+    if not isinstance(value, str):
+        raise GaleSubmissionOutboxError(f"{field}_invalid")
+    text = value.strip()
     if not text:
         raise GaleSubmissionOutboxError(f"{field}_required")
     if len(text) > maximum:
@@ -440,10 +444,30 @@ def _required_text(value: object, field: str, maximum: int) -> str:
 
 
 def _optional_text(value: object, field: str, maximum: int) -> str:
-    text = str(value or "").strip()
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise GaleSubmissionOutboxError(f"{field}_invalid")
+    text = value.strip()
     if len(text) > maximum:
         raise GaleSubmissionOutboxError(f"{field}_too_long")
     return text
+
+
+def _normalize_directory(value: object) -> str:
+    text = _optional_text(
+        value,
+        "suggested_directory",
+        MAX_DIRECTORY_LENGTH,
+    )
+    if not text:
+        return ""
+    if any(ord(character) < 32 for character in text):
+        raise GaleSubmissionOutboxError("suggested_directory_invalid")
+    parts = text.split("/")
+    if len(parts) > 3 or any(not part.strip() for part in parts):
+        raise GaleSubmissionOutboxError("suggested_directory_invalid")
+    return "/".join(part.strip() for part in parts)
 
 
 def _normalize_tags(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
@@ -541,7 +565,11 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("status")
     args = parser.parse_args(argv)
     try:
-        initialize_outbox(args.database)
+        if args.command == "status":
+            if not args.database.is_file():
+                raise GaleSubmissionOutboxError("outbox_missing")
+        else:
+            initialize_outbox(args.database)
         if args.command == "export":
             submissions = export_unacknowledged(
                 args.database,
