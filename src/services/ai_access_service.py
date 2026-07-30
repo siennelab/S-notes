@@ -975,7 +975,10 @@ def _execute_modify(
                 else note["content_html"] + addition
             )
             connection.execute(
-                "UPDATE notes SET content_html=?, body_rich_text=?, updated_at=? WHERE id=?",
+                """
+                UPDATE notes SET content_html=?, body_rich_text=?,
+                    revision=revision+1, updated_at=? WHERE id=?
+                """,
                 (content_html, content_html, timestamp, note_id),
             )
         elif operation_type == "metadata":
@@ -990,7 +993,8 @@ def _execute_modify(
             connection.execute(
                 """
                 UPDATE notes SET title=?, directory_id=?, main_category=?,
-                    sub_category=?, sub_sub_category=?, updated_at=? WHERE id=?
+                    sub_category=?, sub_sub_category=?, revision=revision+1,
+                    updated_at=? WHERE id=?
                 """,
                 (title, directory_id, main, sub, sub_sub, timestamp, note_id),
             )
@@ -1259,7 +1263,7 @@ def _restore_snapshot(connection, note_id: int, snapshot: dict, timestamp: str) 
         """
         UPDATE notes SET directory_id=?, title=?, content_html=?, body_rich_text=?,
             main_category=?, sub_category=?, sub_sub_category=?, ai_visibility=?,
-            updated_at=? WHERE id=? AND is_deleted=0
+            revision=revision+1, updated_at=? WHERE id=? AND is_deleted=0
         """,
         (directory_id, snapshot["title"], snapshot["content_html"], snapshot.get("body_rich_text", snapshot["content_html"]), snapshot["main_category"], snapshot["sub_category"], snapshot["sub_sub_category"], normalize_ai_visibility(snapshot["ai_visibility"]), timestamp, note_id),
     )

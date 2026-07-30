@@ -194,7 +194,7 @@ def _restore_trash_note(connection: sqlite3.Connection, note_id: int) -> None:
         """
         UPDATE notes
         SET is_deleted = 0, deleted_at = NULL, trash_group_id = NULL,
-            directory_id = ?, updated_at = ?
+            directory_id = ?, revision = revision + 1, updated_at = ?
         WHERE id = ? AND is_deleted = 1
         """,
         (directory_id, timestamp, note_id),

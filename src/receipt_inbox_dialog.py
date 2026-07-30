@@ -65,6 +65,10 @@ class ReceiptCard(QFrame):
         self.expanded = False
         self.pending = receipt["status"] == "pending"
         self.parse_failed = receipt["parse_status"] != "parsed"
+        self.is_gale_submission = (
+            str(receipt.get("source", "")).strip().casefold() == "gale"
+            and bool(receipt.get("external_submission_id") or receipt.get("idempotency_key"))
+        )
 
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
@@ -87,20 +91,32 @@ class ReceiptCard(QFrame):
             parse_status = QLabel("解析失败")
             parse_status.setObjectName("receiptParseErrorStatus")
             title_area.addWidget(parse_status)
-        summary = ReceiptElidedLabel(
-            f"来源: {receipt['source']} · 动作: {receipt['action']} · "
-            f"{format_display_datetime(receipt['created_at'])}"
-        )
-        summary.setObjectName("receiptCardSummary")
-        title_area.addWidget(summary)
+        if self.is_gale_submission:
+            suggested_directory = " / ".join(
+                str(receipt.get(key) or "无")
+                for key in ("main_category", "sub_category", "sub_sub_category")
+            )
+            suggested_tags = format_tags(parse_tags(receipt.get("tags", ""))) or "无"
+            summary_text = (
+                f"来源: Gale · 投稿时间: {format_display_datetime(receipt['created_at'])} · "
+                f"建议目录: {suggested_directory} · 建议标签: {suggested_tags}"
+            )
+        else:
+            summary_text = (
+                f"来源: {receipt['source']} · 动作: {receipt['action']} · "
+                f"{format_display_datetime(receipt['created_at'])}"
+            )
+        self.summary_label = ReceiptElidedLabel(summary_text)
+        self.summary_label.setObjectName("receiptCardSummary")
+        title_area.addWidget(self.summary_label)
         top.addLayout(title_area, stretch=1)
 
-        self.accept_button = QPushButton("确认")
+        self.accept_button = QPushButton("接受" if self.is_gale_submission else "确认")
         self.accept_button.setObjectName("receiptAcceptButton")
         self.accept_button.clicked.connect(
             lambda: self.acceptRequested.emit(self.receipt_id)
         )
-        self.reject_button = QPushButton("拒绝")
+        self.reject_button = QPushButton("丢弃" if self.is_gale_submission else "拒绝")
         self.reject_button.setObjectName("receiptRejectButton")
         self.reject_button.clicked.connect(
             lambda: self.rejectRequested.emit(self.receipt_id)
@@ -191,7 +207,7 @@ class ReceiptCard(QFrame):
         targets_row.addWidget(targets_widget, stretch=1)
         details_layout.addLayout(targets_row)
 
-        body_label = QLabel("正文预览")
+        body_label = QLabel("正文" if self.is_gale_submission else "正文预览")
         body_label.setObjectName("receiptFieldLabel")
         details_layout.addWidget(body_label)
         self.body_edit = QTextEdit()
@@ -495,6 +511,7 @@ class ReceiptInboxDialog(QWidget):
         card = self.cards.get(receipt_id)
         if card is None:
             return
+        is_gale_submission = card.is_gale_submission
         allow_failed_parse = False
         if card.parse_failed:
             if not self._confirm_failed_parse_acceptance():
@@ -515,7 +532,10 @@ class ReceiptInboxDialog(QWidget):
             return
         self.expanded_receipt_id = None
         self.refresh_receipt_list()
-        QMessageBox.information(self, "已确认入库", "已确认入库。")
+        if is_gale_submission:
+            QMessageBox.information(self, "已接受", "已接受并创建正式笔记。")
+        else:
+            QMessageBox.information(self, "已确认入库", "已确认入库。")
 
     def _confirm_failed_parse_acceptance(self) -> bool:
         message_box = QMessageBox(self)
@@ -534,6 +554,14 @@ class ReceiptInboxDialog(QWidget):
     def reject_receipt(self, receipt_id: int) -> None:
         try:
             receipt = get_ai_receipt_inbox_item(receipt_id)
+            is_gale_submission = bool(
+                receipt
+                and str(receipt.get("source", "")).strip().casefold() == "gale"
+                and bool(
+                    receipt.get("external_submission_id")
+                    or receipt.get("idempotency_key")
+                )
+            )
             if receipt and receipt.get("request_id"):
                 reject_ai_proposal(receipt_id)
             else:
@@ -544,7 +572,10 @@ class ReceiptInboxDialog(QWidget):
             return
         self.expanded_receipt_id = None
         self.refresh_receipt_list()
-        QMessageBox.information(self, "已拒绝", "已拒绝。")
+        if is_gale_submission:
+            QMessageBox.information(self, "已丢弃", "已丢弃。")
+        else:
+            QMessageBox.information(self, "已拒绝", "已拒绝。")
 
     def confirm_delete_receipt(self, receipt_id: int) -> None:
         receipt = get_ai_receipt_inbox_item(receipt_id)

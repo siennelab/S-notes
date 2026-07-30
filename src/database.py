@@ -31,7 +31,7 @@ DEFAULT_MAIN_CATEGORY = "临时"
 DEFAULT_SUB_CATEGORY = "无"
 DEFAULT_SUB_SUB_CATEGORY = "无"
 DEFAULT_AI_VISIBILITY = AI_VISIBILITY_NO_EXPORT
-AI_SCHEMA_VERSION = 1
+AI_SCHEMA_VERSION = 2
 INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "备忘", "终端指令")
 
 
@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS directories (
 
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY,
+    note_uuid TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
     directory_id INTEGER REFERENCES directories(id),
     title TEXT NOT NULL DEFAULT '',
     body_rich_text TEXT NOT NULL DEFAULT '',
@@ -130,7 +132,10 @@ CREATE TABLE IF NOT EXISTS ai_receipt_inbox (
     target_note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL,
     expected_updated_at TEXT,
     operation_payload TEXT NOT NULL DEFAULT '',
-    result_status TEXT
+    result_status TEXT,
+    external_submission_id TEXT,
+    idempotency_key TEXT,
+    accepted_note_uuid TEXT
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -195,6 +200,8 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 
 
 NOTE_COLUMNS = {
+    "note_uuid": "TEXT",
+    "revision": "INTEGER NOT NULL DEFAULT 1",
     "content_html": "TEXT NOT NULL DEFAULT ''",
     "main_category": "TEXT NOT NULL DEFAULT '临时'",
     "sub_category": "TEXT NOT NULL DEFAULT '无'",
@@ -238,6 +245,9 @@ AI_RECEIPT_INBOX_COLUMNS = {
     "expected_updated_at": "TEXT",
     "operation_payload": "TEXT NOT NULL DEFAULT ''",
     "result_status": "TEXT",
+    "external_submission_id": "TEXT",
+    "idempotency_key": "TEXT",
+    "accepted_note_uuid": "TEXT",
 }
 
 
@@ -263,12 +273,14 @@ def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
         connection.execute("BEGIN IMMEDIATE")
         _execute_schema(connection)
         _migrate_notes_table(connection)
+        _migrate_note_stable_identity(connection)
         _migrate_directories_table(connection)
         _migrate_ai_receipt_inbox_table(connection)
         _seed_ai_targets(connection)
         before = _migration_counts(connection)
         unknown_visibilities = _migrate_ai_visibility_values(connection)
         unknown_targets = _migrate_note_ai_targets_table(connection)
+        _ensure_r1b_indexes_and_triggers(connection)
         _seed_ai_settings(connection)
         _seed_initial_categories(connection)
         _ensure_directory_paths_for_notes(connection)
@@ -375,6 +387,25 @@ def _migrate_notes_table(connection: sqlite3.Connection) -> None:
             )
 
 
+def _migrate_note_stable_identity(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        "SELECT id, note_uuid, revision FROM notes ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        note_uuid = str(row["note_uuid"] or "").strip()
+        revision = int(row["revision"] or 0)
+        if not note_uuid:
+            connection.execute(
+                "UPDATE notes SET note_uuid = ? WHERE id = ?",
+                (str(uuid.uuid4()), int(row["id"])),
+            )
+        if revision < 1:
+            connection.execute(
+                "UPDATE notes SET revision = 1 WHERE id = ?",
+                (int(row["id"]),),
+            )
+
+
 def _migrate_directories_table(connection: sqlite3.Connection) -> None:
     existing_columns = {
         row["name"] for row in connection.execute("PRAGMA table_info(directories)").fetchall()
@@ -396,6 +427,51 @@ def _migrate_ai_receipt_inbox_table(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f"ALTER TABLE ai_receipt_inbox ADD COLUMN {column_name} {column_definition}"
             )
+
+
+def _ensure_r1b_indexes_and_triggers(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_note_uuid
+        ON notes(note_uuid)
+        WHERE note_uuid IS NOT NULL AND note_uuid <> ''
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_external_submission
+        ON ai_receipt_inbox(source, external_submission_id)
+        WHERE external_submission_id IS NOT NULL
+          AND external_submission_id <> ''
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_idempotency_key
+        ON ai_receipt_inbox(source, idempotency_key)
+        WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
+        """
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS notes_assign_uuid_after_insert
+        AFTER INSERT ON notes
+        FOR EACH ROW
+        WHEN NEW.note_uuid IS NULL OR trim(NEW.note_uuid) = ''
+        BEGIN
+            UPDATE notes
+            SET note_uuid = lower(
+                hex(randomblob(4)) || '-' ||
+                hex(randomblob(2)) || '-4' ||
+                substr(hex(randomblob(2)), 2) || '-' ||
+                substr('89ab', (random() & 3) + 1, 1) ||
+                substr(hex(randomblob(2)), 2) || '-' ||
+                hex(randomblob(6))
+            )
+            WHERE id = NEW.id;
+        END
+        """
+    )
 
 
 def _seed_ai_targets(connection: sqlite3.Connection) -> None:
@@ -444,10 +520,11 @@ def _migrate_ai_visibility_values(connection: sqlite3.Connection) -> set[str]:
                 """,
                 (raw, row["id"], timestamp),
             )
-        connection.execute(
-            "UPDATE notes SET ai_visibility=? WHERE id=?",
-            (normalized, row["id"]),
-        )
+        if normalized != raw:
+            connection.execute(
+                "UPDATE notes SET ai_visibility=? WHERE id=?",
+                (normalized, row["id"]),
+            )
     connection.execute(
         """
         UPDATE ai_receipt_inbox
@@ -656,6 +733,7 @@ def create_note_in_directory(
     database_path: Path = DATABASE_PATH,
 ) -> dict:
     timestamp = now_shanghai_iso()
+    note_uuid = str(uuid.uuid4())
     title = f"未命名笔记 {now_shanghai().strftime('%Y-%m-%d %H:%M')}"
     with _connect(database_path) as connection:
         main = main_category or DEFAULT_MAIN_CATEGORY
@@ -665,6 +743,8 @@ def create_note_in_directory(
         cursor = connection.execute(
             """
             INSERT INTO notes (
+                note_uuid,
+                revision,
                 directory_id,
                 title,
                 body_rich_text,
@@ -679,9 +759,10 @@ def create_note_in_directory(
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, '', '', ?, ?, ?, '', ?, 0, 0, ?, ?)
+            VALUES (?, 1, ?, ?, '', '', ?, ?, ?, '', ?, 0, 0, ?, ?)
             """,
             (
+                note_uuid,
                 directory_id,
                 title,
                 main,
@@ -716,7 +797,7 @@ def rename_note(
             connection.execute(
                 """
                 UPDATE notes
-                SET title = ?, updated_at = ?
+                SET title = ?, revision = revision + 1, updated_at = ?
                 WHERE id = ? AND is_deleted = 0
                 """,
                 (clean_title, timestamp, note_id),
@@ -742,7 +823,11 @@ def soft_delete_note(note_id: int, database_path: Path = DATABASE_PATH) -> None:
         connection.execute(
             """
             UPDATE notes
-            SET is_deleted = 1, deleted_at = ?, updated_at = ?, trash_group_id = ?
+            SET is_deleted = 1,
+                deleted_at = ?,
+                revision = revision + 1,
+                updated_at = ?,
+                trash_group_id = ?
             WHERE id = ? AND is_deleted = 0
             """,
             (deleted_at, timestamp, trash_group_id, note_id),
@@ -755,6 +840,8 @@ def list_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
             """
             SELECT
                 id,
+                note_uuid,
+                revision,
                 title,
                 main_category,
                 sub_category,
@@ -778,6 +865,8 @@ def list_notes_for_link_drawer(database_path: Path = DATABASE_PATH) -> list[dict
             """
             SELECT
                 id,
+                note_uuid,
+                revision,
                 title,
                 content_html,
                 main_category,
@@ -842,6 +931,8 @@ def get_note(
             f"""
             SELECT
                 id,
+                note_uuid,
+                revision,
                 title,
                 content_html,
                 main_category,
@@ -864,6 +955,8 @@ def get_note(
 EXPORT_NOTE_SELECT = """
 SELECT
     id,
+    note_uuid,
+    revision,
     title,
     content_html,
     main_category,
@@ -975,6 +1068,7 @@ def update_note(
                 main_category = ?,
                 sub_category = ?,
                 sub_sub_category = ?,
+                revision = revision + 1,
                 updated_at = ?
             WHERE id = ? AND is_deleted = 0
             """,
@@ -1055,6 +1149,7 @@ def save_editor_state(
                 sub_sub_category = ?,
                 tags = ?,
                 ai_visibility = ?,
+                revision = revision + 1,
                 updated_at = ?
             WHERE id = ? AND is_deleted = 0
             """,
@@ -1278,6 +1373,7 @@ def restore_note(note_id: int, database_path: Path = DATABASE_PATH) -> dict:
                 deleted_at = NULL,
                 trash_group_id = NULL,
                 directory_id = ?,
+                revision = revision + 1,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -1404,7 +1500,7 @@ def set_note_pinned(
         connection.execute(
             """
             UPDATE notes
-            SET is_pinned = ?, updated_at = ?
+            SET is_pinned = ?, revision = revision + 1, updated_at = ?
             WHERE id = ? AND is_deleted = 0
             """,
             (1 if pinned else 0, timestamp, note_id),
@@ -1424,7 +1520,7 @@ def set_note_ai_visibility(
         connection.execute(
             """
             UPDATE notes
-            SET ai_visibility = ?, updated_at = ?
+            SET ai_visibility = ?, revision = revision + 1, updated_at = ?
             WHERE id = ? AND is_deleted = 0
             """,
             (clean_visibility, timestamp, note_id),
@@ -1451,6 +1547,10 @@ def set_note_ai_targets(
             raise ValueError(f"笔记不存在或已删除: {note_id}")
         _set_note_ai_targets_with_connection(
             connection, note_id, normalized_target_ids, timestamp
+        )
+        connection.execute(
+            "UPDATE notes SET revision = revision + 1 WHERE id = ?",
+            (note_id,),
         )
     return [AI_TARGET_DISPLAY_BY_ID[target_id] for target_id in normalized_target_ids]
 
@@ -1510,10 +1610,11 @@ def create_ai_receipt_inbox_item(
                 ai_visibility, ai_targets, body, created_at, updated_at,
                 parse_error, request_id, actor_target_id, operation_type,
                 target_note_id, expected_updated_at, operation_payload,
-                result_status
+                result_status, external_submission_id, idempotency_key,
+                accepted_note_uuid
             )
             VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 receipt.get("raw_text", ""),
@@ -1538,6 +1639,9 @@ def create_ai_receipt_inbox_item(
                 receipt.get("expected_updated_at"),
                 receipt.get("operation_payload", ""),
                 receipt.get("result_status"),
+                receipt.get("external_submission_id"),
+                receipt.get("idempotency_key"),
+                receipt.get("accepted_note_uuid"),
             ),
         )
         inbox_id = cursor.lastrowid
@@ -1545,6 +1649,79 @@ def create_ai_receipt_inbox_item(
     if inbox_item is None:
         raise RuntimeError("导入回执后读取失败")
     return inbox_item
+
+
+def create_gale_submission(
+    *,
+    external_submission_id: str,
+    title: str,
+    body: str,
+    main_category: str = DEFAULT_MAIN_CATEGORY,
+    sub_category: str = DEFAULT_SUB_CATEGORY,
+    sub_sub_category: str = DEFAULT_SUB_SUB_CATEGORY,
+    tags: list[str] | None = None,
+    idempotency_key: str | None = None,
+    database_path: Path = DATABASE_PATH,
+) -> dict:
+    external_id = str(external_submission_id or "").strip()
+    if not external_id:
+        raise ValueError("Gale 投稿必须提供外部投稿 ID。")
+    stable_key = str(idempotency_key or external_id).strip()
+    if not stable_key:
+        raise ValueError("Gale 投稿必须提供幂等键。")
+
+    timestamp = now_shanghai_iso()
+    normalized_tags = _normalize_note_tags(tags or [])
+    with _connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM ai_receipt_inbox
+            WHERE source = 'Gale'
+              AND (
+                    external_submission_id = ?
+                    OR idempotency_key = ?
+              )
+            ORDER BY id
+            LIMIT 1
+            """,
+            (external_id, stable_key),
+        ).fetchone()
+        if existing is None:
+            cursor = connection.execute(
+                """
+                INSERT INTO ai_receipt_inbox (
+                    raw_text, parse_status, status, source, action, title,
+                    main_category, sub_category, sub_sub_category, tags,
+                    ai_visibility, ai_targets, body, created_at, updated_at,
+                    parse_error, external_submission_id, idempotency_key
+                )
+                VALUES (
+                    '', 'parsed', 'pending', 'Gale', '投稿', ?, ?, ?, ?, ?,
+                    'hidden', '', ?, ?, ?, '', ?, ?
+                )
+                """,
+                (
+                    str(title or "").strip(),
+                    str(main_category or "").strip() or DEFAULT_MAIN_CATEGORY,
+                    str(sub_category or "").strip() or DEFAULT_SUB_CATEGORY,
+                    str(sub_sub_category or "").strip() or DEFAULT_SUB_SUB_CATEGORY,
+                    ", ".join(normalized_tags),
+                    str(body or ""),
+                    timestamp,
+                    timestamp,
+                    external_id,
+                    stable_key,
+                ),
+            )
+            inbox_id = int(cursor.lastrowid)
+        else:
+            inbox_id = int(existing["id"])
+    submission = get_ai_receipt_inbox_item(inbox_id, database_path)
+    if submission is None:
+        raise RuntimeError("写入 Gale 投稿后读取失败")
+    return submission
 
 
 def list_ai_receipt_inbox_items(
@@ -1564,13 +1741,16 @@ def list_ai_receipt_inbox_items(
                    ai_visibility, ai_targets, note_id, created_at,
                    updated_at, decided_at, parse_error, request_id,
                    actor_target_id, operation_type, target_note_id,
-                   expected_updated_at, result_status
+                   expected_updated_at, result_status,
+                   external_submission_id, idempotency_key,
+                   accepted_note_uuid
             FROM ai_receipt_inbox
             {status_clause}
             ORDER BY
                 CASE status
                     WHEN 'pending' THEN 0
                     WHEN 'accepted' THEN 1
+                    WHEN 'discarded' THEN 2
                     WHEN 'rejected' THEN 2
                     ELSE 3
                 END,
@@ -1593,7 +1773,9 @@ def get_ai_receipt_inbox_item(
                    ai_visibility, ai_targets, body, note_id, created_at,
                    updated_at, decided_at, parse_error, request_id,
                    actor_target_id, operation_type, target_note_id,
-                   expected_updated_at, operation_payload, result_status
+                   expected_updated_at, operation_payload, result_status,
+                   external_submission_id, idempotency_key,
+                   accepted_note_uuid
             FROM ai_receipt_inbox
             WHERE id = ?
             """,
@@ -1675,7 +1857,19 @@ def accept_ai_receipt_inbox_item(
         ).fetchone()
         if receipt is None:
             raise ValueError(f"AI 回执不存在: {inbox_id}")
+        is_gale_submission = (
+            str(receipt["source"] or "").strip().casefold() == "gale"
+            and bool(receipt["external_submission_id"] or receipt["idempotency_key"])
+        )
         if receipt["status"] != "pending":
+            if (
+                is_gale_submission
+                and receipt["status"] == "accepted"
+                and receipt["note_id"]
+            ):
+                note = get_note(int(receipt["note_id"]), database_path)
+                if note is not None:
+                    return {"receipt": dict(receipt), "note": note}
             raise ValueError("该回执已处理，不能重复入库。")
         if receipt["parse_status"] != "parsed" and not allow_failed_parse:
             raise ValueError("该回执解析失败，需要人工确认后才能入库。")
@@ -1745,16 +1939,19 @@ def accept_ai_receipt_inbox_item(
 
         directory_id = _ensure_directory_path(connection, main, sub, sub_sub)
         content_html = _plain_text_to_html(values["body"])
+        note_uuid = str(uuid.uuid4())
         note_cursor = connection.execute(
             """
             INSERT INTO notes (
+                note_uuid, revision,
                 directory_id, title, body_rich_text, content_html,
                 main_category, sub_category, sub_sub_category, tags,
                 ai_visibility, is_pinned, is_deleted, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
+            VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
             """,
             (
+                note_uuid,
                 directory_id,
                 title,
                 content_html,
@@ -1778,10 +1975,11 @@ def accept_ai_receipt_inbox_item(
         accepted_cursor = connection.execute(
             """
             UPDATE ai_receipt_inbox
-            SET status = 'accepted', note_id = ?, updated_at = ?, decided_at = ?
+            SET status = 'accepted', note_id = ?, accepted_note_uuid = ?,
+                updated_at = ?, decided_at = ?
             WHERE id = ? AND status = 'pending'
             """,
-            (note_id, timestamp, timestamp, inbox_id),
+            (note_id, note_uuid, timestamp, timestamp, inbox_id),
         )
         if accepted_cursor.rowcount != 1:
             raise ValueError("该回执已处理，不能重复入库。")
@@ -1802,19 +2000,26 @@ def reject_ai_receipt_inbox_item(
     current = get_ai_receipt_inbox_item(inbox_id, database_path)
     if current is None:
         raise ValueError(f"AI 回执不存在: {inbox_id}")
+    is_gale_submission = (
+        str(current["source"] or "").strip().casefold() == "gale"
+        and bool(current["external_submission_id"] or current["idempotency_key"])
+    )
     if current["status"] != "pending":
+        if is_gale_submission and current["status"] == "discarded":
+            return current
         raise ValueError("该回执已处理，不能重复拒绝。")
+    next_status = "discarded" if is_gale_submission else "rejected"
     timestamp = now_shanghai_iso()
     with _connect(database_path) as connection:
-        connection.execute(
+        cursor = connection.execute(
             """
             UPDATE ai_receipt_inbox
-            SET status = 'rejected', updated_at = ?, decided_at = ?
+            SET status = ?, updated_at = ?, decided_at = ?
             WHERE id = ? AND status = 'pending'
             """,
-            (timestamp, timestamp, inbox_id),
+            (next_status, timestamp, timestamp, inbox_id),
         )
-        if connection.total_changes == 0:
+        if cursor.rowcount != 1:
             raise ValueError("该回执已处理，不能重复拒绝。")
     receipt = get_ai_receipt_inbox_item(inbox_id, database_path)
     if receipt is None:
@@ -1865,6 +2070,10 @@ def set_note_tags(
             raise ValueError(f"笔记不存在或已删除: {note_id}")
         _set_note_tags_with_connection(
             connection, note_id, normalized_tags, timestamp
+        )
+        connection.execute(
+            "UPDATE notes SET revision = revision + 1 WHERE id = ?",
+            (note_id,),
         )
     return normalized_tags
 
@@ -2227,7 +2436,9 @@ def _rename_notes_for_directory_path(
         connection.execute(
             f"""
             UPDATE notes
-            SET {target_column} = ?, updated_at = ?
+            SET {target_column} = ?,
+                revision = revision + 1,
+                updated_at = ?
             WHERE id = ? AND is_deleted = 0
             """,
             (new_name, timestamp, row["id"]),
@@ -2264,6 +2475,7 @@ def _soft_delete_notes_under_path(
             SET directory_id = NULL,
                 is_deleted = 1,
                 deleted_at = ?,
+                revision = revision + 1,
                 updated_at = ?,
                 trash_group_id = ?
             WHERE id = ? AND is_deleted = 0
@@ -2319,6 +2531,7 @@ def _restore_notes_under_path(
                 is_deleted = 0,
                 deleted_at = NULL,
                 trash_group_id = NULL,
+                revision = revision + 1,
                 updated_at = ?
             WHERE id = ? AND is_deleted = 1
             """,
