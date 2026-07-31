@@ -13,6 +13,7 @@ from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QWidget
 
 from src.ai_center_dialog import AiCenterDialog
+from src.receipt_inbox_dialog import ReceiptCard, ReceiptInboxDialog
 from src.database import (
     _connect,
     accept_ai_receipt_inbox_item,
@@ -303,6 +304,213 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
         self.assertEqual(dialog.property("result"), baseline_result)
         self.assertFalse(hasattr(dialog, "accepted"))
         self.assertFalse(hasattr(dialog, "rejected"))
+
+    def _build_hosted_dialog(self) -> AiCenterDialog:
+        host = QWidget()
+        host.setWindowTitle("Fictional AI Center host")
+        host.show()
+        self.app.processEvents()
+        self.addCleanup(host.close)
+        dialog = AiCenterDialog(host)
+        self.dialogs.append(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self.app.processEvents()
+        return dialog
+
+    def _click_top_tab(self, dialog: AiCenterDialog, index: int) -> None:
+        tab_bar = dialog.tabs.tabBar()
+        QTest.mouseClick(
+            tab_bar,
+            Qt.LeftButton,
+            Qt.NoModifier,
+            tab_bar.tabRect(index).center(),
+        )
+        self.app.processEvents()
+
+    def _assert_top_tab_stays_front(
+        self,
+        dialog: AiCenterDialog,
+        finished: QSignalSpy,
+        destroyed: QSignalSpy,
+        baseline_result: object,
+        pending_identity: int,
+    ) -> None:
+        self.assertTrue(dialog.isVisible())
+        self.assertFalse(dialog.isHidden())
+        self.assertTrue(dialog.isActiveWindow())
+        self.assertIs(QApplication.activeWindow(), dialog)
+        self.assertEqual(dialog.tabs.currentIndex(), 0)
+        self.assertEqual(finished.count(), 0)
+        self.assertEqual(destroyed.count(), 0)
+        self.assertEqual(dialog.property("result"), baseline_result)
+        self.assertFalse(hasattr(dialog, "accepted"))
+        self.assertFalse(hasattr(dialog, "rejected"))
+        self.assertEqual(id(dialog.pending_page), pending_identity)
+        self.assertEqual(
+            len(dialog.findChildren(ReceiptInboxDialog)),
+            1,
+        )
+        self.assertEqual(
+            len(dialog.pending_page.cards),
+            len(set(dialog.pending_page.cards)),
+        )
+        rendered_cards = dialog.pending_page.findChildren(ReceiptCard)
+        self.assertEqual(len(rendered_cards), len(dialog.pending_page.cards))
+        self.assertEqual(
+            {id(card) for card in rendered_cards},
+            {id(card) for card in dialog.pending_page.cards.values()},
+        )
+
+    def test_each_top_tab_returns_to_receipt_without_deactivating(self) -> None:
+        self._submission("TOP_TAB_RETURN")
+        dialog = self._build_hosted_dialog()
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+        pending_identity = id(dialog.pending_page)
+
+        for source_index, source_name in (
+            (1, "history"),
+            (2, "log"),
+            (3, "settings"),
+        ):
+            with self.subTest(source=source_name):
+                dialog.raise_()
+                dialog.activateWindow()
+                self.app.processEvents()
+                self._click_top_tab(dialog, source_index)
+                self.assertEqual(dialog.tabs.currentIndex(), source_index)
+                self.assertTrue(dialog.isVisible())
+                self.assertTrue(dialog.isActiveWindow())
+                self._click_top_tab(dialog, 0)
+                self._assert_top_tab_stays_front(
+                    dialog,
+                    finished,
+                    destroyed,
+                    baseline_result,
+                    pending_identity,
+                )
+
+    def test_top_tab_cycle_ten_rounds_has_one_refresh_per_return(self) -> None:
+        submission = self._submission("TOP_TAB_TEN_CYCLES")
+        dialog = self._build_hosted_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        changed = QSignalSpy(dialog.tabs.currentChanged)
+        baseline_result = dialog.property("result")
+        pending_identity = id(page)
+        refresh_count = 0
+        original_refresh = page.refresh_receipt_list
+
+        def counted_refresh() -> None:
+            nonlocal refresh_count
+            refresh_count += 1
+            original_refresh()
+
+        page.refresh_receipt_list = counted_refresh
+        with patch("src.ai_center_dialog.QMessageBox.warning") as warning:
+            for _round in range(10):
+                for index in (1, 0, 2, 0, 3, 0):
+                    self._click_top_tab(dialog, index)
+                    self.assertTrue(dialog.isVisible())
+                    self.assertFalse(dialog.isHidden())
+                    self.assertTrue(dialog.isActiveWindow())
+                    if index == 0:
+                        self._assert_top_tab_stays_front(
+                            dialog,
+                            finished,
+                            destroyed,
+                            baseline_result,
+                            pending_identity,
+                        )
+
+        warning.assert_not_called()
+        self.assertEqual(changed.count(), 60)
+        self.assertEqual(refresh_count, 30)
+        self.assertEqual(set(page.cards), {submission["id"]})
+        self.assertEqual(len(page.cards), 1)
+
+    def test_accept_and_discard_survive_top_tab_returns(self) -> None:
+        discard_submission = self._submission("TOP_TAB_DISCARD")
+        accept_submission = self._submission("TOP_TAB_ACCEPT")
+        dialog = self._build_hosted_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+        pending_identity = id(page)
+
+        with patch("src.receipt_inbox_dialog.QMessageBox.information") as information:
+            QTest.mouseClick(
+                page.cards[discard_submission["id"]].reject_button,
+                Qt.LeftButton,
+            )
+            self.app.processEvents()
+            self._click_top_tab(dialog, 1)
+            self._click_top_tab(dialog, 0)
+            self._assert_top_tab_stays_front(
+                dialog,
+                finished,
+                destroyed,
+                baseline_result,
+                pending_identity,
+            )
+
+            QTest.mouseClick(
+                page.cards[accept_submission["id"]].accept_button,
+                Qt.LeftButton,
+            )
+            self.app.processEvents()
+            self._click_filter(dialog, "processed")
+            self.app.processEvents()
+            self._click_top_tab(dialog, 2)
+            self._click_top_tab(dialog, 0)
+            self._assert_top_tab_stays_front(
+                dialog,
+                finished,
+                destroyed,
+                baseline_result,
+                pending_identity,
+            )
+
+        information.assert_not_called()
+        self.assertEqual(self._status_count("pending"), 0)
+        self.assertEqual(self._status_count("discarded"), 1)
+        self.assertEqual(self._status_count("accepted"), 1)
+        self.assertEqual(self._note_count(), 1)
+        self.assertEqual(
+            set(page.cards),
+            {discard_submission["id"], accept_submission["id"]},
+        )
+        self.assertEqual(len(page.cards), 2)
+
+    def test_receipt_refresh_failure_keeps_top_window_and_existing_page(self) -> None:
+        submission = self._submission("TOP_TAB_REFRESH_FAILURE")
+        dialog = self._build_hosted_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+        pending_identity = id(page)
+        original_cards = set(page.cards)
+        self._click_top_tab(dialog, 1)
+
+        with patch(
+            "src.receipt_inbox_dialog.list_ai_receipt_inbox_items",
+            side_effect=RuntimeError("forced receipt refresh failure"),
+        ), patch("src.ai_center_dialog.QMessageBox.warning") as warning:
+            self._click_top_tab(dialog, 0)
+
+        warning.assert_called_once()
+        self._assert_top_tab_stays_front(
+            dialog,
+            finished,
+            destroyed,
+            baseline_result,
+            pending_identity,
+        )
+        self.assertEqual(original_cards, {submission["id"]})
+        self.assertEqual(set(page.cards), original_cards)
+        self.assertEqual(self._status_count("pending"), 1)
 
     def test_filter_switches_five_times_without_closing_ai_center(self) -> None:
         submission = self._submission("FILTER_LIFECYCLE")

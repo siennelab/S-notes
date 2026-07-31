@@ -431,6 +431,9 @@ class ReceiptInboxDialog(QWidget):
             self._show_empty_state()
             return
 
+        if self._matches_rendered_receipts(receipts):
+            return
+
         new_scroll, new_cards = self._build_cards_page(receipts)
         old_scroll = self.scroll
         self.cards = new_cards
@@ -442,6 +445,15 @@ class ReceiptInboxDialog(QWidget):
             self.content_stack.removeWidget(old_scroll)
             old_scroll.setEnabled(False)
             QTimer.singleShot(0, old_scroll.deleteLater)
+
+    def _matches_rendered_receipts(self, receipts: list[dict]) -> bool:
+        receipt_ids = [int(receipt["id"]) for receipt in receipts]
+        if self.scroll is None or list(self.cards) != receipt_ids:
+            return False
+        return all(
+            self.cards[receipt_id].receipt == receipt
+            for receipt_id, receipt in zip(receipt_ids, receipts, strict=True)
+        )
 
     def _build_cards_page(
         self, receipts: list[dict]

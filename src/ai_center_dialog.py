@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QMetaObject, QSize, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -119,13 +119,32 @@ class AiCenterDialog(QWidget):
 
     def refresh_current_tab(self, index: int) -> None:
         if index == 0:
-            self.pending_page.refresh_receipt_list()
+            QMetaObject.invokeMethod(
+                self,
+                "_refresh_receipt_page",
+                Qt.QueuedConnection,
+            )
         elif index == 1:
             self.refresh_history()
         elif index == 2:
             self.refresh_logs()
         elif index == 3:
             self.refresh_settings()
+
+    @Slot()
+    def _refresh_receipt_page(self) -> None:
+        try:
+            self.pending_page.refresh_receipt_list()
+        except Exception as error:
+            QMessageBox.warning(self, "刷新待确认失败", str(error))
+        finally:
+            self._restore_top_level_activation()
+
+    def _restore_top_level_activation(self) -> None:
+        if not self.isVisible() or self.isActiveWindow():
+            return
+        self.raise_()
+        self.activateWindow()
 
     def _build_history_page(self) -> QWidget:
         page = QWidget()
