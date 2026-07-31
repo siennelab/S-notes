@@ -18,7 +18,7 @@ case "${1-}" in
             exit 2
         fi
         case "$3" in
-            ""|0*|*[^0-9]*)
+            ""|0*|*[!0-9]*)
                 echo "OUTBOX_STATUS=FAIL" >&2
                 echo "ERROR_CODE=invalid_receipt_id" >&2
                 exit 2

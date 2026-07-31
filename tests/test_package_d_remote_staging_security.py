@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import shutil
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 import uuid
@@ -282,6 +284,62 @@ class PackageDRemoteStagingSecurityTest(unittest.TestCase):
             )
         self.assertEqual(outbox_status(self.outbox)["delivered"], 1)
 
+    def test_ack_cli_positional_arguments_succeed_without_leaking_payload(
+        self,
+    ) -> None:
+        secret_markers = (
+            "FICTIONAL_ACK_TITLE_MUST_NOT_LEAK",
+            "FICTIONAL_ACK_BODY_MUST_NOT_LEAK",
+            "FICTIONAL_ACK_KEY_MUST_NOT_LEAK",
+        )
+        submission, _duplicate = create_submission(
+            self.outbox,
+            title=secret_markers[0],
+            content=secret_markers[1],
+            suggested_directory="fictional/private/path",
+            suggested_tags=["fictional-private-tag"],
+            idempotency_key=secret_markers[2],
+        )
+        export_unacknowledged(self.outbox)
+        success_output = io.StringIO()
+        with contextlib.redirect_stdout(success_output):
+            self.assertEqual(
+                outbox_main(
+                    [
+                        "--database",
+                        str(self.outbox),
+                        "ack",
+                        submission.submission_uuid,
+                        "1",
+                    ]
+                ),
+                0,
+            )
+        self.assertEqual(outbox_status(self.outbox)["acknowledged"], 1)
+        for marker in secret_markers:
+            self.assertNotIn(marker, success_output.getvalue())
+
+        failure_output = io.StringIO()
+        with contextlib.redirect_stderr(failure_output):
+            self.assertEqual(
+                outbox_main(
+                    [
+                        "--database",
+                        str(self.outbox),
+                        "ack",
+                        str(uuid.uuid4()),
+                        "1",
+                    ]
+                ),
+                2,
+            )
+        self.assertEqual(
+            failure_output.getvalue(),
+            "OUTBOX_STATUS=FAIL\nERROR_CODE=submission_not_found\n",
+        )
+        for marker in secret_markers:
+            self.assertNotIn(marker, failure_output.getvalue())
+
     def test_wrapper_has_fixed_command_and_database_allowlist(self) -> None:
         wrapper = (
             Path(__file__).resolve().parents[1]
@@ -314,7 +372,8 @@ class PackageDRemoteStagingSecurityTest(unittest.TestCase):
         self.assertIn('case "${1-}" in', production_wrapper)
         self.assertIn("export|status)", production_wrapper)
         self.assertIn("ack)", production_wrapper)
-        self.assertIn('""|0*|*[^0-9]*)', production_wrapper)
+        self.assertIn('""|0*|*[!0-9]*)', production_wrapper)
+        self.assertNotIn('*[^0-9]*', production_wrapper)
         self.assertIn('[ "${#3}" -gt 19 ]', production_wrapper)
         self.assertIn(
             "--database /var/lib/snotes-gale-r1b-production/outbox.db",
@@ -324,6 +383,35 @@ class PackageDRemoteStagingSecurityTest(unittest.TestCase):
         self.assertNotIn("eval ", production_wrapper)
         self.assertNotIn("sh -c", production_wrapper)
         self.assertEqual(production_wrapper.count("--database "), 1)
+
+        dash = shutil.which("dash")
+        if dash is not None:
+            guard = (
+                'case "$1" in ""|0*|*[!0-9]*) exit 2;; '
+                '*) exit 0;; esac'
+            )
+            for receipt_id in ("1", "42", "9999999999999999999"):
+                with self.subTest(receipt_id=receipt_id):
+                    self.assertEqual(
+                        subprocess.run(
+                            [dash, "-c", guard, "receipt-guard", receipt_id],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        ).returncode,
+                        0,
+                    )
+            for receipt_id in ("", "01", "1x", "1\n2"):
+                with self.subTest(rejected_receipt_id=receipt_id):
+                    self.assertEqual(
+                        subprocess.run(
+                            [dash, "-c", guard, "receipt-guard", receipt_id],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        ).returncode,
+                        2,
+                    )
 
         unit = (
             Path(__file__).resolve().parents[1]
