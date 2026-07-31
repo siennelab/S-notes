@@ -31,6 +31,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadOnlyPaths=/opt/snotes-gale-mcp-oidc-staging
 ReadOnlyPaths=/var/lib/snotes-gale-mcp/mirror
 ReadWritePaths=/var/lib/snotes-gale-mcp-oidc-staging/oauth
+ReadWritePaths=/var/lib/snotes-gale-r1b-production
 RuntimeDirectory=snotes-gale-mcp-oidc-staging
 RuntimeDirectoryMode=0700
 

@@ -16,6 +16,8 @@ from typing import Any
 
 OUTBOX_SCHEMA_VERSION = 1
 GALE_STAGING_ACTOR = "gale-staging"
+GALE_PRODUCTION_ACTOR = "gale"
+GALE_SOURCE_ACTORS = frozenset({GALE_STAGING_ACTOR, GALE_PRODUCTION_ACTOR})
 DELIVERY_STATES = frozenset({"queued", "delivered", "acknowledged"})
 MAX_TITLE_LENGTH = 200
 MAX_CONTENT_LENGTH = 50_000
@@ -81,7 +83,7 @@ SUBMISSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS submissions (
     submission_uuid TEXT PRIMARY KEY,
     source_actor TEXT NOT NULL
-        CHECK (source_actor = 'gale-staging'),
+        CHECK (source_actor IN ('gale-staging', 'gale')),
     external_submission_id TEXT NOT NULL UNIQUE,
     idempotency_key TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL
@@ -155,12 +157,14 @@ def create_submission(
     suggested_directory: str = "",
     suggested_tags: list[str] | tuple[str, ...] | None = None,
     idempotency_key: str | None = None,
+    source_actor: str = GALE_STAGING_ACTOR,
 ) -> tuple[GaleSubmission, bool]:
     path = _validated_database_path(database_path)
     normalized_title = _required_text(title, "title", MAX_TITLE_LENGTH)
     normalized_content = _required_text(content, "content", MAX_CONTENT_LENGTH)
     normalized_directory = _normalize_directory(suggested_directory)
     normalized_tags = _normalize_tags(suggested_tags or ())
+    normalized_actor = _validated_source_actor(source_actor)
     normalized_key = _optional_text(
         idempotency_key,
         "idempotency_key",
@@ -184,6 +188,8 @@ def create_submission(
             (stable_key,),
         ).fetchone()
         if existing is not None:
+            if str(existing["source_actor"]) != normalized_actor:
+                raise GaleSubmissionOutboxError("idempotency_actor_conflict")
             connection.commit()
             return _submission_from_row(existing), True
         try:
@@ -198,7 +204,7 @@ def create_submission(
                 """,
                 (
                     submission_uuid,
-                    GALE_STAGING_ACTOR,
+                    normalized_actor,
                     submission_uuid,
                     stable_key,
                     normalized_title,
@@ -223,6 +229,8 @@ def create_submission(
             ).fetchone()
             if existing is None:
                 raise
+            if str(existing["source_actor"]) != normalized_actor:
+                raise GaleSubmissionOutboxError("idempotency_actor_conflict")
             connection.commit()
             return _submission_from_row(existing), True
         row = connection.execute(
@@ -497,6 +505,12 @@ def _validated_uuid(value: object) -> str:
     except (ValueError, TypeError, AttributeError) as error:
         raise GaleSubmissionOutboxError("invalid_submission_uuid") from error
     return str(parsed)
+
+
+def _validated_source_actor(value: object) -> str:
+    if not isinstance(value, str) or value not in GALE_SOURCE_ACTORS:
+        raise GaleSubmissionOutboxError("source_actor_invalid")
+    return value
 
 
 def _submission_from_row(row: sqlite3.Row) -> GaleSubmission:

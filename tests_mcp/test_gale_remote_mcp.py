@@ -57,13 +57,21 @@ from src.services.gale_oauth import (
     build_auth0_provider,
 )
 from src.services.gale_remote_service import (
+    GALE_WRITE_SCOPE,
     GaleRemoteConfig,
     GaleRemoteError,
     _open_remote_mirror,
     get_remote_note,
     search_remote_mirror,
     validate_remote_auth_binding,
+    validate_initialized_production_outbox,
+    validate_production_outbox_location,
     validate_remote_mirror,
+)
+from src.services.gale_submission_outbox import (
+    GALE_PRODUCTION_ACTOR,
+    get_submission,
+    outbox_status,
 )
 from src.time_utils import now_shanghai_iso
 
@@ -111,6 +119,9 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
         self.mirror_root = self.root / "mirror"
         self.mirror_root.mkdir()
         self.mirror = self.mirror_root / "gale-mirror.db"
+        self.outbox_root = self.root / "production-outbox"
+        self.outbox_root.mkdir(mode=0o700)
+        self.outbox = self.outbox_root / "outbox.db"
         self.oauth_storage = self.root / "oauth-storage"
         self.oauth_storage.mkdir(mode=0o700)
         initialize_database(self.source)
@@ -141,6 +152,8 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             jwks_url=f"{ISSUER}.well-known/jwks.json",
             allowed_subjects=frozenset({SUBJECT}),
             expected_owner_uid=os.geteuid(),
+            outbox_root=self.outbox_root,
+            outbox_path=self.outbox,
         )
         self.private_key = rsa.generate_private_key(
             public_exponent=65537,
@@ -321,12 +334,18 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             tools = await session.list_tools()
             self.assertEqual(
                 [tool.name for tool in tools],
-                ["search_notes", "get_note"],
+                ["search_notes", "get_note", "create_note_submission"],
             )
             for tool in tools:
-                self.assertTrue(tool.annotations.readOnlyHint)
+                self.assertEqual(
+                    tool.annotations.readOnlyHint,
+                    tool.name != "create_note_submission",
+                )
                 self.assertFalse(tool.annotations.destructiveHint)
-                self.assertTrue(tool.annotations.idempotentHint)
+                self.assertEqual(
+                    tool.annotations.idempotentHint,
+                    tool.name != "create_note_submission",
+                )
                 self.assertFalse(
                     tool.inputSchema.get("additionalProperties", True)
                 )
@@ -338,8 +357,28 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(tool.outputSchema)
                 self.assertEqual(
                     tool.meta["securitySchemes"],
-                    [{"type": "oauth2", "scopes": ["gale.read"]}],
+                    [
+                        {
+                            "type": "oauth2",
+                            "scopes": (
+                                ["gale.read", "gale.write"]
+                                if tool.name == "create_note_submission"
+                                else ["gale.read"]
+                            ),
+                        }
+                    ],
                 )
+            create_schema = tools[2].inputSchema["properties"]
+            self.assertEqual(
+                set(create_schema),
+                {
+                    "title",
+                    "content",
+                    "suggested_directory",
+                    "suggested_tags",
+                    "idempotency_key",
+                },
+            )
 
             for term in (
                 "ORBITAL_TITLE_TERM",
@@ -447,7 +486,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(metadata.json()["resource"], RESOURCE)
                 self.assertEqual(
                     metadata.json()["scopes_supported"],
-                    ["gale.read"],
+                    ["gale.read", "gale.write"],
                 )
                 root_metadata = await client.get(
                     "/.well-known/oauth-protected-resource"
@@ -520,6 +559,11 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_signature_subject_scope_and_log_redaction(self) -> None:
         self.assertIsNotNone(await self.verifier.verify_token(self._token()))
+        self.assertIsNotNone(
+            await self.verifier.verify_token(
+                self._token(scope="gale.read gale.write")
+            )
+        )
         rejected_tokens = (
             self._token(sub="auth0|unauthorized-fictional-user"),
             self._token(exp=int(time.time()) - 120),
@@ -527,7 +571,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             self._token(aud="https://wrong.example.test/mcp"),
             self._token(scope="openid offline_access"),
             self._token(nbf=int(time.time()) + 600),
-            self._token(scope="gale.read gale.write"),
+            self._token(scope="gale.read unknown.scope"),
         )
         for token in rejected_tokens:
             self.assertIsNone(await self.verifier.verify_token(token))
@@ -657,15 +701,19 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 tool_payloads = tools.json()["result"]["tools"]
                 self.assertEqual(
                     [tool["name"] for tool in tool_payloads],
-                    ["search_notes", "get_note"],
+                    ["search_notes", "get_note", "create_note_submission"],
                 )
-                expected_security_schemes = [
-                    {
-                        "type": "oauth2",
-                        "scopes": ["gale.read"],
-                    }
-                ]
                 for tool in tool_payloads:
+                    expected_security_schemes = [
+                        {
+                            "type": "oauth2",
+                            "scopes": (
+                                ["gale.read", "gale.write"]
+                                if tool["name"] == "create_note_submission"
+                                else ["gale.read"]
+                            ),
+                        }
+                    ]
                     self.assertIn("securitySchemes", tool)
                     self.assertIn("_meta", tool)
                     self.assertIn("securitySchemes", tool["_meta"])
@@ -719,6 +767,18 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             },
                         },
                     )
+                    anonymous_write = await self._rpc(
+                        client,
+                        request_id=46,
+                        method="tools/call",
+                        params={
+                            "name": "create_note_submission",
+                            "arguments": {
+                                "title": "FICTIONAL_ANONYMOUS_WRITE",
+                                "content": "Fictional anonymous write content.",
+                            },
+                        },
+                    )
                     for response in (anonymous_search, anonymous_read):
                         self.assertEqual(response.status_code, 200)
                         result = response.json()["result"]
@@ -742,6 +802,14 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             'gale.read is required."',
                             challenges[0],
                         )
+                    anonymous_write_result = anonymous_write.json()["result"]
+                    self.assertTrue(anonymous_write_result["isError"])
+                    self.assertIn(
+                        "gale.read and gale.write is required",
+                        anonymous_write_result["_meta"]
+                        ["mcp/www_authenticate"][0],
+                    )
+                    self.assertEqual(outbox_status(self.outbox)["queued"], 0)
                     search_query.assert_not_called()
                     read_query.assert_not_called()
 
@@ -751,6 +819,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                         "tools": tools.json(),
                         "search": anonymous_search.json(),
                         "read": anonymous_read.json(),
+                        "write": anonymous_write.json(),
                     },
                     ensure_ascii=False,
                 )
@@ -803,6 +872,64 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     ]["status"],
                     "ok",
                 )
+
+                write_arguments = {
+                    "title": "FICTIONAL_PRODUCTION_SUBMISSION",
+                    "content": "Fictional production submission content.",
+                    "suggested_directory": "虚构测试/Gale 投稿/待确认",
+                    "suggested_tags": ["虚构", "production"],
+                    "idempotency_key": "fictional-production-stable-key",
+                }
+                read_only_write = await self._rpc(
+                    client,
+                    request_id=48,
+                    method="tools/call",
+                    params={
+                        "name": "create_note_submission",
+                        "arguments": write_arguments,
+                    },
+                    token=self._token(),
+                )
+                self.assertTrue(read_only_write.json()["result"]["isError"])
+                self.assertEqual(outbox_status(self.outbox)["queued"], 0)
+
+                write_token = self._token(scope="gale.read gale.write")
+                created = await self._rpc(
+                    client,
+                    request_id=49,
+                    method="tools/call",
+                    params={
+                        "name": "create_note_submission",
+                        "arguments": write_arguments,
+                    },
+                    token=write_token,
+                )
+                repeated = await self._rpc(
+                    client,
+                    request_id=50,
+                    method="tools/call",
+                    params={
+                        "name": "create_note_submission",
+                        "arguments": write_arguments,
+                    },
+                    token=write_token,
+                )
+                created_content = created.json()["result"]["structuredContent"]
+                repeated_content = repeated.json()["result"]["structuredContent"]
+                self.assertEqual(created_content["status"], "ok")
+                self.assertFalse(created_content["duplicate"])
+                self.assertTrue(repeated_content["duplicate"])
+                self.assertEqual(
+                    created_content["submission_uuid"],
+                    repeated_content["submission_uuid"],
+                )
+                self.assertEqual(outbox_status(self.outbox)["queued"], 1)
+                stored = get_submission(
+                    self.outbox,
+                    created_content["submission_uuid"],
+                )
+                self.assertIsNotNone(stored)
+                self.assertEqual(stored.source_actor, GALE_PRODUCTION_ACTOR)
 
                 rejected_tokens = (
                     "not-a-token",
@@ -1044,7 +1171,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             tool["name"]
                             for tool in tools.json()["result"]["tools"]
                         ],
-                        ["search_notes", "get_note"],
+                        ["search_notes", "get_note", "create_note_submission"],
                     )
                     search = await self._rpc(
                         client,
@@ -1091,7 +1218,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             tool["name"]
                             for tool in no_token.json()["result"]["tools"]
                         ],
-                        ["search_notes", "get_note"],
+                        ["search_notes", "get_note", "create_note_submission"],
                     )
                     wrong_token = await self._rpc(
                         client,
@@ -1320,6 +1447,93 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
             gc.collect()
             await asyncio.sleep(0.05)
+
+    async def test_production_submission_log_redaction(self) -> None:
+        app = build_app(self.config, auth_provider=self.verifier)
+        transport = httpx.ASGITransport(app=app)
+        sensitive_values = (
+            "FICTIONAL_PRIVATE_TITLE",
+            "FICTIONAL_PRIVATE_CONTENT",
+            "FICTIONAL_PRIVATE_DIRECTORY",
+            "FICTIONAL_PRIVATE_TAG",
+            "fictional-private-idempotency-key",
+            SUBJECT,
+        )
+        with self.assertLogs("snotes_gale_mcp", level="INFO") as captured:
+            async with app.router.lifespan_context(app):
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="https://snotes.example.test",
+                ) as client:
+                    response = await self._rpc(
+                        client,
+                        request_id=200,
+                        method="tools/call",
+                        params={
+                            "name": "create_note_submission",
+                            "arguments": {
+                                "title": sensitive_values[0],
+                                "content": sensitive_values[1],
+                                "suggested_directory": sensitive_values[2],
+                                "suggested_tags": [sensitive_values[3]],
+                                "idempotency_key": sensitive_values[4],
+                            },
+                        },
+                        token=self._token(scope="gale.read gale.write"),
+                    )
+        self.assertEqual(
+            response.json()["result"]["structuredContent"]["status"],
+            "ok",
+        )
+        log_text = "\n".join(captured.output)
+        self.assertIn("tool=create_note_submission", log_text)
+        self.assertIn("status=ok", log_text)
+        for sensitive in sensitive_values:
+            self.assertNotIn(sensitive, log_text)
+        self.assertNotIn(str(self.outbox), log_text)
+
+    def test_production_outbox_location_and_permission_gates(self) -> None:
+        self.assertEqual(
+            validate_production_outbox_location(self.config),
+            self.outbox,
+        )
+        build_server(
+            self.config,
+            auth_provider=AcceptAllTestVerifier(),
+        )
+        self.assertEqual(
+            validate_initialized_production_outbox(self.config),
+            self.outbox.resolve(),
+        )
+        self.assertEqual(self.outbox.stat().st_mode & 0o777, 0o600)
+
+        outside = replace(
+            self.config,
+            outbox_path=self.root / "outbox.db",
+        )
+        with self.assertRaisesRegex(
+            GaleRemoteError,
+            "production_outbox_outside_root",
+        ):
+            validate_production_outbox_location(outside)
+
+        overlapping = replace(
+            self.config,
+            outbox_root=self.mirror_root,
+            outbox_path=self.mirror_root / "outbox.db",
+        )
+        with self.assertRaisesRegex(
+            GaleRemoteError,
+            "production_outbox_overlaps_mirror",
+        ):
+            validate_production_outbox_location(overlapping)
+
+        os.chmod(self.outbox_root, 0o755)
+        with self.assertRaisesRegex(
+            GaleRemoteError,
+            "production_outbox_root_permissions_unsafe",
+        ):
+            validate_initialized_production_outbox(self.config)
 
     def test_oauth_storage_and_key_startup_gates(self) -> None:
         mismatched_resource = replace(

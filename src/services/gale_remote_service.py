@@ -21,12 +21,19 @@ from src.services.gale_mirror_service import (
 
 
 GALE_READ_SCOPE = "gale.read"
+GALE_WRITE_SCOPE = "gale.write"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
 DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 20
 MAX_QUERY_LENGTH = 500
 EXPECTED_MIRROR_NAME = "gale-mirror.db"
+EXPECTED_PRODUCTION_OUTBOX_ROOT = Path(
+    "/var/lib/snotes-gale-r1b-production"
+)
+EXPECTED_PRODUCTION_OUTBOX_PATH = (
+    EXPECTED_PRODUCTION_OUTBOX_ROOT / "outbox.db"
+)
 
 
 class GaleRemoteError(RuntimeError):
@@ -47,6 +54,8 @@ class GaleRemoteConfig:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     expected_owner_uid: int = 0
+    outbox_root: Path | None = None
+    outbox_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,13 @@ def load_gale_remote_config(
     )
     if not allowed_subjects:
         raise GaleRemoteError("allowed_subjects_missing")
+    outbox_root = _required_path(values, "SNOTES_GALE_R1B_OUTBOX_ROOT")
+    outbox_path = _required_path(values, "SNOTES_GALE_R1B_OUTBOX_PATH")
+    if (
+        outbox_root != EXPECTED_PRODUCTION_OUTBOX_ROOT
+        or outbox_path != EXPECTED_PRODUCTION_OUTBOX_PATH
+    ):
+        raise GaleRemoteError("production_outbox_path_not_allowed")
 
     host = values.get("SNOTES_GALE_HOST", DEFAULT_HOST).strip()
     if host != DEFAULT_HOST:
@@ -107,14 +123,71 @@ def load_gale_remote_config(
         host=host,
         port=port,
         expected_owner_uid=expected_owner_uid,
+        outbox_root=outbox_root,
+        outbox_path=outbox_path,
     )
     validate_remote_auth_binding(config)
+    validate_production_outbox_location(config)
     return config
 
 
 def validate_remote_auth_binding(config: GaleRemoteConfig) -> None:
     if config.audience != config.resource_url:
         raise GaleRemoteError("audience_resource_mismatch")
+
+
+def validate_production_outbox_location(config: GaleRemoteConfig) -> Path:
+    if config.outbox_root is None or config.outbox_path is None:
+        raise GaleRemoteError("production_outbox_missing")
+    root = Path(config.outbox_root)
+    path = Path(config.outbox_path)
+    if not root.is_absolute() or not path.is_absolute():
+        raise GaleRemoteError("production_outbox_path_not_absolute")
+    if path.name != "outbox.db":
+        raise GaleRemoteError("unexpected_production_outbox_name")
+    try:
+        resolved_root = root.resolve(strict=False)
+        resolved_path = path.resolve(strict=False)
+        mirror_root = Path(config.mirror_root).resolve(strict=False)
+    except OSError as error:
+        raise GaleRemoteError("production_outbox_path_invalid") from error
+    if resolved_path.parent != resolved_root:
+        raise GaleRemoteError("production_outbox_outside_root")
+    if (
+        resolved_root == mirror_root
+        or resolved_root.is_relative_to(mirror_root)
+        or mirror_root.is_relative_to(resolved_root)
+    ):
+        raise GaleRemoteError("production_outbox_overlaps_mirror")
+    return path
+
+
+def validate_initialized_production_outbox(config: GaleRemoteConfig) -> Path:
+    path = validate_production_outbox_location(config)
+    root = Path(config.outbox_root)
+    if root.is_symlink():
+        raise GaleRemoteError("production_outbox_root_symlink")
+    if path.is_symlink():
+        raise GaleRemoteError("production_outbox_symlink")
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_path = path.resolve(strict=True)
+    except OSError as error:
+        raise GaleRemoteError("production_outbox_unavailable") from error
+    if not resolved_root.is_dir() or not resolved_path.is_file():
+        raise GaleRemoteError("production_outbox_unavailable")
+    root_stat = resolved_root.stat()
+    path_stat = resolved_path.stat()
+    if stat.S_IMODE(root_stat.st_mode) != 0o700:
+        raise GaleRemoteError("production_outbox_root_permissions_unsafe")
+    if stat.S_IMODE(path_stat.st_mode) != 0o600:
+        raise GaleRemoteError("production_outbox_permissions_unsafe")
+    if (
+        root_stat.st_uid != config.expected_owner_uid
+        or path_stat.st_uid != config.expected_owner_uid
+    ):
+        raise GaleRemoteError("production_outbox_owner_unsafe")
+    return resolved_path
 
 
 def validate_remote_mirror(config: GaleRemoteConfig) -> GaleRemoteHealth:

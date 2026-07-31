@@ -3,15 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import re
+import sqlite3
 import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from src.services.gale_submission_outbox import (
+    GALE_PRODUCTION_ACTOR,
     GALE_STAGING_ACTOR,
     MAX_CONTENT_LENGTH,
     MAX_DIRECTORY_LENGTH,
@@ -25,7 +28,13 @@ from src.services.gale_submission_outbox import (
 
 
 REMOTE_SSH_HOST = "oracle-a1"
-REMOTE_OUTBOX_COMMAND = "/usr/local/sbin/snotes-gale-r1b-outbox"
+STAGING_MODE = "staging"
+PRODUCTION_MODE = "production"
+PULL_MODES = (STAGING_MODE, PRODUCTION_MODE)
+REMOTE_OUTBOX_COMMANDS = {
+    STAGING_MODE: "/usr/local/sbin/snotes-gale-r1b-outbox",
+    PRODUCTION_MODE: "/usr/local/sbin/snotes-gale-r1b-production-outbox",
+}
 MAX_TRANSPORT_BYTES = 6 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30
 ISOLATED_ROOT_PREFIX = "snotes-r1b-"
@@ -63,11 +72,15 @@ class SystemSshSubmissionTransport:
         self,
         *,
         host: str = REMOTE_SSH_HOST,
+        mode: Literal["staging", "production"] = STAGING_MODE,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         if host != REMOTE_SSH_HOST:
             raise GaleSubmissionPullError("ssh_host_not_allowed")
+        if mode not in PULL_MODES:
+            raise GaleSubmissionPullError("pull_mode_not_allowed")
         self.host = host
+        self.remote_command = REMOTE_OUTBOX_COMMANDS[mode]
         self.timeout_seconds = int(timeout_seconds)
 
     def export_unacknowledged(self) -> bytes:
@@ -97,7 +110,7 @@ class SystemSshSubmissionTransport:
             "-n",
             "-u",
             "snotes-gale",
-            REMOTE_OUTBOX_COMMAND,
+            self.remote_command,
             *arguments,
         ]
         try:
@@ -141,6 +154,36 @@ def require_isolated_data_root(
     return resolved
 
 
+def require_production_data_root(
+    environment: dict[str, str] | None = None,
+    *,
+    home: Path | None = None,
+) -> Path:
+    values = os.environ if environment is None else environment
+    if "S_NOTES_DATA_ROOT" in values:
+        raise GaleSubmissionPullError("production_data_root_override_forbidden")
+    account_home = (
+        Path(pwd.getpwuid(os.geteuid()).pw_dir)
+        if home is None
+        else Path(home)
+    )
+    root = account_home / "Library" / "Application Support" / "S-notes"
+    if root.is_symlink():
+        raise GaleSubmissionPullError("production_data_root_symlink")
+    try:
+        resolved = root.resolve(strict=True)
+    except OSError as error:
+        raise GaleSubmissionPullError("production_data_root_unavailable") from error
+    if not resolved.is_dir():
+        raise GaleSubmissionPullError("production_data_root_unavailable")
+    if resolved != root:
+        raise GaleSubmissionPullError("production_data_root_not_canonical")
+    database_path = resolved / "s_notes.db"
+    if database_path.is_symlink() or not database_path.is_file():
+        raise GaleSubmissionPullError("production_database_unavailable")
+    return resolved
+
+
 def pull_submissions(
     transport: SubmissionTransport,
     *,
@@ -152,7 +195,67 @@ def pull_submissions(
     )
     expected_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(expected_root, 0o700)
-    database_path = expected_root / "s_notes.db"
+    return _pull_to_validated_root(
+        transport,
+        data_root=expected_root,
+        expected_actor=GALE_STAGING_ACTOR,
+    )
+
+
+def pull_production_submissions(
+    transport: SubmissionTransport,
+) -> PullResult:
+    data_root = require_production_data_root()
+    validate_production_database(data_root)
+    return _pull_to_validated_root(
+        transport,
+        data_root=data_root,
+        expected_actor=GALE_PRODUCTION_ACTOR,
+        initialize_local_database=False,
+    )
+
+
+def validate_production_database(data_root: Path) -> Path:
+    database_path = Path(data_root) / "s_notes.db"
+    if database_path.is_symlink() or not database_path.is_file():
+        raise GaleSubmissionPullError("production_database_unavailable")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(
+            f"{database_path.resolve(strict=True).as_uri()}?mode=ro",
+            uri=True,
+        )
+        connection.execute("PRAGMA query_only = ON")
+        schema_row = connection.execute(
+            "SELECT meta_value FROM schema_meta WHERE meta_key = ?",
+            ("ai_foundation_version",),
+        ).fetchone()
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()
+        foreign_key_rows = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+    except (OSError, sqlite3.Error) as error:
+        raise GaleSubmissionPullError("production_database_invalid") from error
+    finally:
+        if connection is not None:
+            connection.close()
+    if schema_row is None or str(schema_row[0]) != "2":
+        raise GaleSubmissionPullError("production_schema_unsupported")
+    if quick_check is None or str(quick_check[0]) != "ok":
+        raise GaleSubmissionPullError("production_database_integrity_failed")
+    if foreign_key_rows:
+        raise GaleSubmissionPullError("production_database_foreign_keys_failed")
+    return database_path
+
+
+def _pull_to_validated_root(
+    transport: SubmissionTransport,
+    *,
+    data_root: Path,
+    expected_actor: str,
+    initialize_local_database: bool = True,
+) -> PullResult:
+    database_path = Path(data_root) / "s_notes.db"
 
     from src.database import (
         create_gale_submission,
@@ -160,11 +263,15 @@ def pull_submissions(
         list_ai_receipt_inbox_items,
     )
 
-    payload = parse_export_payload(transport.export_unacknowledged())
+    payload = parse_export_payload(
+        transport.export_unacknowledged(),
+        expected_actor=expected_actor,
+    )
     if not payload:
         return PullResult(0, 0, 0, 0)
 
-    initialize_database(database_path)
+    if initialize_local_database:
+        initialize_database(database_path)
     imported_count = 0
     acknowledged_count = 0
     duplicate_count = 0
@@ -219,7 +326,11 @@ def pull_submissions(
     )
 
 
-def parse_export_payload(raw_payload: bytes) -> list[dict[str, Any]]:
+def parse_export_payload(
+    raw_payload: bytes,
+    *,
+    expected_actor: str = GALE_STAGING_ACTOR,
+) -> list[dict[str, Any]]:
     if len(raw_payload) > MAX_TRANSPORT_BYTES:
         raise GaleSubmissionPullError("remote_payload_too_large")
     try:
@@ -234,7 +345,10 @@ def parse_export_payload(raw_payload: bytes) -> list[dict[str, Any]]:
     submissions = payload.get("submissions")
     if not isinstance(submissions, list) or len(submissions) > MAX_EXPORT_COUNT:
         raise GaleSubmissionPullError("remote_payload_invalid")
-    return [_validated_submission(item) for item in submissions]
+    return [
+        _validated_submission(item, expected_actor=expected_actor)
+        for item in submissions
+    ]
 
 
 def parse_status_payload(raw_payload: bytes) -> dict[str, int]:
@@ -256,7 +370,11 @@ def parse_status_payload(raw_payload: bytes) -> dict[str, int]:
     return counts
 
 
-def _validated_submission(value: object) -> dict[str, Any]:
+def _validated_submission(
+    value: object,
+    *,
+    expected_actor: str,
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise GaleSubmissionPullError("remote_submission_invalid")
     required_keys = {
@@ -275,7 +393,9 @@ def _validated_submission(value: object) -> dict[str, Any]:
     if set(value) != required_keys:
         raise GaleSubmissionPullError("remote_submission_invalid")
     submission_uuid = _validated_uuid(value["submission_uuid"])
-    if value["source_actor"] != GALE_STAGING_ACTOR:
+    if expected_actor not in {GALE_STAGING_ACTOR, GALE_PRODUCTION_ACTOR}:
+        raise GaleSubmissionPullError("expected_actor_invalid")
+    if value["source_actor"] != expected_actor:
         raise GaleSubmissionPullError("remote_actor_invalid")
     external_id = _required_text(
         value["external_submission_id"],
@@ -383,6 +503,11 @@ def _validated_local_receipt_id(value: object) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="snotes-gale-r1b-pull")
     parser.add_argument(
+        "--mode",
+        choices=PULL_MODES,
+        default=STAGING_MODE,
+    )
+    parser.add_argument(
         "command",
         choices=("pull", "status"),
         nargs="?",
@@ -390,8 +515,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        data_root = require_isolated_data_root()
-        transport = SystemSshSubmissionTransport()
+        if args.mode == PRODUCTION_MODE:
+            data_root = require_production_data_root()
+            transport = SystemSshSubmissionTransport(mode=PRODUCTION_MODE)
+        else:
+            data_root = require_isolated_data_root()
+            transport = SystemSshSubmissionTransport(mode=STAGING_MODE)
         if args.command == "status":
             status = parse_status_payload(transport.status())
             print("GALE_SUBMISSION_PULL_STATUS=PASS")
@@ -399,7 +528,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REMOTE_DELIVERED_COUNT={status['delivered']}")
             print(f"REMOTE_ACKNOWLEDGED_COUNT={status['acknowledged']}")
             return 0
-        result = pull_submissions(transport, data_root=data_root)
+        if args.mode == PRODUCTION_MODE:
+            result = pull_production_submissions(transport)
+        else:
+            result = pull_submissions(transport, data_root=data_root)
         print("GALE_SUBMISSION_PULL_STATUS=PASS")
         print(f"EXPORTED_COUNT={result.exported_count}")
         print(f"IMPORTED_COUNT={result.imported_count}")

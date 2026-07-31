@@ -21,9 +21,13 @@ from src.gale_submission_pull import (
     parse_export_payload,
     parse_status_payload,
     pull_submissions,
+    pull_production_submissions,
     require_isolated_data_root,
+    require_production_data_root,
 )
 from src.services.gale_submission_outbox import (
+    GALE_PRODUCTION_ACTOR,
+    GALE_STAGING_ACTOR,
     OUTBOX_SCHEMA_VERSION,
     GaleSubmissionOutboxError,
     acknowledge_submission,
@@ -36,8 +40,14 @@ from src.services.gale_submission_outbox import (
 
 
 class FakeOutboxTransport:
-    def __init__(self, database_path: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        *,
+        source_actor: str = GALE_STAGING_ACTOR,
+    ) -> None:
         self.database_path = database_path
+        self.source_actor = source_actor
         self.ack_calls: list[tuple[str, str]] = []
         self.fail_ack_once = False
         self.fail_export = False
@@ -95,17 +105,21 @@ class PackageDRemoteStagingTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.outbox = self.root / "oracle" / "outbox.db"
+        self.production_outbox = self.root / "oracle-production" / "outbox.db"
         self.local_root = self.root / "snotes-r1b-local-inbox"
         initialize_outbox(self.outbox)
+        initialize_outbox(self.production_outbox)
 
     def create_fictional(
         self,
         suffix: str = "001",
         *,
         idempotency_key: str | None = None,
+        database_path: Path | None = None,
+        source_actor: str = GALE_STAGING_ACTOR,
     ):
         return create_submission(
-            self.outbox,
+            database_path or self.outbox,
             title=f"FICTIONAL_REMOTE_GALE_SUBMISSION_{suffix}",
             content=(
                 f"A fictional Oracle outbox submission for R1B staging {suffix}."
@@ -115,6 +129,7 @@ class PackageDRemoteStagingTest(unittest.TestCase):
             idempotency_key=(
                 idempotency_key or f"fictional-remote-r1b-{suffix}"
             ),
+            source_actor=source_actor,
         )
 
     def local_receipts(self) -> list[dict]:
@@ -305,6 +320,104 @@ class PackageDRemoteStagingTest(unittest.TestCase):
             "delivered",
         )
 
+    def test_production_pull_is_isolated_idempotent_and_pending_only(self) -> None:
+        initialize_database(self.local_root / "s_notes.db")
+        production, _duplicate = self.create_fictional(
+            suffix="PRODUCTION",
+            database_path=self.production_outbox,
+            source_actor=GALE_PRODUCTION_ACTOR,
+        )
+        self.create_fictional(suffix="STAGING-SENTINEL")
+        transport = FakeOutboxTransport(
+            self.production_outbox,
+            source_actor=GALE_PRODUCTION_ACTOR,
+        )
+        with patch(
+            "src.gale_submission_pull.require_production_data_root",
+            return_value=self.local_root,
+        ):
+            first = pull_production_submissions(transport)
+            second = pull_production_submissions(transport)
+
+        self.assertEqual(first.imported_count, 1)
+        self.assertEqual(first.acknowledged_count, 1)
+        self.assertEqual(second.exported_count, 0)
+        self.assertEqual(second.imported_count, 0)
+        receipts = self.local_receipts()
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["status"], "pending")
+        self.assertEqual(list_notes(self.local_root / "s_notes.db"), [])
+        self.assertEqual(
+            get_submission(
+                self.production_outbox,
+                production.submission_uuid,
+            ).delivery_state,
+            "acknowledged",
+        )
+        self.assertEqual(outbox_status(self.outbox)["queued"], 1)
+
+    def test_production_pull_never_acks_before_local_commit(self) -> None:
+        initialize_database(self.local_root / "s_notes.db")
+        submission, _duplicate = self.create_fictional(
+            suffix="PRODUCTION-LOCAL-FAILURE",
+            database_path=self.production_outbox,
+            source_actor=GALE_PRODUCTION_ACTOR,
+        )
+        transport = FakeOutboxTransport(
+            self.production_outbox,
+            source_actor=GALE_PRODUCTION_ACTOR,
+        )
+        with (
+            patch(
+                "src.gale_submission_pull.require_production_data_root",
+                return_value=self.local_root,
+            ),
+            patch(
+                "src.database.create_gale_submission",
+                side_effect=RuntimeError("fictional local failure"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fictional local failure"):
+                pull_production_submissions(transport)
+        self.assertEqual(transport.ack_calls, [])
+        self.assertEqual(
+            get_submission(
+                self.production_outbox,
+                submission.submission_uuid,
+            ).delivery_state,
+            "delivered",
+        )
+
+    def test_production_ack_failure_retries_without_duplicate(self) -> None:
+        initialize_database(self.local_root / "s_notes.db")
+        submission, _duplicate = self.create_fictional(
+            suffix="PRODUCTION-ACK-FAILURE",
+            database_path=self.production_outbox,
+            source_actor=GALE_PRODUCTION_ACTOR,
+        )
+        transport = FakeOutboxTransport(
+            self.production_outbox,
+            source_actor=GALE_PRODUCTION_ACTOR,
+        )
+        transport.fail_ack_once = True
+        with patch(
+            "src.gale_submission_pull.require_production_data_root",
+            return_value=self.local_root,
+        ):
+            with self.assertRaisesRegex(GaleSubmissionPullError, "ack_failed"):
+                pull_production_submissions(transport)
+            retry = pull_production_submissions(transport)
+        self.assertEqual(retry.imported_count, 0)
+        self.assertEqual(retry.duplicate_count, 1)
+        self.assertEqual(len(self.local_receipts()), 1)
+        self.assertEqual(
+            get_submission(
+                self.production_outbox,
+                submission.submission_uuid,
+            ).delivery_state,
+            "acknowledged",
+        )
+
     def test_invalid_or_failed_transport_does_not_create_local_database(
         self,
     ) -> None:
@@ -355,6 +468,27 @@ class PackageDRemoteStagingTest(unittest.TestCase):
             ),
             {"queued": 1, "delivered": 2, "acknowledged": 3},
         )
+        production_home = self.root.resolve() / "fictional-home"
+        production_root = (
+            production_home
+            / "Library"
+            / "Application Support"
+            / "S-notes"
+        )
+        production_root.mkdir(parents=True)
+        initialize_database(production_root / "s_notes.db")
+        self.assertEqual(
+            require_production_data_root({}, home=production_home),
+            production_root,
+        )
+        with self.assertRaisesRegex(
+            GaleSubmissionPullError,
+            "production_data_root_override_forbidden",
+        ):
+            require_production_data_root(
+                {"S_NOTES_DATA_ROOT": str(self.local_root)},
+                home=production_home,
+            )
 
     def test_imported_pending_submission_stays_out_of_formal_note_views(
         self,
