@@ -113,7 +113,15 @@ generate_icon 256 icon_256x256.png
 generate_icon 512 icon_256x256@2x.png
 generate_icon 512 icon_512x512.png
 generate_icon 1024 icon_512x512@2x.png
-iconutil -c icns "$ICONSET_DIR" -o "$ICNS_FILE"
+if ! iconutil -c icns "$ICONSET_DIR" -o "$ICNS_FILE"; then
+    echo "WARNING: iconutil rejected a validated iconset; using deterministic ICNS fallback."
+    "$PYTHON" -B "$ROOT_DIR/scripts/build_icns.py" "$ICONSET_DIR" "$ICNS_FILE"
+fi
+
+icns_metadata="$(sips -g format -g pixelWidth -g pixelHeight "$ICNS_FILE")"
+grep -q "format: icns" <<<"$icns_metadata" || fail "Generated App icon must be ICNS."
+grep -q "pixelWidth: 1024" <<<"$icns_metadata" || fail "Generated App icon width must be 1024."
+grep -q "pixelHeight: 1024" <<<"$icns_metadata" || fail "Generated App icon height must be 1024."
 
 echo "Building S-notes.app..."
 cd "$ROOT_DIR"
