@@ -393,6 +393,13 @@ class ReceiptInboxDialog(QWidget):
         self.expanded_receipt_id = None
         if refresh:
             self.refresh_receipt_list()
+            self._activate_host_window()
+
+    def _activate_host_window(self) -> None:
+        host_window = self.window()
+        if host_window.isVisible():
+            host_window.raise_()
+            host_window.activateWindow()
 
     def refresh_receipt_list(self) -> None:
         pending_receipts = list_ai_receipt_inbox_items(status="pending")
@@ -497,7 +504,6 @@ class ReceiptInboxDialog(QWidget):
         card = self.cards.get(receipt_id)
         if card is None:
             return
-        is_gale_submission = card.is_gale_submission
         allow_failed_parse = False
         if card.parse_failed:
             if not self._confirm_failed_parse_acceptance():
@@ -513,15 +519,13 @@ class ReceiptInboxDialog(QWidget):
                     allow_failed_parse=allow_failed_parse,
                 )
         except Exception as error:
-            QMessageBox.warning(self, "确认入库失败", str(error))
+            QMessageBox.warning(self.window(), "确认入库失败", str(error))
             self.refresh_receipt_list()
+            self._activate_host_window()
             return
         self.expanded_receipt_id = None
         self.refresh_receipt_list()
-        if is_gale_submission:
-            QMessageBox.information(self, "已接受", "已接受并创建正式笔记。")
-        else:
-            QMessageBox.information(self, "已确认入库", "已确认入库。")
+        self._activate_host_window()
 
     def _confirm_failed_parse_acceptance(self) -> bool:
         message_box = QMessageBox(self)
@@ -540,28 +544,18 @@ class ReceiptInboxDialog(QWidget):
     def reject_receipt(self, receipt_id: int) -> None:
         try:
             receipt = get_ai_receipt_inbox_item(receipt_id)
-            is_gale_submission = bool(
-                receipt
-                and str(receipt.get("source", "")).strip().casefold() == "gale"
-                and bool(
-                    receipt.get("external_submission_id")
-                    or receipt.get("idempotency_key")
-                )
-            )
             if receipt and receipt.get("request_id"):
                 reject_ai_proposal(receipt_id)
             else:
                 reject_ai_receipt_inbox_item(receipt_id)
         except Exception as error:
-            QMessageBox.warning(self, "拒绝失败", str(error))
+            QMessageBox.warning(self.window(), "拒绝失败", str(error))
             self.refresh_receipt_list()
+            self._activate_host_window()
             return
         self.expanded_receipt_id = None
         self.refresh_receipt_list()
-        if is_gale_submission:
-            QMessageBox.information(self, "已丢弃", "已丢弃。")
-        else:
-            QMessageBox.information(self, "已拒绝", "已拒绝。")
+        self._activate_host_window()
 
     def confirm_delete_receipt(self, receipt_id: int) -> None:
         receipt = get_ai_receipt_inbox_item(receipt_id)

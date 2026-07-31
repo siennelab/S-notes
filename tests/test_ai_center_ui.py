@@ -9,7 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QWidget
 
 from src.ai_center_dialog import AiCenterDialog
@@ -284,6 +284,143 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
             else dialog.pending_page.processed_filter_button
         )
         QTest.mouseClick(button, Qt.LeftButton)
+
+    def _lifecycle_spies(
+        self, dialog: AiCenterDialog
+    ) -> tuple[QSignalSpy, QSignalSpy]:
+        return QSignalSpy(dialog.finished), QSignalSpy(dialog.destroyed)
+
+    def _assert_open_without_lifecycle_signals(
+        self,
+        dialog: AiCenterDialog,
+        finished: QSignalSpy,
+        destroyed: QSignalSpy,
+        baseline_result: object,
+    ) -> None:
+        self.assertTrue(dialog.isVisible())
+        self.assertEqual(finished.count(), 0)
+        self.assertEqual(destroyed.count(), 0)
+        self.assertEqual(dialog.property("result"), baseline_result)
+        self.assertFalse(hasattr(dialog, "accepted"))
+        self.assertFalse(hasattr(dialog, "rejected"))
+
+    def test_filter_switches_five_times_without_closing_ai_center(self) -> None:
+        submission = self._submission("FILTER_LIFECYCLE")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        for value in ("processed", "pending", "processed", "pending", "processed"):
+            self._click_filter(dialog, value)
+            self.app.processEvents()
+            self._assert_open_without_lifecycle_signals(
+                dialog, finished, destroyed, baseline_result
+            )
+            self.assertEqual(page.list_filter, value)
+
+        self.assertEqual(page.cards, {})
+        self._click_filter(dialog, "pending")
+        self.app.processEvents()
+        self.assertEqual(set(page.cards), {submission["id"]})
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+
+    def test_discard_has_no_success_box_and_keeps_ai_center_open(self) -> None:
+        submission = self._submission("DISCARD_LIFECYCLE")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        with patch("src.receipt_inbox_dialog.QMessageBox.information") as information:
+            QTest.mouseClick(page.cards[submission["id"]].reject_button, Qt.LeftButton)
+            self.app.processEvents()
+
+        information.assert_not_called()
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(self._status_count("pending"), 0)
+        self.assertEqual(self._status_count("discarded"), 1)
+        self._click_filter(dialog, "processed")
+        self.app.processEvents()
+        self.assertEqual(set(page.cards), {submission["id"]})
+        self.assertEqual(len(page.cards), 1)
+
+    def test_accept_has_no_success_box_and_keeps_ai_center_open(self) -> None:
+        submission = self._submission("ACCEPT_LIFECYCLE")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        with patch("src.receipt_inbox_dialog.QMessageBox.information") as information:
+            QTest.mouseClick(page.cards[submission["id"]].accept_button, Qt.LeftButton)
+            self.app.processEvents()
+
+        information.assert_not_called()
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(self._status_count("pending"), 0)
+        self.assertEqual(self._status_count("accepted"), 1)
+        self.assertEqual(self._note_count(), 1)
+        self._click_filter(dialog, "processed")
+        self.app.processEvents()
+        self.assertEqual(set(page.cards), {submission["id"]})
+        self.assertEqual(len(page.cards), 1)
+        self.assertEqual(self._note_count(), 1)
+
+    def test_failures_keep_ai_center_open_without_fake_state(self) -> None:
+        submission = self._submission("FAILURE_LIFECYCLE")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        with patch(
+            "src.receipt_inbox_dialog.reject_ai_receipt_inbox_item",
+            side_effect=RuntimeError("forced discard failure"),
+        ), patch("src.receipt_inbox_dialog.QMessageBox.warning") as warning:
+            QTest.mouseClick(page.cards[submission["id"]].reject_button, Qt.LeftButton)
+            self.app.processEvents()
+        warning.assert_called_once()
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(self._status_count("pending"), 1)
+        self.assertEqual(self._status_count("discarded"), 0)
+        self.assertEqual(set(page.cards), {submission["id"]})
+
+        with patch(
+            "src.receipt_inbox_dialog.accept_ai_receipt_inbox_item",
+            side_effect=RuntimeError("forced acceptance failure"),
+        ), patch("src.receipt_inbox_dialog.QMessageBox.warning") as warning:
+            QTest.mouseClick(page.cards[submission["id"]].accept_button, Qt.LeftButton)
+            self.app.processEvents()
+        warning.assert_called_once()
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(self._status_count("pending"), 1)
+        self.assertEqual(self._status_count("accepted"), 0)
+        self.assertEqual(self._note_count(), 0)
+        self.assertEqual(set(page.cards), {submission["id"]})
+
+    def test_close_button_finishes_once_and_reopens_on_default_filter(self) -> None:
+        self._submission("CLOSE_LIFECYCLE")
+        dialog = self._build_dialog()
+        finished = QSignalSpy(dialog.finished)
+
+        QTest.mouseClick(dialog.close_button, Qt.LeftButton)
+        self.app.processEvents()
+        self.assertEqual(finished.count(), 1)
+
+        reopened = self._build_dialog()
+        self.assertEqual(reopened.pending_page.list_filter, "pending")
+        self.assertEqual(len(reopened.pending_page.cards), 1)
 
     def test_discard_refreshes_processed_in_same_window_and_reopens_once(self) -> None:
         submission = self._submission("DISCARD")
