@@ -27,7 +27,7 @@ from mcp.server.auth.provider import AuthorizeError, TokenError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
-from src.services.gale_remote_service import GALE_READ_SCOPE, GALE_WRITE_SCOPE
+from src.services.gale_remote_service import GALE_READ_SCOPE
 
 
 LOGGER = logging.getLogger("snotes_gale_mcp.auth")
@@ -39,7 +39,6 @@ ALLOWED_IDENTITY_SCOPES = {
 }
 ALLOWED_ACCESS_SCOPES = {
     GALE_READ_SCOPE,
-    GALE_WRITE_SCOPE,
 } | ALLOWED_IDENTITY_SCOPES
 RUNTIME_REQUIRED_SCOPES = [
     GALE_READ_SCOPE,
@@ -174,10 +173,7 @@ class RestrictedAuth0Provider(Auth0Provider):
         super().__init__(**kwargs)
         if self.client_registration_options is None:
             raise ValueError("client_registration_options_missing")
-        self.client_registration_options.valid_scopes = [
-            GALE_READ_SCOPE,
-            GALE_WRITE_SCOPE,
-        ]
+        self.client_registration_options.valid_scopes = [GALE_READ_SCOPE]
         self.client_registration_options.default_scopes = [GALE_READ_SCOPE]
 
     def get_oidc_configuration(

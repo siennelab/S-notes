@@ -21,7 +21,6 @@ from src.services.gale_mirror_service import (
 
 
 GALE_READ_SCOPE = "gale.read"
-GALE_WRITE_SCOPE = "gale.write"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
 DEFAULT_SEARCH_LIMIT = 10

@@ -57,7 +57,6 @@ from src.services.gale_oauth import (
     build_auth0_provider,
 )
 from src.services.gale_remote_service import (
-    GALE_WRITE_SCOPE,
     GaleRemoteConfig,
     GaleRemoteError,
     _open_remote_mirror,
@@ -360,11 +359,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     [
                         {
                             "type": "oauth2",
-                            "scopes": (
-                                ["gale.read", "gale.write"]
-                                if tool.name == "create_note_submission"
-                                else ["gale.read"]
-                            ),
+                            "scopes": ["gale.read"],
                         }
                     ],
                 )
@@ -472,6 +467,14 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             set(provider._default_scope_str.split()),
             {"gale.read"},
         )
+        self.assertEqual(
+            provider.client_registration_options.valid_scopes,
+            ["gale.read"],
+        )
+        self.assertEqual(
+            provider.client_registration_options.default_scopes,
+            ["gale.read"],
+        )
         app = build_app(self.config, auth_provider=provider)
         transport = httpx.ASGITransport(app=app)
         async with app.router.lifespan_context(app):
@@ -486,7 +489,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(metadata.json()["resource"], RESOURCE)
                 self.assertEqual(
                     metadata.json()["scopes_supported"],
-                    ["gale.read", "gale.write"],
+                    ["gale.read"],
                 )
                 root_metadata = await client.get(
                     "/.well-known/oauth-protected-resource"
@@ -500,6 +503,10 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     authorization_metadata.json()["registration_endpoint"],
                     "https://snotes.example.test/register",
+                )
+                self.assertEqual(
+                    authorization_metadata.json()["scopes_supported"],
+                    ["gale.read"],
                 )
                 registration = await client.post(
                     "/register",
@@ -559,7 +566,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_signature_subject_scope_and_log_redaction(self) -> None:
         self.assertIsNotNone(await self.verifier.verify_token(self._token()))
-        self.assertIsNotNone(
+        self.assertIsNone(
             await self.verifier.verify_token(
                 self._token(scope="gale.read gale.write")
             )
@@ -707,11 +714,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     expected_security_schemes = [
                         {
                             "type": "oauth2",
-                            "scopes": (
-                                ["gale.read", "gale.write"]
-                                if tool["name"] == "create_note_submission"
-                                else ["gale.read"]
-                            ),
+                            "scopes": ["gale.read"],
                         }
                     ]
                     self.assertIn("securitySchemes", tool)
@@ -805,7 +808,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     anonymous_write_result = anonymous_write.json()["result"]
                     self.assertTrue(anonymous_write_result["isError"])
                     self.assertIn(
-                        "gale.read and gale.write is required",
+                        "gale.read is required",
                         anonymous_write_result["_meta"]
                         ["mcp/www_authenticate"][0],
                     )
@@ -880,7 +883,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     "suggested_tags": ["虚构", "production"],
                     "idempotency_key": "fictional-production-stable-key",
                 }
-                read_only_write = await self._rpc(
+                created = await self._rpc(
                     client,
                     request_id=48,
                     method="tools/call",
@@ -890,11 +893,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     },
                     token=self._token(),
                 )
-                self.assertTrue(read_only_write.json()["result"]["isError"])
-                self.assertEqual(outbox_status(self.outbox)["queued"], 0)
-
-                write_token = self._token(scope="gale.read gale.write")
-                created = await self._rpc(
+                repeated = await self._rpc(
                     client,
                     request_id=49,
                     method="tools/call",
@@ -902,17 +901,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                         "name": "create_note_submission",
                         "arguments": write_arguments,
                     },
-                    token=write_token,
-                )
-                repeated = await self._rpc(
-                    client,
-                    request_id=50,
-                    method="tools/call",
-                    params={
-                        "name": "create_note_submission",
-                        "arguments": write_arguments,
-                    },
-                    token=write_token,
+                    token=self._token(),
                 )
                 created_content = created.json()["result"]["structuredContent"]
                 repeated_content = repeated.json()["result"]["structuredContent"]
@@ -1479,7 +1468,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                                 "idempotency_key": sensitive_values[4],
                             },
                         },
-                        token=self._token(scope="gale.read gale.write"),
+                        token=self._token(),
                     )
         self.assertEqual(
             response.json()["result"]["structuredContent"]["status"],

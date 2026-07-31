@@ -31,7 +31,6 @@ from src.services.gale_oauth import (
 from src.services.gale_remote_service import (
     DEFAULT_SEARCH_LIMIT,
     GALE_READ_SCOPE,
-    GALE_WRITE_SCOPE,
     MAX_QUERY_LENGTH,
     MAX_SEARCH_LIMIT,
     GaleRemoteConfig,
@@ -67,14 +66,6 @@ OAUTH_TOOL_META = {
         {
             "type": "oauth2",
             "scopes": [GALE_READ_SCOPE],
-        }
-    ]
-}
-WRITE_OAUTH_TOOL_META = {
-    "securitySchemes": [
-        {
-            "type": "oauth2",
-            "scopes": [GALE_READ_SCOPE, GALE_WRITE_SCOPE],
         }
     ]
 }
@@ -224,14 +215,10 @@ class MixedAuthMCPRoute:
         request_id,
         tool_name: object,
     ) -> None:
-        required_scopes = [GALE_READ_SCOPE]
-        if tool_name == "create_note_submission":
-            required_scopes.append(GALE_WRITE_SCOPE)
-        scope_text = " and ".join(required_scopes)
         challenge = (
             f'Bearer resource_metadata="{self._resource_metadata_url}", '
             'error="insufficient_scope", '
-            f'error_description="Authentication with {scope_text} is required."'
+            'error_description="Authentication with gale.read is required."'
         )
         await _send_json_response(
             send,
@@ -673,7 +660,7 @@ def _register_submission_tool(
             "the same idempotency_key returns the original submission."
         ),
         annotations=annotations,
-        meta=WRITE_OAUTH_TOOL_META,
+        meta=OAUTH_TOOL_META,
     )
     def create_note_submission(
         title: TitleText,
@@ -686,18 +673,16 @@ def _register_submission_tool(
         request_id = safe_request_id()
         token = get_access_token()
         scopes = set(token.scopes) if token is not None else set()
-        if not {GALE_READ_SCOPE, GALE_WRITE_SCOPE}.issubset(scopes):
+        if GALE_READ_SCOPE not in scopes:
             _log_tool_event(
                 request_id=request_id,
                 tool_name="create_note_submission",
                 status="rejected",
                 result_count=0,
                 latency_ms=monotonic_milliseconds(started_at),
-                error_code="write_scope_missing",
+                error_code="read_scope_missing",
             )
-            raise ToolError(
-                "Authentication with gale.read and gale.write is required."
-            )
+            raise ToolError("Authentication with gale.read is required.")
         try:
             if suggested_tags is not None and len(suggested_tags) > MAX_TAG_COUNT:
                 raise GaleSubmissionOutboxError("too_many_tags")
@@ -759,7 +744,7 @@ def _register_auxiliary_routes(
                 "authorization_servers": [
                     str(provider.base_url)
                 ],
-                "scopes_supported": [GALE_READ_SCOPE, GALE_WRITE_SCOPE],
+                "scopes_supported": [GALE_READ_SCOPE],
                 "bearer_methods_supported": ["header"],
             }
         )
