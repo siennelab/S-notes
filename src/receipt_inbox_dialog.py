@@ -302,7 +302,6 @@ class ReceiptInboxDialog(QWidget):
         self.expanded_receipt_id: int | None = None
         self.cards: dict[int, ReceiptCard] = {}
         self.scroll: QScrollArea | None = None
-        self._refresh_scheduled = False
         self._finished_emitted = False
         self._delete_message_box: QMessageBox | None = None
 
@@ -393,20 +392,7 @@ class ReceiptInboxDialog(QWidget):
         self.list_filter = value
         self.expanded_receipt_id = None
         if refresh:
-            self.schedule_refresh()
-
-    def schedule_refresh(self) -> None:
-        if self._refresh_scheduled:
-            return
-        self._refresh_scheduled = True
-        QTimer.singleShot(0, self._run_scheduled_refresh)
-
-    def _run_scheduled_refresh(self) -> None:
-        self._refresh_scheduled = False
-        self.refresh_receipt_list()
-        if self.isVisible():
-            self.raise_()
-            self.activateWindow()
+            self.refresh_receipt_list()
 
     def refresh_receipt_list(self) -> None:
         pending_receipts = list_ai_receipt_inbox_items(status="pending")
