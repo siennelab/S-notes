@@ -46,17 +46,14 @@ from src.services.gale_remote_service import (
     validate_production_outbox_location,
     validate_remote_mirror,
 )
-from src.gale_submission_staging_mcp import (
-    ContentText,
-    CreateSubmissionResponse,
-    DirectoryText,
-    IdempotencyText,
-    TagText,
-    TitleText,
-)
 from src.services.gale_submission_outbox import (
     GALE_PRODUCTION_ACTOR,
+    MAX_CONTENT_LENGTH,
+    MAX_DIRECTORY_LENGTH,
+    MAX_IDEMPOTENCY_KEY_LENGTH,
     MAX_TAG_COUNT,
+    MAX_TAG_LENGTH,
+    MAX_TITLE_LENGTH,
     GaleSubmissionOutboxError,
     create_submission,
     initialize_outbox,
@@ -93,6 +90,14 @@ MAX_ANONYMOUS_MCP_BODY_BYTES = 64 * 1024
 QueryText = Annotated[str, Field(min_length=1, max_length=MAX_QUERY_LENGTH)]
 SearchLimit = Annotated[int, Field(ge=1, le=MAX_SEARCH_LIMIT)]
 NoteId = Annotated[int, Field(ge=1, le=9_223_372_036_854_775_807)]
+TitleText = Annotated[str, Field(min_length=1, max_length=MAX_TITLE_LENGTH)]
+ContentText = Annotated[str, Field(min_length=1, max_length=MAX_CONTENT_LENGTH)]
+DirectoryText = Annotated[str, Field(max_length=MAX_DIRECTORY_LENGTH)]
+TagText = Annotated[str, Field(min_length=1, max_length=MAX_TAG_LENGTH)]
+IdempotencyText = Annotated[
+    str,
+    Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_LENGTH),
+]
 
 
 class StrictModel(BaseModel):
@@ -124,6 +129,15 @@ class RemoteGetResponse(StrictModel):
     tags: list[str] = Field(default_factory=list)
     updated_at: str = ""
     version: str = ""
+    reason: str = ""
+
+
+class CreateSubmissionResponse(StrictModel):
+    status: Literal["ok", "failed"]
+    submission_uuid: str = ""
+    external_submission_id: str = ""
+    delivery_state: str = ""
+    duplicate: bool = False
     reason: str = ""
 
 
