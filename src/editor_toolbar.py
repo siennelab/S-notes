@@ -160,6 +160,8 @@ class EditorToolbar(QWidget):
             separator.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             separator.setVisible(False)
             self.toolbar_separators.append(separator)
+        self._toolbar_layout_signature: tuple[int, ...] | None = None
+        self._toolbar_relayout_in_progress = False
         self._relayout_toolbar_groups(10_000)
 
         self.find_panel = QWidget()
@@ -216,37 +218,66 @@ class EditorToolbar(QWidget):
         return group, group_layout
 
     def _relayout_toolbar_groups(self, available_width: int) -> None:
-        for row_layout in self.toolbar_row_layouts:
-            while row_layout.count():
-                row_layout.takeAt(0)
-        for separator in self.toolbar_separators:
-            separator.setVisible(False)
-
+        available_width = max(1, available_width)
         row_index = 0
         used_width = 0
-        used_rows: set[int] = set()
         separator_width = 9
-        for group_index, group in enumerate(self.toolbar_groups):
+        row_assignments: list[int] = []
+        for group in self.toolbar_groups:
             group_width = group.sizeHint().width()
             required = group_width + (separator_width if used_width else 0)
-            if used_width and used_width + required > max(1, available_width):
-                self.toolbar_row_layouts[row_index].addStretch(1)
+            if used_width and used_width + required > available_width:
                 row_index += 1
                 used_width = 0
             row_index = min(row_index, len(self.toolbar_row_layouts) - 1)
-            row_layout = self.toolbar_row_layouts[row_index]
+            row_assignments.append(row_index)
             if used_width:
-                separator = self.toolbar_separators[group_index - 1]
-                separator.setVisible(True)
-                row_layout.addWidget(separator)
                 used_width += separator_width
-            row_layout.addWidget(group)
-            group.setVisible(True)
             used_width += group_width
-            used_rows.add(row_index)
-        self.toolbar_row_layouts[row_index].addStretch(1)
-        for index, row in enumerate(self.toolbar_rows):
-            row.setVisible(index in used_rows)
+
+        signature = tuple(row_assignments)
+        if (
+            self._toolbar_relayout_in_progress
+            or signature == self._toolbar_layout_signature
+        ):
+            return
+
+        self._toolbar_relayout_in_progress = True
+        try:
+            for row_layout in self.toolbar_row_layouts:
+                while row_layout.count():
+                    row_layout.takeAt(0)
+            for separator in self.toolbar_separators:
+                if not separator.isHidden():
+                    separator.hide()
+
+            used_rows = set(row_assignments)
+            prior_row_index: int | None = None
+            for group_index, (group, target_row_index) in enumerate(
+                zip(self.toolbar_groups, row_assignments)
+            ):
+                row_layout = self.toolbar_row_layouts[target_row_index]
+                if prior_row_index == target_row_index:
+                    separator = self.toolbar_separators[group_index - 1]
+                    if separator.isHidden():
+                        separator.show()
+                    row_layout.addWidget(separator)
+                row_layout.addWidget(group)
+                if group.isHidden():
+                    group.show()
+                prior_row_index = target_row_index
+
+            for target_row_index in used_rows:
+                self.toolbar_row_layouts[target_row_index].addStretch(1)
+            for index, row in enumerate(self.toolbar_rows):
+                should_show = index in used_rows
+                if should_show and row.isHidden():
+                    row.show()
+                elif not should_show and not row.isHidden():
+                    row.hide()
+            self._toolbar_layout_signature = signature
+        finally:
+            self._toolbar_relayout_in_progress = False
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
