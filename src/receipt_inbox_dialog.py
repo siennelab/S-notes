@@ -599,11 +599,11 @@ class ReceiptInboxDialog(QWidget):
                 self._delete_receipt_record(receipt_id)
             except Exception as error:
                 QMessageBox.warning(self, "删除失败", str(error))
+                self._activate_host_window()
                 return
             self.expanded_receipt_id = None
             self.refresh_receipt_list()
-            self.raise_()
-            self.activateWindow()
+            self._activate_host_window()
 
         message_box.finished.connect(finish_delete)
         message_box.open()

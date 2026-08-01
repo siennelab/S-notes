@@ -363,6 +363,29 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
             {id(card) for card in dialog.pending_page.cards.values()},
         )
 
+    def _processed_submission(self, suffix: str) -> dict:
+        submission = self._submission(suffix)
+        reject_ai_receipt_inbox_item(submission["id"], self.database_path)
+        return submission
+
+    def _finish_delete_confirmation(
+        self,
+        page: ReceiptInboxDialog,
+        *,
+        confirm: bool,
+    ) -> None:
+        self.app.processEvents()
+        message_box = page._delete_message_box
+        self.assertIsNotNone(message_box)
+        button_text = "删除" if confirm else "取消"
+        button = next(
+            candidate
+            for candidate in message_box.buttons()
+            if candidate.text() == button_text
+        )
+        QTest.mouseClick(button, Qt.LeftButton)
+        self.app.processEvents()
+
     def test_each_top_tab_returns_to_receipt_without_deactivating(self) -> None:
         self._submission("TOP_TAB_RETURN")
         dialog = self._build_hosted_dialog()
@@ -629,6 +652,163 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
         reopened = self._build_dialog()
         self.assertEqual(reopened.pending_page.list_filter, "pending")
         self.assertEqual(len(reopened.pending_page.cards), 1)
+
+    def test_delete_cancel_keeps_processed_page_and_database_state(self) -> None:
+        submission = self._processed_submission("DELETE_CANCEL")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        page.confirm_delete_receipt(submission["id"])
+        self._finish_delete_confirmation(page, confirm=False)
+
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(page.list_filter, "processed")
+        self.assertEqual(set(page.cards), {submission["id"]})
+        self.assertEqual(self._status_count("discarded"), 1)
+
+    def test_delete_one_uses_top_level_activation_and_refreshes_in_place(self) -> None:
+        first = self._processed_submission("DELETE_ONE_FIRST")
+        second = self._processed_submission("DELETE_ONE_SECOND")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        with patch.object(
+            page,
+            "_activate_host_window",
+            wraps=page._activate_host_window,
+        ) as activate_host:
+            page.confirm_delete_receipt(first["id"])
+            self._finish_delete_confirmation(page, confirm=True)
+
+        activate_host.assert_called_once_with()
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(page.list_filter, "processed")
+        self.assertEqual(set(page.cards), {second["id"]})
+        self.assertIsNone(get_ai_receipt_inbox_item(first["id"], self.database_path))
+
+    def test_delete_last_receipt_shows_empty_state_without_closing(self) -> None:
+        submission = self._processed_submission("DELETE_LAST")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        page.confirm_delete_receipt(submission["id"])
+        self._finish_delete_confirmation(page, confirm=True)
+
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(page.list_filter, "processed")
+        self.assertEqual(page.cards, {})
+        self.assertEqual(page.empty_state.text(), "当前没有已处理回执")
+
+    def test_delete_two_receipts_is_single_shot_each_time(self) -> None:
+        first = self._processed_submission("DELETE_TWICE_FIRST")
+        second = self._processed_submission("DELETE_TWICE_SECOND")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+
+        for submission, remaining in ((first, {second["id"]}), (second, set())):
+            with patch.object(
+                page,
+                "_delete_receipt_record",
+                wraps=page._delete_receipt_record,
+            ) as delete_record:
+                page.confirm_delete_receipt(submission["id"])
+                self._finish_delete_confirmation(page, confirm=True)
+            delete_record.assert_called_once_with(submission["id"])
+            self.assertEqual(set(page.cards), remaining)
+            self.assertTrue(dialog.isVisible())
+
+        self.assertEqual(self._status_count("discarded"), 0)
+
+    def test_delete_then_switch_pages_has_no_stale_receipt_widgets(self) -> None:
+        submission = self._processed_submission("DELETE_PAGE_CYCLE")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        page_identity = id(page)
+        self._click_filter(dialog, "processed")
+
+        page.confirm_delete_receipt(submission["id"])
+        self._finish_delete_confirmation(page, confirm=True)
+        for index in (3, 2, 0):
+            self._click_top_tab(dialog, index)
+
+        self.assertEqual(dialog.tabs.currentIndex(), 0)
+        self.assertEqual(id(dialog.pending_page), page_identity)
+        self.assertEqual(page.list_filter, "processed")
+        self.assertEqual(page.cards, {})
+        self.assertEqual(page.findChildren(ReceiptCard), [])
+        self.assertTrue(dialog.isVisible())
+
+    def test_delete_receipt_does_not_change_notes_or_trash(self) -> None:
+        submission = self._processed_submission("DELETE_DATA_BOUNDARY")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+        note_count = self._note_count()
+        with _connect(self.database_path) as connection:
+            trash_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM notes WHERE is_deleted=1"
+                ).fetchone()[0]
+            )
+
+        page.confirm_delete_receipt(submission["id"])
+        self._finish_delete_confirmation(page, confirm=True)
+
+        self.assertEqual(self._note_count(), note_count)
+        with _connect(self.database_path) as connection:
+            self.assertEqual(
+                int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM notes WHERE is_deleted=1"
+                    ).fetchone()[0]
+                ),
+                trash_count,
+            )
+
+    def test_delete_failure_keeps_receipt_and_reactivates_top_level(self) -> None:
+        submission = self._processed_submission("DELETE_FAILURE")
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+        finished, destroyed = self._lifecycle_spies(dialog)
+        baseline_result = dialog.property("result")
+
+        with (
+            patch.object(
+                page,
+                "_delete_receipt_record",
+                side_effect=RuntimeError("fictional_delete_failure"),
+            ),
+            patch("src.receipt_inbox_dialog.QMessageBox.warning") as warning,
+            patch.object(page, "_activate_host_window") as activate_host,
+        ):
+            page.confirm_delete_receipt(submission["id"])
+            self._finish_delete_confirmation(page, confirm=True)
+
+        warning.assert_called_once()
+        activate_host.assert_called_once_with()
+        self._assert_open_without_lifecycle_signals(
+            dialog, finished, destroyed, baseline_result
+        )
+        self.assertEqual(page.list_filter, "processed")
+        self.assertEqual(set(page.cards), {submission["id"]})
+        self.assertEqual(self._status_count("discarded"), 1)
 
     def test_discard_refreshes_processed_in_same_window_and_reopens_once(self) -> None:
         submission = self._submission("DISCARD")

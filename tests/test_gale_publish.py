@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import stat
 import tempfile
 import threading
@@ -17,8 +18,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.services.gale_mirror_service import (
+    GaleMirrorError,
     export_gale_mirror,
     search_gale_mirror,
+    verify_gale_mirror,
 )
 from src.services.gale_publish_service import (
     GaleAutoPublishScheduler,
@@ -27,10 +30,12 @@ from src.services.gale_publish_service import (
     RemoteActivationConfig,
     RemoteActivationResult,
     activate_remote_mirror,
+    generate_validate_and_publish_gale_mirror,
     load_publish_state,
     operator_rollback_remote_mirror,
     publish_gale_mirror,
     sha256_file,
+    source_inputs_sha256,
     validate_activated_mirror,
 )
 from tests_mcp.prepare_gale_remote_fixture import (
@@ -248,7 +253,159 @@ class GalePublishTest(unittest.TestCase):
             publish_gale_mirror(config, transport=transport)
 
         self.assertEqual(transport.upload_calls, 0)
-        self.assertFalse(load_publish_state(config.state_path).needs_retry)
+        state = load_publish_state(config.state_path)
+        self.assertTrue(state.needs_retry)
+        self.assertEqual(state.last_failure_reason, "local_validation_failed")
+        self.assertEqual(state.last_failure_check, "mirror_validation_failed")
+
+    def test_missing_local_mirror_is_generated_validated_then_published(self) -> None:
+        runtime = self.root / "runtime" / "exports" / "gale"
+        config = GalePublishConfig(
+            runtime / "gale-mirror.db",
+            self.root / "runtime" / "config" / "publish-state.json",
+            self.root / "runtime" / "config" / "publish.lock",
+        )
+        transport = RecordingTransport()
+
+        result = generate_validate_and_publish_gale_mirror(
+            config,
+            source_database=self.source,
+            redaction_rules_path=self.rules,
+            transport=transport,
+        )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.source_sha256, source_inputs_sha256(self.source, self.rules))
+        self.assertEqual(transport.upload_calls, 1)
+        self.assertEqual(transport.activation_calls, 1)
+        self.assertEqual(stat.S_IMODE(runtime.stat().st_mode), 0o700)
+        self.assertTrue(config.mirror_path.is_file())
+        self.assertEqual(stat.S_IMODE(config.mirror_path.stat().st_mode), 0o600)
+        verification = verify_gale_mirror(config.mirror_path)
+        self.assertEqual(verification.note_count, result.note_count)
+        self.assertTrue(
+            search_gale_mirror(
+                config.mirror_path,
+                "FICTIONAL_PACKAGE_C_SEARCH",
+            )
+        )
+        self.assertEqual(list(runtime.glob(".gale-source-snapshot.*")), [])
+        self.assertEqual(list(runtime.glob(".gale-publish-candidate.*")), [])
+
+    def test_generation_handles_unicode_rich_text_revision_and_deep_directory(
+        self,
+    ) -> None:
+        note_id = _create_note(
+            self.source,
+            title="FICTIONAL_VMATRIX × 2026-08-01",
+            body="FICTIONAL_RICH_PLACEHOLDER",
+            directory=(
+                "FICTIONAL_一级",
+                "FICTIONAL_二级",
+                "FICTIONAL_三级",
+            ),
+            tags=[],
+            visibility="full",
+            targets=["gale"],
+        )
+        long_text = "FICTIONAL_LONG_RICH_段落" * 300
+        rich_html = (
+            "<h2>FICTIONAL_RICH_HEADING</h2>"
+            f"<p><strong>{long_text}</strong></p>"
+        )
+        updated_at = "2026-08-01T23:59:58+08:00"
+        with sqlite3.connect(self.source) as connection:
+            connection.execute(
+                """
+                UPDATE notes
+                SET body_rich_text=?, content_html=?, revision=?, updated_at=?
+                WHERE id=?
+                """,
+                (rich_html, rich_html, 17, updated_at, note_id),
+            )
+
+        runtime = self.root / "runtime-complex" / "exports" / "gale"
+        config = GalePublishConfig(
+            runtime / "gale-mirror.db",
+            self.root / "runtime-complex" / "config" / "publish-state.json",
+            self.root / "runtime-complex" / "config" / "publish.lock",
+        )
+        result = generate_validate_and_publish_gale_mirror(
+            config,
+            source_database=self.source,
+            redaction_rules_path=self.rules,
+            transport=RecordingTransport(),
+        )
+
+        verification = verify_gale_mirror(config.mirror_path)
+        self.assertEqual(result.status, "success")
+        self.assertEqual(verification.note_count, result.note_count)
+        self.assertEqual(verification.fts_count, result.note_count)
+        with sqlite3.connect(
+            f"{config.mirror_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+        ) as connection:
+            row = connection.execute(
+                """
+                SELECT title, body, directory, tags_json, source_updated_at
+                FROM mirror_notes
+                WHERE source_note_id=?
+                """,
+                (note_id,),
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "FICTIONAL_VMATRIX × 2026-08-01")
+            self.assertIn("FICTIONAL_RICH_HEADING", row[1])
+            self.assertIn("FICTIONAL_LONG_RICH_段落", row[1])
+            self.assertNotIn("<strong>", row[1])
+            self.assertEqual(
+                row[2],
+                "FICTIONAL_一级 / FICTIONAL_二级 / FICTIONAL_三级",
+            )
+            self.assertEqual(json.loads(row[3]), [])
+            self.assertEqual(row[4], updated_at)
+            self.assertEqual(connection.execute("PRAGMA quick_check").fetchone()[0], "ok")
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertIsNone(connection.execute("PRAGMA foreign_key_check").fetchone())
+        self.assertEqual(list(runtime.glob(".gale-source-snapshot.*")), [])
+        self.assertEqual(list(runtime.glob(".gale-publish-candidate.*")), [])
+
+    def test_generation_validation_failure_preserves_old_local_mirror(self) -> None:
+        runtime = self.root / "runtime-failure" / "exports" / "gale"
+        runtime.mkdir(parents=True)
+        mirror = runtime / "gale-mirror.db"
+        shutil.copy2(self.mirror_v1, mirror)
+        os.chmod(mirror, 0o600)
+        old_hash = sha256_file(mirror)
+        config = GalePublishConfig(
+            mirror,
+            self.root / "runtime-failure" / "config" / "publish-state.json",
+            self.root / "runtime-failure" / "config" / "publish.lock",
+        )
+        transport = RecordingTransport()
+
+        with patch(
+            "src.services.gale_publish_service.export_gale_mirror",
+            side_effect=GaleMirrorError("fts_content_mismatch"),
+        ), self.assertRaises(GalePublishError) as raised:
+            generate_validate_and_publish_gale_mirror(
+                config,
+                source_database=self.source,
+                redaction_rules_path=self.rules,
+                transport=transport,
+            )
+
+        self.assertEqual(raised.exception.code, "local_validation_failed")
+        self.assertEqual(raised.exception.check, "fts_content_mismatch")
+        self.assertEqual(sha256_file(mirror), old_hash)
+        self.assertEqual(transport.upload_calls, 0)
+        self.assertEqual(transport.activation_calls, 0)
+        state = load_publish_state(config.state_path)
+        self.assertEqual(state.last_failure_reason, "local_validation_failed")
+        self.assertEqual(state.last_failure_check, "fts_content_mismatch")
+        self.assertTrue(state.needs_retry)
+        self.assertEqual(list(runtime.glob(".gale-source-snapshot.*")), [])
+        self.assertEqual(list(runtime.glob(".gale-publish-candidate.*")), [])
 
     def test_remote_hash_mismatch_removes_incoming_and_preserves_current(self) -> None:
         config = self.remote_layout()
@@ -928,8 +1085,10 @@ class GalePublishTest(unittest.TestCase):
                 "is_publishing",
                 "last_success_time",
                 "last_success_hash",
+                "last_success_source_hash",
                 "last_failure_time",
                 "last_failure_reason",
+                "last_failure_check",
                 "needs_retry",
             },
         )

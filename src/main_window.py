@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSettings, QSize, QThread, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
@@ -46,9 +47,11 @@ from src.ai_center_dialog import AiCenterDialog
 from src.app_paths import (
     APP_SETTINGS_PATH,
     DATA_ROOT_OVERRIDDEN,
+    DATABASE_PATH,
     GALE_MIRROR_PATH,
     GALE_PUBLISH_LOCK_PATH,
     GALE_PUBLISH_STATE_PATH,
+    REDACTION_RULES_PATH,
 )
 from src.batch_note_operations import (
     empty_trash,
@@ -110,9 +113,9 @@ from src.services.gale_publish_service import (
     GalePublishConfig,
     GalePublishError,
     GalePublishResult,
+    generate_validate_and_publish_gale_mirror,
     load_publish_state,
-    publish_gale_mirror,
-    sha256_file,
+    source_inputs_sha256,
 )
 from src.tag_manager import format_tags, parse_tags
 from src.theme import (
@@ -215,15 +218,28 @@ def application_settings() -> QSettings:
 
 
 class GalePublishThread(QThread):
-    def __init__(self, config: GalePublishConfig, *, manual: bool) -> None:
+    def __init__(
+        self,
+        config: GalePublishConfig,
+        *,
+        source_database: Path,
+        redaction_rules_path: Path,
+        manual: bool,
+    ) -> None:
         super().__init__()
         self.config = config
+        self.source_database = Path(source_database)
+        self.redaction_rules_path = Path(redaction_rules_path)
         self.manual = manual
         self.result: GalePublishResult | None = None
 
     def run(self) -> None:
         try:
-            self.result = publish_gale_mirror(self.config)
+            self.result = generate_validate_and_publish_gale_mirror(
+                self.config,
+                source_database=self.source_database,
+                redaction_rules_path=self.redaction_rules_path,
+            )
         except GalePublishError as error:
             self.result = GalePublishResult(
                 status="failed",
@@ -231,6 +247,7 @@ class GalePublishThread(QThread):
                 note_count=0,
                 reason=error.code,
                 previous_preserved=error.previous_preserved,
+                check=error.check,
             )
         except Exception:
             self.result = GalePublishResult(
@@ -290,11 +307,11 @@ class MainWindow(QMainWindow):
         publish_state = load_publish_state(GALE_PUBLISH_STATE_PATH)
         self.gale_auto_scheduler = GaleAutoPublishScheduler(
             enabled=False,
-            last_success_hash=publish_state.last_success_hash,
+            last_success_hash=publish_state.last_success_source_hash,
         )
         self.gale_publish_thread: GalePublishThread | None = None
         self.gale_close_after_publish = False
-        self.gale_source_signature: tuple[int, int] | None = None
+        self.gale_source_signature: str | None = None
         self.gale_last_watch_wall_time = time.time()
         self.gale_network_online = False
         self.gale_network_information: QNetworkInformation | None = None
@@ -1659,6 +1676,8 @@ class MainWindow(QMainWindow):
                 state_path=GALE_PUBLISH_STATE_PATH,
                 lock_path=GALE_PUBLISH_LOCK_PATH,
             ),
+            source_database=DATABASE_PATH,
+            redaction_rules_path=REDACTION_RULES_PATH,
             manual=manual,
         )
         self.gale_publish_thread = thread
@@ -1683,8 +1702,9 @@ class MainWindow(QMainWindow):
         self.set_gale_publish_control_enabled(True)
 
         if result.status in {"success", "duplicate"}:
-            if result.sha256:
-                self.gale_auto_scheduler.mark_success(result.sha256)
+            success_source = result.source_sha256 or result.sha256
+            if success_source:
+                self.gale_auto_scheduler.mark_success(success_source)
             else:
                 self.gale_auto_scheduler.running = False
             self.status_label.setText("已发布给 Gale")
@@ -1692,9 +1712,13 @@ class MainWindow(QMainWindow):
             self.gale_auto_scheduler.mark_failure(time.time())
             friendly_reason = self.gale_publish_error_text(result.reason)
             if result.previous_preserved:
-                message = f"发布失败：{friendly_reason}。继续使用上一版。"
+                suffix = "已继续使用上一版。"
             else:
-                message = f"发布失败：{friendly_reason}。请停止并检查回滚状态。"
+                suffix = "请停止并检查回滚状态。"
+            message = f"发布失败：{friendly_reason}。"
+            if result.check:
+                message += f"\n检查项：{result.check.upper()}"
+            message += f"\n{suffix}"
             self.status_label.setText(message)
             if manual:
                 QMessageBox.warning(self, "发布失败", message)
@@ -1717,13 +1741,14 @@ class MainWindow(QMainWindow):
         )
         self.gale_last_watch_wall_time = now
         try:
-            file_stat = GALE_MIRROR_PATH.stat()
-            signature = (file_stat.st_mtime_ns, file_stat.st_size)
-            if signature != self.gale_source_signature:
-                digest = sha256_file(GALE_MIRROR_PATH)
-                self.gale_source_signature = signature
+            digest = source_inputs_sha256(
+                DATABASE_PATH,
+                REDACTION_RULES_PATH,
+            )
+            if digest != self.gale_source_signature:
+                self.gale_source_signature = digest
                 self.gale_auto_scheduler.observe(digest, now)
-        except (FileNotFoundError, OSError):
+        except OSError:
             return
 
         if self.gale_auto_scheduler.should_publish(

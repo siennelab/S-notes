@@ -10,10 +10,11 @@ import re
 import socket
 import stat
 import subprocess
+import sqlite3
 import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
@@ -22,6 +23,7 @@ from src.services.gale_mirror_service import (
     GALE_ACTOR_ID,
     GaleMirrorError,
     GaleMirrorVerification,
+    export_gale_mirror,
     verify_gale_mirror,
 )
 from src.services.gale_remote_service import (
@@ -51,9 +53,16 @@ DEFAULT_RETRY_DELAY_SECONDS = 5 * 60
 
 
 class GalePublishError(RuntimeError):
-    def __init__(self, code: str, *, previous_preserved: bool = True) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        previous_preserved: bool = True,
+        check: str = "",
+    ) -> None:
         self.code = code
         self.previous_preserved = previous_preserved
+        self.check = _safe_reason_text(check) if check else ""
         super().__init__(code)
 
 
@@ -76,6 +85,8 @@ class GalePublishResult:
     activated: bool = False
     rolled_back: bool = False
     previous_preserved: bool = True
+    check: str = ""
+    source_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,8 +94,10 @@ class GalePublishState:
     is_publishing: bool = False
     last_success_time: str = ""
     last_success_hash: str = ""
+    last_success_source_hash: str = ""
     last_failure_time: str = ""
     last_failure_reason: str = ""
+    last_failure_check: str = ""
     needs_retry: bool = False
 
     @classmethod
@@ -99,11 +112,17 @@ class GalePublishState:
             "last_success_hash": _safe_hash_text(
                 payload.get("last_success_hash")
             ),
+            "last_success_source_hash": _safe_hash_text(
+                payload.get("last_success_source_hash")
+            ),
             "last_failure_time": _safe_state_text(
                 payload.get("last_failure_time")
             ),
             "last_failure_reason": _safe_reason_text(
                 payload.get("last_failure_reason")
+            ),
+            "last_failure_check": _safe_reason_text(
+                payload.get("last_failure_check")
             ),
             "needs_retry": bool(payload.get("needs_retry", False)),
         }
@@ -242,6 +261,174 @@ def load_publish_state(path: Path) -> GalePublishState:
     return GalePublishState.from_payload(payload)
 
 
+def source_inputs_sha256(
+    source_database: Path,
+    redaction_rules_path: Path,
+) -> str:
+    digest = hashlib.sha256()
+    for label, raw_path in (
+        (b"source-database\0", source_database),
+        (b"redaction-rules\0", redaction_rules_path),
+    ):
+        path = Path(raw_path)
+        if not path.is_file() or path.is_symlink():
+            raise OSError("source_input_unavailable")
+        digest.update(label)
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def generate_validate_and_publish_gale_mirror(
+    config: GalePublishConfig,
+    *,
+    source_database: Path,
+    redaction_rules_path: Path,
+    transport: PublishTransport | None = None,
+) -> GalePublishResult:
+    mirror_path = Path(config.mirror_path)
+    runtime_directory = mirror_path.parent
+    runtime_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(runtime_directory, 0o700)
+    snapshot_path = _new_private_runtime_file(
+        runtime_directory,
+        prefix=".gale-source-snapshot.",
+    )
+    candidate_path = _new_private_runtime_file(
+        runtime_directory,
+        prefix=".gale-publish-candidate.",
+    )
+    try:
+        try:
+            source_digest = source_inputs_sha256(
+                source_database,
+                redaction_rules_path,
+            )
+            _backup_source_database(
+                Path(source_database),
+                snapshot_path,
+            )
+            export_result = export_gale_mirror(
+                source_database=snapshot_path,
+                output_path=candidate_path,
+                redaction_rules_path=Path(redaction_rules_path),
+                actor=GALE_ACTOR_ID,
+            )
+            verification = verify_gale_mirror(
+                candidate_path,
+                expected_note_count=export_result.note_count,
+                expected_actor=GALE_ACTOR_ID,
+            )
+            if verification.note_count != export_result.note_count:
+                raise GaleMirrorError("expected_count_mismatch")
+            os.replace(candidate_path, mirror_path)
+            os.chmod(mirror_path, 0o600)
+        except GaleMirrorError as error:
+            _record_local_preparation_failure(config, error.code)
+            raise GalePublishError(
+                "local_validation_failed",
+                check=error.code,
+            ) from error
+        except (OSError, sqlite3.Error) as error:
+            check = "source_snapshot_failed"
+            _record_local_preparation_failure(config, check)
+            raise GalePublishError(
+                "local_validation_failed",
+                check=check,
+            ) from error
+
+        result = publish_gale_mirror(config, transport=transport)
+        if result.status in {"success", "duplicate"}:
+            settled_state = replace(
+                load_publish_state(config.state_path),
+                last_success_source_hash=source_digest,
+            )
+            _write_publish_state(config.state_path, settled_state)
+        return replace(result, source_sha256=source_digest)
+    finally:
+        _remove_private_runtime_database(snapshot_path)
+        _remove_private_runtime_database(candidate_path)
+
+
+def _new_private_runtime_file(directory: Path, *, prefix: str) -> Path:
+    descriptor, name = tempfile.mkstemp(
+        prefix=prefix,
+        suffix=".db",
+        dir=directory,
+    )
+    os.fchmod(descriptor, 0o600)
+    os.close(descriptor)
+    return Path(name)
+
+
+def _backup_source_database(source_path: Path, snapshot_path: Path) -> None:
+    if not source_path.is_file() or source_path.is_symlink():
+        raise GaleMirrorError("source_database_unavailable")
+    source = sqlite3.connect(
+        f"{source_path.resolve().as_uri()}?mode=ro",
+        uri=True,
+        timeout=5.0,
+    )
+    destination = sqlite3.connect(snapshot_path, timeout=5.0)
+    try:
+        source.execute("PRAGMA query_only = ON")
+        source.execute("PRAGMA busy_timeout = 5000")
+        source.backup(destination)
+        quick_check = destination.execute("PRAGMA quick_check").fetchone()
+        if quick_check is None or str(quick_check[0]) != "ok":
+            raise GaleMirrorError("source_quick_check_failed")
+        integrity_check = destination.execute("PRAGMA integrity_check").fetchone()
+        if integrity_check is None or str(integrity_check[0]) != "ok":
+            raise GaleMirrorError("source_integrity_check_failed")
+        if destination.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise GaleMirrorError("source_foreign_key_check_failed")
+    finally:
+        destination.close()
+        source.close()
+    os.chmod(snapshot_path, 0o600)
+
+
+def _record_local_preparation_failure(
+    config: GalePublishConfig,
+    check: str,
+) -> None:
+    state_path = Path(config.state_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    failed_state = _failure_state(
+        load_publish_state(state_path),
+        reason="local_validation_failed",
+        needs_retry=True,
+        check=check,
+    )
+    _write_publish_state(state_path, failed_state)
+    _log_publish_event(
+        status="failed",
+        sha256="none",
+        note_count=0,
+        reason="local_validation_failed",
+        check=check,
+    )
+
+
+def _remove_private_runtime_database(path: Path) -> None:
+    for candidate in (
+        path,
+        Path(f"{path}-journal"),
+        Path(f"{path}-wal"),
+        Path(f"{path}-shm"),
+    ):
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                if candidate.exists() or candidate.is_symlink():
+                    raise GalePublishError("unsafe_cleanup_target")
+                continue
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def publish_gale_mirror(
     config: GalePublishConfig,
     *,
@@ -271,7 +458,8 @@ def publish_gale_mirror(
             failed_state = _failure_state(
                 previous_state,
                 reason="local_validation_failed",
-                needs_retry=False,
+                needs_retry=True,
+                check=error.code,
             )
             _write_publish_state(state_path, failed_state)
             _log_publish_event(
@@ -279,16 +467,22 @@ def publish_gale_mirror(
                 sha256="none",
                 note_count=0,
                 reason="local_validation_failed",
+                check=error.code,
             )
-            raise GalePublishError("local_validation_failed") from error
+            raise GalePublishError(
+                "local_validation_failed",
+                check=error.code,
+            ) from error
 
         if previous_state.last_success_hash == digest:
             settled_state = GalePublishState(
                 is_publishing=False,
                 last_success_time=previous_state.last_success_time,
                 last_success_hash=digest,
+                last_success_source_hash=previous_state.last_success_source_hash,
                 last_failure_time=previous_state.last_failure_time,
                 last_failure_reason=previous_state.last_failure_reason,
+                last_failure_check=previous_state.last_failure_check,
                 needs_retry=False,
             )
             _write_publish_state(state_path, settled_state)
@@ -309,8 +503,10 @@ def publish_gale_mirror(
             is_publishing=True,
             last_success_time=previous_state.last_success_time,
             last_success_hash=previous_state.last_success_hash,
+            last_success_source_hash=previous_state.last_success_source_hash,
             last_failure_time=previous_state.last_failure_time,
             last_failure_reason=previous_state.last_failure_reason,
+            last_failure_check=previous_state.last_failure_check,
             needs_retry=previous_state.needs_retry,
         )
         _write_publish_state(state_path, publishing_state)
@@ -390,8 +586,10 @@ def publish_gale_mirror(
             is_publishing=False,
             last_success_time=success_time,
             last_success_hash=digest,
+            last_success_source_hash=previous_state.last_success_source_hash,
             last_failure_time=previous_state.last_failure_time,
             last_failure_reason=previous_state.last_failure_reason,
+            last_failure_check=previous_state.last_failure_check,
             needs_retry=False,
         )
         _write_publish_state(state_path, success_state)
@@ -1425,13 +1623,16 @@ def _failure_state(
     *,
     reason: str,
     needs_retry: bool,
+    check: str = "",
 ) -> GalePublishState:
     return GalePublishState(
         is_publishing=False,
         last_success_time=previous.last_success_time,
         last_success_hash=previous.last_success_hash,
+        last_success_source_hash=previous.last_success_source_hash,
         last_failure_time=_utc_now(),
         last_failure_reason=_safe_reason_text(reason),
+        last_failure_check=_safe_reason_text(check) if check else "",
         needs_retry=needs_retry,
     )
 
@@ -1442,15 +1643,17 @@ def _log_publish_event(
     sha256: str,
     note_count: int,
     reason: str,
+    check: str = "",
 ) -> None:
     LOGGER.info(
         "publish_event published_at=%s sha256=%s note_count=%d "
-        "status=%s reason=%s",
+        "status=%s reason=%s check=%s",
         _utc_now(),
         sha256,
         int(note_count),
         _safe_reason_text(status),
         _safe_reason_text(reason),
+        _safe_reason_text(check) if check else "none",
     )
 
 
