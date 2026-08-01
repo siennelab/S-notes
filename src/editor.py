@@ -7,7 +7,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QMimeData, QSignalBlocker, Qt
+from PySide6.QtCore import QMimeData, QSignalBlocker, QTimer, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -247,10 +247,14 @@ class NotesEditor(QTextEdit):
         super().__init__(parent)
         self.setObjectName("bodyEdit")
         self._document_reset_in_progress = False
+        self._cursor_visibility_generation = 0
         self.document().setDefaultFont(editor_document_font())
         self.document().setDefaultStyleSheet(editor_document_style())
         apply_editor_document_theme(self)
         self.textChanged.connect(self._refresh_document_theme_overlays)
+        self.verticalScrollBar().sliderPressed.connect(
+            self._invalidate_pending_cursor_visibility
+        )
 
     def apply_theme(self) -> None:
         apply_editor_document_theme(self)
@@ -280,7 +284,69 @@ class NotesEditor(QTextEdit):
         cursor.insertHtml(text)
         self.setTextCursor(cursor)
 
+    def _invalidate_pending_cursor_visibility(self) -> None:
+        self._cursor_visibility_generation += 1
+
+    def _schedule_cursor_visibility_correction(
+        self,
+        expected_position: int,
+        previous_view_top: int,
+        previous_document_top: int,
+    ) -> None:
+        self._cursor_visibility_generation += 1
+        generation = self._cursor_visibility_generation
+
+        def correct_if_current() -> None:
+            self._correct_cursor_visibility(
+                expected_position,
+                previous_view_top,
+                previous_document_top,
+                generation,
+            )
+
+        QTimer.singleShot(0, correct_if_current)
+
+    def _correct_cursor_visibility(
+        self,
+        expected_position: int,
+        previous_view_top: int,
+        previous_document_top: int,
+        generation: int,
+    ) -> None:
+        if generation != self._cursor_visibility_generation:
+            return
+        cursor = self.textCursor()
+        if cursor.position() != expected_position:
+            return
+
+        cursor_rect = self.cursorRect(cursor)
+        viewport_rect = self.viewport().rect()
+        margin = 2
+        visible_top = viewport_rect.top() + margin
+        visible_bottom = viewport_rect.bottom() - margin
+        if (
+            cursor_rect.top() >= visible_top
+            and cursor_rect.bottom() <= visible_bottom
+        ):
+            return
+
+        scroll_bar = self.verticalScrollBar()
+        cursor_document_top = cursor_rect.top() + scroll_bar.value()
+        line_advance = cursor_document_top - previous_document_top
+        expected_view_top = previous_view_top + line_advance
+        scroll_bar.setValue(cursor_document_top - expected_view_top)
+        cursor_rect = self.cursorRect(cursor)
+        if cursor_rect.bottom() > visible_bottom:
+            scroll_bar.setValue(
+                scroll_bar.value() + cursor_rect.bottom() - visible_bottom
+            )
+        elif cursor_rect.top() < visible_top:
+            scroll_bar.setValue(
+                scroll_bar.value() - (visible_top - cursor_rect.top())
+            )
+
     def keyPressEvent(self, event) -> None:
+        self._invalidate_pending_cursor_visibility()
         modifiers = event.modifiers()
         command_modifiers = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier
         cursor = self.textCursor()
@@ -294,11 +360,17 @@ class NotesEditor(QTextEdit):
             pixel_size = int(
                 cursor.charFormat().property(QTextFormat.FontPixelSize)
             )
+            previous_cursor_rect = self.cursorRect(cursor)
+            previous_view_top = previous_cursor_rect.top()
+            previous_document_top = (
+                previous_view_top + self.verticalScrollBar().value()
+            )
             edit_cursor = QTextCursor(self.document())
             edit_cursor.beginEditBlock()
             try:
                 super().keyPressEvent(event)
                 cursor = self.textCursor()
+                expected_cursor_position = cursor.position()
                 block_char_format = QTextCharFormat(
                     cursor.block().charFormat()
                 )
@@ -316,6 +388,11 @@ class NotesEditor(QTextEdit):
                 self.mergeCurrentCharFormat(input_format)
             finally:
                 edit_cursor.endEditBlock()
+            self._schedule_cursor_visibility_correction(
+                expected_cursor_position,
+                previous_view_top,
+                previous_document_top,
+            )
             return
         if (
             event.text()
@@ -326,6 +403,14 @@ class NotesEditor(QTextEdit):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        self._invalidate_pending_cursor_visibility()
+        super().mousePressEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        self._invalidate_pending_cursor_visibility()
+        super().wheelEvent(event)
 
     def inputMethodEvent(self, event) -> None:
         if event.commitString() and not self.textCursor().hasSelection():
@@ -372,6 +457,7 @@ class NotesEditor(QTextEdit):
         return QApplication.clipboard().text()
 
     def set_note_content(self, content: str) -> None:
+        self._invalidate_pending_cursor_visibility()
         self._document_reset_in_progress = True
         try:
             if HTML_MARKER_RE.search(content or ""):

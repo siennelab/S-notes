@@ -5,8 +5,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextCharFormat, QTextCursor, QTextFormat
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QFontMetricsF, QTextCharFormat, QTextCursor, QTextFormat
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -75,6 +75,203 @@ class NotesEditorFontSizeInheritanceTest(unittest.TestCase):
         self._assert_pixel_size(cursor.block().charFormat(), expected)
         self._assert_pixel_size(cursor.charFormat(), expected)
         self._assert_pixel_size(editor.currentCharFormat(), expected)
+
+    def _prepare_long_visible_editor(
+        self,
+        pixel_size: int | None = 20,
+    ) -> NotesEditor:
+        self.editor.close()
+        self.editor = NotesEditor()
+        self.editor.resize(500, 180)
+        self.editor.show()
+        self.app.processEvents()
+        self.editor.setPlainText(
+            "\n\n".join(
+                f"Fictional paragraph {index:02d} for scroll regression testing."
+                for index in range(40)
+            )
+        )
+        if pixel_size is not None:
+            cursor = self.editor.textCursor()
+            cursor.select(QTextCursor.Document)
+            self.editor.setTextCursor(cursor)
+            self.editor.apply_font_size(pixel_size)
+        self._move_to_document_end()
+        self.editor.ensureCursorVisible()
+        self.app.processEvents()
+        scroll_bar = self.editor.verticalScrollBar()
+        self.assertGreater(scroll_bar.maximum(), 0)
+        self.assertGreater(scroll_bar.value(), 0)
+        self.assertLessEqual(
+            scroll_bar.maximum() - scroll_bar.value(),
+            max(4, scroll_bar.pageStep() // 4),
+        )
+        return self.editor
+
+    def _assert_cursor_visible_near_scroll_end(
+        self,
+        editor: NotesEditor,
+    ) -> None:
+        self.app.processEvents()
+        cursor = editor.textCursor()
+        cursor_rect = editor.cursorRect(cursor)
+        scroll_bar = editor.verticalScrollBar()
+        self.assertEqual(cursor.block(), editor.document().lastBlock())
+        self.assertEqual(
+            cursor.position(),
+            editor.document().characterCount() - 1,
+        )
+        self.assertGreaterEqual(cursor_rect.top(), 0)
+        self.assertLessEqual(cursor_rect.bottom(), editor.viewport().height())
+        self.assertGreater(scroll_bar.maximum(), 0)
+        self.assertGreater(scroll_bar.value(), 0)
+        self.assertGreaterEqual(
+            scroll_bar.value(),
+            int(scroll_bar.maximum() * 0.75),
+        )
+        self.assertLessEqual(
+            scroll_bar.maximum() - scroll_bar.value(),
+            max(4, scroll_bar.pageStep() // 4),
+        )
+
+    def _position_cursor_in_view(
+        self,
+        editor: NotesEditor,
+        location: str,
+        block_number: int = 20,
+    ) -> dict[str, float | int]:
+        block = editor.document().findBlockByNumber(block_number)
+        self.assertTrue(block.isValid())
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.EndOfBlock)
+        editor.setTextCursor(cursor)
+        editor.setFocus()
+        editor.ensureCursorVisible()
+        self.app.processEvents()
+
+        line_spacing = QFontMetricsF(cursor.charFormat().font()).lineSpacing()
+        cursor_rect = editor.cursorRect(cursor)
+        if location == "upper":
+            target_top = round(line_spacing)
+        elif location == "middle":
+            target_top = round(
+                (editor.viewport().height() - cursor_rect.height()) / 2
+            )
+        elif location == "lower":
+            target_top = round(
+                editor.viewport().height()
+                - cursor_rect.height()
+                - max(2.0, line_spacing * 0.25)
+            )
+        else:
+            self.fail(f"Unknown viewport location: {location}")
+
+        scroll_bar = editor.verticalScrollBar()
+        scroll_bar.setValue(
+            scroll_bar.value() + round(cursor_rect.top() - target_top)
+        )
+        self.app.processEvents()
+        snapshot = self._cursor_view_snapshot(editor)
+        self.assertGreater(snapshot["scroll"], 0)
+        self.assertLess(snapshot["scroll"], snapshot["maximum"])
+        self.assertAlmostEqual(
+            snapshot["top"],
+            target_top,
+            delta=max(3.0, line_spacing * 0.25),
+        )
+        return snapshot
+
+    def _cursor_view_snapshot(
+        self,
+        editor: NotesEditor,
+    ) -> dict[str, float | int]:
+        cursor = editor.textCursor()
+        cursor_rect = editor.cursorRect(cursor)
+        scroll_bar = editor.verticalScrollBar()
+        return {
+            "block": cursor.blockNumber(),
+            "position": cursor.position(),
+            "top": cursor_rect.top(),
+            "bottom": cursor_rect.bottom(),
+            "height": cursor_rect.height(),
+            "scroll": scroll_bar.value(),
+            "maximum": scroll_bar.maximum(),
+            "line_spacing": QFontMetricsF(
+                cursor.charFormat().font()
+            ).lineSpacing(),
+        }
+
+    def _wait_for_layout_and_callbacks(self) -> None:
+        self.app.processEvents()
+        QTest.qWait(1)
+        self.app.processEvents()
+
+    def _assert_one_line_return(
+        self,
+        editor: NotesEditor,
+        before: dict[str, float | int],
+        location: str,
+    ) -> dict[str, float | int]:
+        self._wait_for_layout_and_callbacks()
+        after = self._cursor_view_snapshot(editor)
+        line_spacing = float(before["line_spacing"])
+        scroll_delta = int(after["scroll"]) - int(before["scroll"])
+        document_delta = (
+            float(after["top"])
+            + int(after["scroll"])
+            - float(before["top"])
+            - int(before["scroll"])
+        )
+
+        self.assertEqual(after["block"], int(before["block"]) + 1)
+        self.assertEqual(after["position"], int(before["position"]) + 1)
+        self.assertEqual(editor.textCursor().block().text(), "")
+        self.assertAlmostEqual(
+            document_delta,
+            line_spacing,
+            delta=max(4.0, line_spacing * 0.35),
+        )
+        self.assertGreater(int(after["scroll"]), 0)
+        self.assertLess(int(after["scroll"]), int(after["maximum"]))
+        self.assertLessEqual(
+            abs(scroll_delta),
+            round(line_spacing * 1.5) + 4,
+        )
+
+        expected_visual_top = (
+            float(before["top"]) + line_spacing - scroll_delta
+        )
+        self.assertAlmostEqual(
+            float(after["top"]),
+            expected_visual_top,
+            delta=max(4.0, line_spacing * 0.35),
+        )
+        if location in {"upper", "middle"}:
+            self.assertLessEqual(abs(scroll_delta), 2)
+            self.assertGreater(
+                editor.viewport().height() - float(after["bottom"]),
+                2,
+            )
+        else:
+            viewport_bottom = editor.viewport().rect().bottom() - 2
+            predicted_bottom = (
+                float(before["top"])
+                + line_spacing
+                + float(after["height"])
+                - 1
+            )
+            minimum_scroll = max(0.0, predicted_bottom - viewport_bottom)
+            self.assertGreaterEqual(scroll_delta, 0)
+            self.assertAlmostEqual(
+                scroll_delta,
+                minimum_scroll,
+                delta=max(4.0, line_spacing * 0.35),
+            )
+            self.assertLessEqual(
+                float(after["bottom"]),
+                editor.viewport().rect().bottom(),
+            )
+        return after
 
     def _set_heading_document_and_apply_size(self) -> None:
         self.editor.close()
@@ -268,6 +465,209 @@ class NotesEditorFontSizeInheritanceTest(unittest.TestCase):
                 QTextCursor.KeepAnchor,
             )
             self._assert_pixel_size(inserted.charFormat(), 20)
+        finally:
+            restored.close()
+
+    def test_single_return_from_middle_moves_one_line_without_scrolling(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(20)
+        before = self._position_cursor_in_view(editor, "middle")
+
+        QTest.keyClick(editor, Qt.Key_Return)
+
+        after = self._assert_one_line_return(editor, before, "middle")
+        self.assertGreater(
+            editor.viewport().height() - float(after["bottom"]),
+            float(before["line_spacing"]) * 0.5,
+        )
+
+    def test_consecutive_returns_each_move_one_line_without_scroll_jump(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(20)
+        before = self._position_cursor_in_view(editor, "middle")
+
+        QTest.keyClick(editor, Qt.Key_Return)
+        after_first = self._assert_one_line_return(editor, before, "middle")
+        QTest.keyClick(editor, Qt.Key_Return)
+        after_second = self._assert_one_line_return(
+            editor,
+            after_first,
+            "middle",
+        )
+
+        self.assertEqual(after_second["block"], int(before["block"]) + 2)
+        self.assertEqual(after_second["position"], int(before["position"]) + 2)
+
+    def test_return_scroll_is_minimal_at_three_viewport_positions(self) -> None:
+        for location in ("upper", "middle", "lower"):
+            with self.subTest(location=location):
+                editor = self._prepare_long_visible_editor(20)
+                before = self._position_cursor_in_view(editor, location)
+
+                QTest.keyClick(editor, Qt.Key_Return)
+
+                after = self._assert_one_line_return(
+                    editor,
+                    before,
+                    location,
+                )
+                if location in {"upper", "middle"}:
+                    self.assertGreater(
+                        editor.viewport().height() - float(after["bottom"]),
+                        float(before["line_spacing"]) * 0.5,
+                    )
+
+    def test_pending_correction_does_not_override_mouse_cursor_move(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(20)
+        self._position_cursor_in_view(editor, "middle")
+        QTest.keyClick(editor, Qt.Key_Return)
+        expected_enter_position = editor.textCursor().position()
+
+        QTest.mouseClick(
+            editor.viewport(),
+            Qt.LeftButton,
+            Qt.NoModifier,
+            QPoint(20, 20),
+        )
+        mouse_position = editor.textCursor().position()
+        mouse_scroll = editor.verticalScrollBar().value()
+        self.assertNotEqual(mouse_position, expected_enter_position)
+
+        self._wait_for_layout_and_callbacks()
+
+        self.assertEqual(editor.textCursor().position(), mouse_position)
+        self.assertLessEqual(
+            abs(editor.verticalScrollBar().value() - mouse_scroll),
+            2,
+        )
+
+    def test_pending_correction_does_not_override_arrow_navigation(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(20)
+        self._position_cursor_in_view(editor, "middle")
+        QTest.keyClick(editor, Qt.Key_Return)
+        QTest.keyClick(editor, Qt.Key_Up)
+        navigated_position = editor.textCursor().position()
+        navigated_scroll = editor.verticalScrollBar().value()
+
+        self._wait_for_layout_and_callbacks()
+
+        self.assertEqual(editor.textCursor().position(), navigated_position)
+        self.assertLessEqual(
+            abs(editor.verticalScrollBar().value() - navigated_scroll),
+            2,
+        )
+
+    def test_pending_correction_does_not_override_document_reload(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(20)
+        self._position_cursor_in_view(editor, "middle")
+        QTest.keyClick(editor, Qt.Key_Return)
+        editor.set_note_content("<p>Replacement fictional note.</p>")
+        replacement_position = editor.textCursor().position()
+        replacement_scroll = editor.verticalScrollBar().value()
+
+        self._wait_for_layout_and_callbacks()
+
+        self.assertEqual(editor.toPlainText(), "Replacement fictional note.")
+        self.assertEqual(editor.textCursor().position(), replacement_position)
+        self.assertEqual(
+            editor.verticalScrollBar().value(),
+            replacement_scroll,
+        )
+
+    def test_long_20px_document_return_keeps_cursor_visible_at_bottom(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(20)
+
+        for index in range(5):
+            with self.subTest(index=index):
+                before = editor.verticalScrollBar().value()
+                before_maximum = editor.verticalScrollBar().maximum()
+                self.assertGreaterEqual(
+                    before,
+                    int(before_maximum * 0.75),
+                )
+
+                QTest.keyClick(editor, Qt.Key_Return)
+                self._assert_cursor_visible_near_scroll_end(editor)
+                QTest.keyClicks(editor, f" fictional continuation {index}")
+                self._assert_cursor_visible_near_scroll_end(editor)
+
+    def test_long_default_15px_document_return_keeps_cursor_visible_at_bottom(
+        self,
+    ) -> None:
+        editor = self._prepare_long_visible_editor(None)
+        self.assertEqual(editor.textCursor().charFormat().font().pixelSize(), 15)
+
+        QTest.keyClick(editor, Qt.Key_Return)
+
+        self._assert_cursor_visible_near_scroll_end(editor)
+
+    def test_long_structured_blocks_keep_scroll_follow_when_exiting(self) -> None:
+        for structure in ("heading", "list", "quote", "code"):
+            with self.subTest(structure=structure):
+                editor = self._prepare_long_visible_editor(20)
+                if structure == "heading":
+                    editor.apply_heading(1)
+                elif structure == "list":
+                    editor.apply_list(False)
+                elif structure == "quote":
+                    editor.apply_quote()
+                else:
+                    editor.apply_code_block()
+                editor.ensureCursorVisible()
+                self.app.processEvents()
+
+                QTest.keyClick(editor, Qt.Key_Return)
+                self._assert_cursor_visible_near_scroll_end(editor)
+                if structure != "heading":
+                    QTest.keyClick(editor, Qt.Key_Return)
+                    self._assert_cursor_visible_near_scroll_end(editor)
+
+                block = editor.textCursor().block()
+                if structure == "heading":
+                    self.assertEqual(block.blockFormat().headingLevel(), 0)
+                elif structure == "list":
+                    self.assertIsNone(block.textList())
+                elif structure == "quote":
+                    self.assertFalse(
+                        bool(
+                            block.blockFormat().property(QUOTE_BLOCK_PROPERTY)
+                        )
+                    )
+                else:
+                    self.assertFalse(
+                        editor._is_code_block_format(block.blockFormat())
+                    )
+
+    def test_long_html_reload_then_return_keeps_cursor_visible_at_bottom(
+        self,
+    ) -> None:
+        source = self._prepare_long_visible_editor(20)
+        html = source.note_content_html()
+        restored = NotesEditor()
+        try:
+            restored.resize(500, 180)
+            restored.show()
+            self.app.processEvents()
+            restored.set_note_content(html)
+            self._move_to_document_end(restored)
+            restored.ensureCursorVisible()
+            self.app.processEvents()
+            self.assertGreater(restored.verticalScrollBar().maximum(), 0)
+            self.assertGreater(restored.verticalScrollBar().value(), 0)
+
+            QTest.keyClick(restored, Qt.Key_Return)
+
+            self._assert_cursor_visible_near_scroll_end(restored)
         finally:
             restored.close()
 
