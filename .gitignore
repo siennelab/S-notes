@@ -40,3 +40,5 @@ __pycache__/
 
 /build/
 /dist/
+/build-d1-candidate/
+/dist-d1-candidate/

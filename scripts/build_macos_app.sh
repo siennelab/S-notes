@@ -6,13 +6,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="$ROOT_DIR/.venv/bin/python"
 SPEC_FILE="$ROOT_DIR/packaging/S-notes.spec"
+HELPER_SPEC_FILE="$ROOT_DIR/packaging/snotes-gale-production-pull.spec"
 ICON_SOURCE="$ROOT_DIR/resources/macos/icon/S-notes-icon-source-2048.png"
 BUILD_DIR="$ROOT_DIR/build"
 DIST_DIR="$ROOT_DIR/dist"
+if [[ "${1:-}" == "--candidate" ]]; then
+    BUILD_DIR="$ROOT_DIR/build-d1-candidate"
+    DIST_DIR="$ROOT_DIR/dist-d1-candidate"
+elif [[ $# -gt 0 ]]; then
+    echo "Usage: $0 [--candidate]" >&2
+    exit 2
+fi
 ICONSET_DIR="$BUILD_DIR/S-notes.iconset"
 ICNS_FILE="$BUILD_DIR/S-notes.icns"
+HELPER_WORK_DIR="$BUILD_DIR/helper-pyinstaller"
+HELPER_DIST_DIR="$BUILD_DIR/helper-dist"
+HELPER_EXECUTABLE="$HELPER_DIST_DIR/snotes-gale-production-pull"
 APP_BUNDLE="$DIST_DIR/S-notes.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/S-notes"
+APP_HELPER="$APP_BUNDLE/Contents/Resources/bin/snotes-gale-production-pull"
 
 EXPECTED_PYTHON_SERIES="3.13"
 EXPECTED_PYSIDE="6.10.3"
@@ -31,7 +43,8 @@ require_command() {
 safe_clean() {
     local target="$1"
     case "$target" in
-        "$ROOT_DIR/build"|"$ROOT_DIR/dist")
+        "$ROOT_DIR/build"|"$ROOT_DIR/dist"|\
+        "$ROOT_DIR/build-d1-candidate"|"$ROOT_DIR/dist-d1-candidate")
             rm -rf -- "$target"
             ;;
         *)
@@ -52,9 +65,10 @@ echo "Repository: $ROOT_DIR"
 [[ -f "$ROOT_DIR/app.py" && -d "$ROOT_DIR/src" ]] || fail "Unexpected repository layout."
 [[ -x "$PYTHON" ]] || fail "Project Python not found: $PYTHON"
 [[ -f "$SPEC_FILE" ]] || fail "PyInstaller spec not found: $SPEC_FILE"
+[[ -f "$HELPER_SPEC_FILE" ]] || fail "Helper PyInstaller spec not found: $HELPER_SPEC_FILE"
 [[ -f "$ICON_SOURCE" ]] || fail "Official icon source not found: $ICON_SOURCE"
 
-for command_name in sips iconutil file lipo otool codesign du find grep tr awk; do
+for command_name in sips iconutil file lipo otool codesign du find grep tr awk shasum; do
     require_command "$command_name"
 done
 [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy not found."
@@ -73,8 +87,10 @@ hooks_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version(
 [[ "$hooks_version" == "$EXPECTED_HOOKS" ]] || fail "Expected pyinstaller-hooks-contrib $EXPECTED_HOOKS, found $hooks_version."
 
 [[ "$(grep -c '^[[:space:]]*datas=' "$SPEC_FILE")" == "1" ]] || fail "The spec must define exactly one datas whitelist."
-grep -Fq 'datas=[(str(SVG_DIR), "src/icons")]' "$SPEC_FILE" || fail "The spec datas whitelist must contain only src/icons."
+grep -Fq '(str(SVG_DIR), "src/icons")' "$SPEC_FILE" || fail "The App spec must include src/icons."
+grep -Fq '(str(HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the production helper."
 grep -Fq 'target_arch="arm64"' "$SPEC_FILE" || fail "The spec must target arm64."
+grep -Fq 'target_arch="arm64"' "$HELPER_SPEC_FILE" || fail "The helper spec must target arm64."
 grep -Fq 'bundle_identifier="de.ke-den.snotes"' "$SPEC_FILE" || fail "The Bundle Identifier is missing from the spec."
 grep -Fq '"CFBundleShortVersionString": "1.0.0"' "$SPEC_FILE" || fail "The short version is missing from the spec."
 grep -Fq '"CFBundleVersion": "1"' "$SPEC_FILE" || fail "The build version is missing from the spec."
@@ -118,6 +134,19 @@ if ! iconutil -c icns "$ICONSET_DIR" -o "$ICNS_FILE"; then
     "$PYTHON" -B "$ROOT_DIR/scripts/build_icns.py" "$ICONSET_DIR" "$ICNS_FILE"
 fi
 
+echo "Building standalone production pull helper..."
+"$PYTHON" -m PyInstaller \
+    --noconfirm \
+    --clean \
+    --workpath "$HELPER_WORK_DIR" \
+    --distpath "$HELPER_DIST_DIR" \
+    "$HELPER_SPEC_FILE"
+
+[[ -x "$HELPER_EXECUTABLE" ]] || fail "Production helper was not created: $HELPER_EXECUTABLE"
+[[ "$(lipo -archs "$HELPER_EXECUTABLE")" == "arm64" ]] || fail "Production helper is not arm64."
+[[ "$("$HELPER_EXECUTABLE" --version)" == "snotes-gale-production-pull 1" ]] || fail "Production helper version check failed."
+codesign --verify --strict --verbose=2 "$HELPER_EXECUTABLE"
+
 icns_metadata="$(sips -g format -g pixelWidth -g pixelHeight "$ICNS_FILE")"
 grep -q "format: icns" <<<"$icns_metadata" || fail "Generated App icon must be ICNS."
 grep -q "pixelWidth: 1024" <<<"$icns_metadata" || fail "Generated App icon width must be 1024."
@@ -125,7 +154,10 @@ grep -q "pixelHeight: 1024" <<<"$icns_metadata" || fail "Generated App icon heig
 
 echo "Building S-notes.app..."
 cd "$ROOT_DIR"
-"$PYTHON" -m PyInstaller \
+env \
+    S_NOTES_APP_ICON="$ICNS_FILE" \
+    S_NOTES_HELPER_BINARY="$HELPER_EXECUTABLE" \
+    "$PYTHON" -m PyInstaller \
     --noconfirm \
     --clean \
     --workpath "$BUILD_DIR/pyinstaller" \
@@ -134,6 +166,12 @@ cd "$ROOT_DIR"
 
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle was not created: $APP_BUNDLE"
 [[ -x "$APP_EXECUTABLE" ]] || fail "App executable was not created: $APP_EXECUTABLE"
+[[ -x "$APP_HELPER" ]] || fail "Embedded production helper is missing or not executable: $APP_HELPER"
+[[ "$(lipo -archs "$APP_HELPER")" == "arm64" ]] || fail "Embedded production helper is not arm64."
+[[ "$("$APP_HELPER" --version)" == "snotes-gale-production-pull 1" ]] || fail "Embedded production helper version check failed."
+helper_hash="$(shasum -a 256 "$HELPER_EXECUTABLE" | awk '{print $1}')"
+embedded_helper_hash="$(shasum -a 256 "$APP_HELPER" | awk '{print $1}')"
+[[ "$helper_hash" == "$embedded_helper_hash" ]] || fail "Embedded helper hash differs from the standalone build."
 
 [[ "$(metadata_value CFBundleName)" == "S-notes" ]] || fail "Incorrect CFBundleName."
 [[ "$(metadata_value CFBundleDisplayName)" == "S-notes" ]] || fail "Incorrect CFBundleDisplayName."
@@ -177,6 +215,8 @@ echo "BUILD SUCCESS"
 echo "App: $APP_BUNDLE"
 echo "Size: $app_size"
 echo "Architecture: $executable_archs"
+echo "Helper: $APP_HELPER"
+echo "Helper SHA-256: $helper_hash"
 echo "Qt platform plugin: ${qt_platform_plugin#"$APP_BUNDLE"/}"
 echo "Signature: codesign verification passed (ad-hoc)"
 echo "The App was not launched or installed."

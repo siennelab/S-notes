@@ -88,6 +88,14 @@ from src.editor import NotesEditor
 from src.editor_toolbar import EditorToolbar
 from src.export_center import ExportCenterDialog, ExportContext
 from src.floating_combo import FloatingComboBox
+from src.gale_production_background import (
+    AUTO_PULL_SETTING,
+    BackgroundPullError,
+    background_paths,
+    background_status_text,
+    record_background_error,
+    start_bundled_installer,
+)
 from src.link_drawer import LinkDrawer
 from src.sidebar_interactions import (
     TrashTreeWidget,
@@ -244,6 +252,8 @@ class MainWindow(QMainWindow):
     AUTOSAVE_RETRY_DELAYS_MS = (3000, 10000, 30000)
     GALE_AUTO_PUBLISH_SETTING = "gale/auto_publish_enabled"
     GALE_WATCH_INTERVAL_MS = 60_000
+    GALE_AUTO_PULL_SETTING = AUTO_PULL_SETTING
+    GALE_PULL_STATE_WATCH_INTERVAL_MS = 5_000
 
     def __init__(self) -> None:
         super().__init__()
@@ -291,6 +301,16 @@ class MainWindow(QMainWindow):
         self.gale_watch_timer = QTimer(self)
         self.gale_watch_timer.setInterval(self.GALE_WATCH_INTERVAL_MS)
         self.gale_watch_timer.timeout.connect(self.check_gale_auto_publish)
+        self.gale_auto_pull_enabled = True
+        self.gale_auto_pull_installer_pid: int | None = None
+        self.gale_pull_state_signature: tuple[int, int] | None = None
+        self.gale_pull_state_timer = QTimer(self)
+        self.gale_pull_state_timer.setInterval(
+            self.GALE_PULL_STATE_WATCH_INTERVAL_MS
+        )
+        self.gale_pull_state_timer.timeout.connect(
+            self.refresh_gale_auto_pull_state
+        )
 
         self.setWindowTitle("S-notes")
         self.resize(1360, 860)
@@ -302,6 +322,7 @@ class MainWindow(QMainWindow):
         self.refresh_directory_tree()
         self.ensure_startup_note_loaded()
         self.configure_gale_auto_publish()
+        self.configure_gale_auto_pull()
 
     def _build_content(self) -> QWidget:
         root = QWidget()
@@ -1547,6 +1568,69 @@ class MainWindow(QMainWindow):
             self.gale_auto_scheduler.disable()
             self.gale_watch_timer.stop()
 
+    def configure_gale_auto_pull(self) -> None:
+        self.gale_auto_pull_enabled = bool(
+            self.settings.value(
+                self.GALE_AUTO_PULL_SETTING,
+                True,
+                type=bool,
+            )
+        )
+        if DATA_ROOT_OVERRIDDEN or not getattr(sys, "frozen", False):
+            return
+        self.gale_pull_state_timer.start()
+        QTimer.singleShot(0, self.start_gale_auto_pull_check)
+
+    def set_gale_auto_pull_enabled(self, enabled: bool) -> None:
+        self.gale_auto_pull_enabled = bool(enabled)
+        self.settings.setValue(
+            self.GALE_AUTO_PULL_SETTING,
+            self.gale_auto_pull_enabled,
+        )
+        self.settings.sync()
+        if (
+            self.gale_auto_pull_enabled
+            and not DATA_ROOT_OVERRIDDEN
+            and getattr(sys, "frozen", False)
+        ):
+            self.start_gale_auto_pull_check()
+
+    def start_gale_auto_pull_check(self) -> None:
+        if DATA_ROOT_OVERRIDDEN or not getattr(sys, "frozen", False):
+            return
+        try:
+            self.gale_auto_pull_installer_pid = start_bundled_installer()
+        except BackgroundPullError as error:
+            try:
+                record_background_error(background_paths(), error.code)
+            except BackgroundPullError:
+                pass
+
+    def gale_auto_pull_status_text(self) -> str:
+        if DATA_ROOT_OVERRIDDEN:
+            return "隔离数据环境中不启动生产自动接收"
+        return background_status_text(background_paths().state)
+
+    def refresh_gale_auto_pull_state(self, *, force: bool = False) -> None:
+        if DATA_ROOT_OVERRIDDEN:
+            return
+        state_path = background_paths().state
+        try:
+            stat_result = state_path.stat()
+            signature = (stat_result.st_mtime_ns, stat_result.st_size)
+        except OSError:
+            signature = None
+        if not force and signature == self.gale_pull_state_signature:
+            return
+        self.gale_pull_state_signature = signature
+        self.refresh_ai_center_badge()
+        dialog = self.receipt_inbox_dialog
+        if dialog is not None:
+            try:
+                dialog.refresh_pending_silently()
+            except RuntimeError:
+                self.receipt_inbox_dialog = None
+
     def publish_to_gale_now(self) -> None:
         self.start_gale_publish(manual=True)
 
@@ -1690,6 +1774,9 @@ class MainWindow(QMainWindow):
             auto_publish_enabled=self.gale_auto_scheduler.enabled,
             set_auto_publish_enabled=self.set_gale_auto_publish_enabled,
             publish_now=self.publish_to_gale_now,
+            auto_pull_enabled=self.gale_auto_pull_enabled,
+            set_auto_pull_enabled=self.set_gale_auto_pull_enabled,
+            auto_pull_status=self.gale_auto_pull_status_text,
         )
         self.receipt_inbox_dialog = dialog
         dialog.set_remote_publish_enabled(
@@ -2552,6 +2639,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.gale_watch_timer.stop()
+        self.gale_pull_state_timer.stop()
         self.gale_auto_scheduler.disable()
         if (
             self.gale_publish_thread is not None

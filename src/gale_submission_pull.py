@@ -8,6 +8,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,7 @@ MAX_TRANSPORT_BYTES = 6 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30
 ISOLATED_ROOT_PREFIX = "snotes-r1b-"
 LOCAL_RECEIPT_ID_PATTERN = re.compile(r"^[1-9][0-9]{0,18}$")
+LOCAL_WRITE_RETRY_DELAYS_SECONDS = (0.1, 0.3)
 
 
 class GaleSubmissionPullError(RuntimeError):
@@ -288,15 +290,9 @@ def _pull_to_validated_root(
                 database_path=database_path,
             )
         )
-        receipt = create_gale_submission(
-            external_submission_id=submission["external_submission_id"],
-            idempotency_key=submission["idempotency_key"],
-            title=submission["title"],
-            body=submission["content"],
-            main_category=submission["main_category"],
-            sub_category=submission["sub_category"],
-            sub_sub_category=submission["sub_sub_category"],
-            tags=submission["suggested_tags"],
+        receipt = _create_gale_submission_with_retry(
+            create_gale_submission,
+            submission=submission,
             database_path=database_path,
         )
         if (
@@ -324,6 +320,36 @@ def _pull_to_validated_root(
         acknowledged_count=acknowledged_count,
         duplicate_count=duplicate_count,
     )
+
+
+def _create_gale_submission_with_retry(
+    create_submission,
+    *,
+    submission: dict[str, Any],
+    database_path: Path,
+) -> dict:
+    delays = (*LOCAL_WRITE_RETRY_DELAYS_SECONDS, None)
+    for delay in delays:
+        try:
+            return create_submission(
+                external_submission_id=submission["external_submission_id"],
+                idempotency_key=submission["idempotency_key"],
+                title=submission["title"],
+                body=submission["content"],
+                main_category=submission["main_category"],
+                sub_category=submission["sub_category"],
+                sub_sub_category=submission["sub_sub_category"],
+                tags=submission["suggested_tags"],
+                database_path=database_path,
+            )
+        except sqlite3.OperationalError as error:
+            message = str(error).casefold()
+            if delay is None or not (
+                "locked" in message or "busy" in message
+            ):
+                raise
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def parse_export_payload(
@@ -529,7 +555,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"REMOTE_ACKNOWLEDGED_COUNT={status['acknowledged']}")
             return 0
         if args.mode == PRODUCTION_MODE:
-            result = pull_production_submissions(transport)
+            from src.gale_production_background import run_production_pull_once
+
+            outcome = run_production_pull_once(
+                respect_setting=False,
+                transport=transport,
+            )
+            if outcome.status == "locked":
+                raise GaleSubmissionPullError("pull_already_running")
+            if outcome.status != "success" or outcome.result is None:
+                raise GaleSubmissionPullError(
+                    outcome.error_code or "unexpected_failure"
+                )
+            result = outcome.result
         else:
             result = pull_submissions(transport, data_root=data_root)
         print("GALE_SUBMISSION_PULL_STATUS=PASS")

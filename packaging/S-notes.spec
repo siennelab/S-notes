@@ -1,16 +1,28 @@
+import os
 from pathlib import Path
 
 
 ROOT = Path(SPECPATH).resolve().parent
 SVG_DIR = ROOT / "src" / "icons"
 APP_ICON = ROOT / "build" / "S-notes.icns"
+if os.environ.get("S_NOTES_APP_ICON"):
+    APP_ICON = Path(os.environ["S_NOTES_APP_ICON"])
+HELPER_BINARY = Path(
+    os.environ.get(
+        "S_NOTES_HELPER_BINARY",
+        str(ROOT / "build" / "helper-dist" / "snotes-gale-production-pull"),
+    )
+)
 
 
 analysis = Analysis(
     [str(ROOT / "app.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[(str(SVG_DIR), "src/icons")],
+    datas=[
+        (str(SVG_DIR), "src/icons"),
+        (str(HELPER_BINARY), "bin"),
+    ],
     hiddenimports=["PySide6.QtSvg"],
     hookspath=[],
     hooksconfig={},

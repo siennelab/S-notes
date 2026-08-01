@@ -74,11 +74,17 @@ class AiCenterDialog(QWidget):
         auto_publish_enabled: bool = False,
         set_auto_publish_enabled: Callable[[bool], None] | None = None,
         publish_now: Callable[[], None] | None = None,
+        auto_pull_enabled: bool = True,
+        set_auto_pull_enabled: Callable[[bool], None] | None = None,
+        auto_pull_status: Callable[[], str] | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
         self._set_auto_publish_enabled = set_auto_publish_enabled
         self._publish_now = publish_now
         self._initial_auto_publish_enabled = bool(auto_publish_enabled)
+        self._set_auto_pull_enabled = set_auto_pull_enabled
+        self._auto_pull_status = auto_pull_status
+        self._initial_auto_pull_enabled = bool(auto_pull_enabled)
         self.setObjectName("aiCenterDialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setWindowTitle("AI中心")
@@ -139,6 +145,14 @@ class AiCenterDialog(QWidget):
             QMessageBox.warning(self, "刷新待确认失败", str(error))
         finally:
             self._restore_top_level_activation()
+
+    def refresh_pending_silently(self) -> None:
+        try:
+            self.pending_page.refresh_receipt_list()
+        except Exception:
+            pass
+        if hasattr(self, "auto_pull_status_label"):
+            self.refresh_auto_pull_status()
 
     def _restore_top_level_activation(self) -> None:
         if not self.isVisible() or self.isActiveWindow():
@@ -316,6 +330,30 @@ class AiCenterDialog(QWidget):
         self.confirmation_note.setObjectName("settingsHelpText")
         layout.addWidget(self.confirmation_note)
 
+        gale_receive_group = QWidget()
+        gale_receive_group.setObjectName("galeAutoReceiveGroup")
+        gale_receive_layout = QVBoxLayout(gale_receive_group)
+        gale_receive_layout.setContentsMargins(0, 0, 0, 0)
+        gale_receive_layout.setSpacing(8)
+        gale_receive_title = QLabel("Gale 投稿")
+        gale_receive_title.setObjectName("settingsSectionTitle")
+        gale_receive_layout.addWidget(gale_receive_title)
+        self.auto_pull_checkbox = QCheckBox("自动接收 Gale 投稿")
+        self.auto_pull_checkbox.setObjectName("galeAutoPullEnabled")
+        self.auto_pull_checkbox.setChecked(self._initial_auto_pull_enabled)
+        self.auto_pull_checkbox.toggled.connect(self.handle_auto_pull_changed)
+        gale_receive_layout.addWidget(self.auto_pull_checkbox)
+        auto_pull_help = QLabel(
+            "Mac 醒着时会定期检查，收到的投稿只进入“待确认”，不会自动成为正式笔记。"
+        )
+        auto_pull_help.setObjectName("settingsHelpText")
+        auto_pull_help.setWordWrap(True)
+        gale_receive_layout.addWidget(auto_pull_help)
+        self.auto_pull_status_label = QLabel("")
+        self.auto_pull_status_label.setObjectName("settingsStatusText")
+        gale_receive_layout.addWidget(self.auto_pull_status_label)
+        layout.addWidget(gale_receive_group)
+
         remote_group = QWidget()
         remote_group.setObjectName("remoteAiAccessGroup")
         remote_layout = QVBoxLayout(remote_group)
@@ -355,6 +393,21 @@ class AiCenterDialog(QWidget):
         if self._set_auto_publish_enabled is not None:
             self._set_auto_publish_enabled(bool(enabled))
 
+    def handle_auto_pull_changed(self, enabled: bool) -> None:
+        if self._set_auto_pull_enabled is not None:
+            self._set_auto_pull_enabled(bool(enabled))
+        self.refresh_auto_pull_status()
+
+    def refresh_auto_pull_status(self) -> None:
+        if self._auto_pull_status is None:
+            self.auto_pull_status_label.setText("等待首次自动检查")
+            return
+        try:
+            text = self._auto_pull_status()
+        except Exception:
+            text = "后台状态暂不可用"
+        self.auto_pull_status_label.setText(text)
+
     def handle_remote_update_now(self) -> None:
         if self._publish_now is not None:
             self._publish_now()
@@ -371,3 +424,4 @@ class AiCenterDialog(QWidget):
             checkbox.blockSignals(True)
             checkbox.setChecked(values[key])
             checkbox.blockSignals(False)
+        self.refresh_auto_pull_status()
