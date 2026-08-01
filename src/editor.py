@@ -611,6 +611,8 @@ class NotesEditor(QTextEdit):
         char_format: QTextCharFormat,
         pixel_size: int,
     ) -> None:
+        char_format.clearProperty(QTextFormat.FontPointSize)
+        char_format.clearProperty(QTextFormat.FontPixelSize)
         char_format.setProperty(QTextFormat.FontPixelSize, pixel_size)
 
     def apply_heading(self, level: int) -> None:
@@ -658,11 +660,28 @@ class NotesEditor(QTextEdit):
     ) -> None:
         start = selection.selectionStart()
         end = selection.selectionEnd()
-        edit_cursor = QTextCursor(self.document())
+        document = self.document()
+        document_end = document.characterCount() - 1
+        selects_entire_document = start == 0 and end == document_end
+        edit_cursor = QTextCursor(document)
         edit_cursor.beginEditBlock()
         try:
-            block = self.document().findBlock(start)
-            while block.isValid() and block.position() < end:
+            block = document.findBlock(start)
+            while block.isValid() and (
+                block.position() < end or selects_entire_document
+            ):
+                block_start = block.position()
+                block_text_end = block_start + block.length() - 1
+                is_terminal_block = not block.next().isValid()
+                paragraph_boundary_selected = (
+                    end > block_text_end
+                    or (is_terminal_block and end == document_end)
+                )
+                fully_selected = selects_entire_document or (
+                    start <= block_start
+                    and end >= block_text_end
+                    and paragraph_boundary_selected
+                )
                 iterator = block.begin()
                 while not iterator.atEnd():
                     fragment = iterator.fragment()
@@ -670,10 +689,8 @@ class NotesEditor(QTextEdit):
                     fragment_end = min(end, fragment.position() + fragment.length())
                     if fragment.isValid() and fragment_end > fragment_start:
                         char_format = QTextCharFormat(fragment.charFormat())
-                        char_format.clearProperty(QTextFormat.FontPointSize)
-                        char_format.clearProperty(QTextFormat.FontPixelSize)
                         self._set_char_format_pixel_size(char_format, pixel_size)
-                        range_cursor = QTextCursor(self.document())
+                        range_cursor = QTextCursor(document)
                         range_cursor.setPosition(fragment_start)
                         range_cursor.setPosition(
                             fragment_end,
@@ -681,6 +698,13 @@ class NotesEditor(QTextEdit):
                         )
                         range_cursor.setCharFormat(char_format)
                     iterator += 1
+                if fully_selected:
+                    block_char_format = QTextCharFormat(block.charFormat())
+                    self._set_char_format_pixel_size(
+                        block_char_format,
+                        pixel_size,
+                    )
+                    QTextCursor(block).setBlockCharFormat(block_char_format)
                 block = block.next()
         finally:
             edit_cursor.endEditBlock()
