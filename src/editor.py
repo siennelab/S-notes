@@ -283,6 +283,40 @@ class NotesEditor(QTextEdit):
     def keyPressEvent(self, event) -> None:
         modifiers = event.modifiers()
         command_modifiers = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier
+        cursor = self.textCursor()
+        preserve_pixel_size = (
+            event.key() in {Qt.Key_Return, Qt.Key_Enter}
+            and not cursor.hasSelection()
+            and not modifiers & (command_modifiers | Qt.ShiftModifier)
+            and cursor.charFormat().hasProperty(QTextFormat.FontPixelSize)
+        )
+        if preserve_pixel_size:
+            pixel_size = int(
+                cursor.charFormat().property(QTextFormat.FontPixelSize)
+            )
+            edit_cursor = QTextCursor(self.document())
+            edit_cursor.beginEditBlock()
+            try:
+                super().keyPressEvent(event)
+                cursor = self.textCursor()
+                block_char_format = QTextCharFormat(
+                    cursor.block().charFormat()
+                )
+                self._set_char_format_pixel_size(
+                    block_char_format,
+                    pixel_size,
+                )
+                QTextCursor(cursor.block()).setBlockCharFormat(
+                    block_char_format
+                )
+                input_format = QTextCharFormat()
+                self._set_char_format_pixel_size(input_format, pixel_size)
+                cursor.mergeCharFormat(input_format)
+                self.setTextCursor(cursor)
+                self.mergeCurrentCharFormat(input_format)
+            finally:
+                edit_cursor.endEditBlock()
+            return
         if (
             event.text()
             and event.text() not in {"\r", "\n", "\t"}
