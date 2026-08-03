@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.app_paths import DATABASE_PATH
+from src.search_query import match_search_fields, parse_search_query
 from src.ai_targets import (
     AI_TARGET_COMMON,
     AI_TARGET_COMMON_ID,
@@ -2190,34 +2191,51 @@ def list_notes_by_tag(tag: str, database_path: Path = DATABASE_PATH) -> list[dic
 
 
 def search_notes(query: str, database_path: Path = DATABASE_PATH) -> list[dict]:
-    term = query.strip()
-    if not term:
+    parsed_query = parse_search_query(query)
+    if not parsed_query.tokens:
         return []
-    pattern = f"%{term}%"
     with _connect(database_path) as connection:
         rows = connection.execute(
             """
-            SELECT DISTINCT notes.id, notes.title, notes.main_category, notes.sub_category,
+            SELECT notes.id, notes.title, notes.main_category, notes.sub_category,
                    notes.sub_sub_category, notes.tags, notes.ai_visibility,
-                   notes.is_pinned, notes.created_at, notes.updated_at
+                   notes.is_pinned, notes.created_at, notes.updated_at,
+                   notes.content_html,
+                   COALESCE(GROUP_CONCAT(tags.name, CHAR(10)), '') AS normalized_tags
             FROM notes
             LEFT JOIN note_tags ON note_tags.note_id = notes.id
             LEFT JOIN tags ON tags.id = note_tags.tag_id
             WHERE notes.is_deleted = 0
-              AND (
-                notes.title LIKE ?
-                OR notes.content_html LIKE ?
-                OR notes.main_category LIKE ?
-                OR notes.sub_category LIKE ?
-                OR notes.sub_sub_category LIKE ?
-                OR notes.tags LIKE ?
-                OR tags.name LIKE ?
-              )
-            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            GROUP BY notes.id
             """,
-            (pattern, pattern, pattern, pattern, pattern, pattern, pattern),
         ).fetchall()
-    return [dict(row) for row in rows]
+    scored_rows: list[tuple[int, dict]] = []
+    for row in rows:
+        match = match_search_fields(
+            parsed_query,
+            title=row["title"],
+            body=row["content_html"],
+            directory=" / ".join(
+                (
+                    str(row["main_category"] or ""),
+                    str(row["sub_category"] or ""),
+                    str(row["sub_sub_category"] or ""),
+                )
+            ),
+            tags=(row["tags"], row["normalized_tags"]),
+        )
+        if match is not None:
+            scored_rows.append((match.score, _public_note_search_row(row)))
+    scored_rows.sort(
+        key=lambda item: (
+            item[0],
+            item[1]["updated_at"],
+            item[1]["created_at"],
+            item[1]["id"],
+        ),
+        reverse=True,
+    )
+    return [row for _score, row in scored_rows]
 
 
 def list_pinned_notes(database_path: Path = DATABASE_PATH) -> list[dict]:
@@ -2276,7 +2294,9 @@ def list_ai_visible_notes(
         if actor_target_id is not None
         else None
     )
-    term = query.strip()
+    parsed_query = parse_search_query(query)
+    if not parsed_query.is_blank and not parsed_query.tokens:
+        return []
     parameters: list[object] = []
     clauses = [
         "notes.is_deleted = 0",
@@ -2298,39 +2318,71 @@ def list_ai_visible_notes(
             """
         )
         parameters.append(actor)
-    if term:
-        pattern = f"%{term}%"
-        clauses.append(
-            """
-            (
-                notes.title LIKE ?
-                OR notes.content_html LIKE ?
-                OR notes.main_category LIKE ?
-                OR notes.sub_category LIKE ?
-                OR notes.sub_sub_category LIKE ?
-                OR notes.tags LIKE ?
-                OR tags.name LIKE ?
-            )
-            """
-        )
-        parameters.extend([pattern] * 7)
 
     with _connect(database_path) as connection:
         rows = connection.execute(
             f"""
-            SELECT DISTINCT notes.id, notes.title, notes.main_category,
+            SELECT notes.id, notes.title, notes.main_category,
                    notes.sub_category, notes.sub_sub_category, notes.tags,
                    notes.ai_visibility, notes.is_pinned, notes.created_at,
-                   notes.updated_at
+                   notes.updated_at, notes.content_html,
+                   COALESCE(GROUP_CONCAT(tags.name, CHAR(10)), '') AS normalized_tags
             FROM notes
             LEFT JOIN note_tags ON note_tags.note_id = notes.id
             LEFT JOIN tags ON tags.id = note_tags.tag_id
             WHERE {" AND ".join(clauses)}
-            ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC
+            GROUP BY notes.id
             """,
             parameters,
         ).fetchall()
-    return [dict(row) for row in rows]
+    scored_rows: list[tuple[int, dict]] = []
+    for row in rows:
+        match = None
+        if parsed_query.tokens:
+            match = match_search_fields(
+                parsed_query,
+                title=row["title"],
+                body=row["content_html"],
+                directory=" / ".join(
+                    (
+                        str(row["main_category"] or ""),
+                        str(row["sub_category"] or ""),
+                        str(row["sub_sub_category"] or ""),
+                    )
+                ),
+                tags=(row["tags"], row["normalized_tags"]),
+            )
+            if match is None:
+                continue
+        scored_rows.append((match.score if match else 0, _public_note_search_row(row)))
+    scored_rows.sort(
+        key=lambda item: (
+            item[0],
+            item[1]["updated_at"],
+            item[1]["created_at"],
+            item[1]["id"],
+        ),
+        reverse=True,
+    )
+    return [row for _score, row in scored_rows]
+
+
+def _public_note_search_row(row) -> dict:
+    return {
+        key: row[key]
+        for key in (
+            "id",
+            "title",
+            "main_category",
+            "sub_category",
+            "sub_sub_category",
+            "tags",
+            "ai_visibility",
+            "is_pinned",
+            "created_at",
+            "updated_at",
+        )
+    }
 
 
 def list_ai_safe_notes_for_target(

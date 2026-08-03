@@ -16,8 +16,10 @@ from src.services.gale_mirror_service import (
     MIRROR_SCHEMA_VERSION,
     GaleMirrorError,
     GaleMirrorVerification,
+    search_gale_mirror_rows,
     verify_gale_mirror,
 )
+from src.search_query import parse_search_query
 
 
 GALE_READ_SCOPE = "gale.read"
@@ -225,22 +227,16 @@ def search_remote_mirror(
         raise GaleRemoteError("query_too_long")
     if not 1 <= int(limit) <= MAX_SEARCH_LIMIT:
         raise GaleRemoteError("invalid_limit")
-    match_expression = '"' + needle.replace('"', '""') + '"'
+    parsed_query = parse_search_query(needle)
+    if not parsed_query.tokens:
+        return []
     connection = _open_remote_mirror(config)
     try:
-        rows = connection.execute(
-            """
-            SELECT notes.source_note_id, notes.title, notes.body,
-                   notes.directory, notes.tags_json, notes.source_updated_at
-            FROM mirror_notes_fts AS search
-            JOIN mirror_notes AS notes
-              ON notes.mirror_note_id = search.rowid
-            WHERE mirror_notes_fts MATCH ?
-            ORDER BY bm25(mirror_notes_fts), notes.source_updated_at DESC
-            LIMIT ?
-            """,
-            (match_expression, int(limit)),
-        ).fetchall()
+        rows = search_gale_mirror_rows(
+            connection,
+            parsed_query,
+            limit=int(limit),
+        )
     except sqlite3.Error as error:
         raise GaleRemoteError("search_failed") from error
     finally:

@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from src.ai_targets import AI_VISIBILITY_FULL, AI_VISIBILITY_REDACTED
+from src.search_query import (
+    build_safe_fts_phrase,
+    match_search_fields,
+    parse_search_query,
+)
 from src.services.ai_access_service import materialize_ai_safe_notes_for_target
 from src.time_utils import now_shanghai_iso
 
@@ -367,27 +372,17 @@ def search_gale_mirror(
     *,
     limit: int = 20,
 ) -> list[dict]:
-    needle = str(query or "").strip()
-    if not needle:
+    parsed_query = parse_search_query(query)
+    if not parsed_query.tokens:
         return []
     clean_limit = max(1, min(int(limit), 100))
-    match_expression = '"' + needle.replace('"', '""') + '"'
     connection = _open_mirror_read_only(Path(mirror_path))
     try:
-        rows = connection.execute(
-            """
-            SELECT notes.source_note_id, notes.title, notes.body,
-                   notes.directory, notes.tags_json,
-                   notes.source_updated_at, notes.visibility
-            FROM mirror_notes_fts AS search
-            JOIN mirror_notes AS notes
-              ON notes.mirror_note_id = search.rowid
-            WHERE mirror_notes_fts MATCH ?
-            ORDER BY bm25(mirror_notes_fts), notes.source_updated_at DESC
-            LIMIT ?
-            """,
-            (match_expression, clean_limit),
-        ).fetchall()
+        rows = search_gale_mirror_rows(
+            connection,
+            parsed_query,
+            limit=clean_limit,
+        )
     except sqlite3.Error as error:
         raise GaleMirrorError("mirror_search_failed") from error
     finally:
@@ -404,6 +399,57 @@ def search_gale_mirror(
         }
         for row in rows
     ]
+
+
+def search_gale_mirror_rows(
+    connection: sqlite3.Connection,
+    query: object,
+    *,
+    limit: int,
+) -> list[sqlite3.Row]:
+    """Search only already-materialized safe mirror fields on a read-only connection."""
+    parsed_query = parse_search_query(query)
+    if not parsed_query.tokens:
+        return []
+    exact_fts_ids: set[int] = set()
+    match_expression = build_safe_fts_phrase(parsed_query)
+    if match_expression is not None:
+        exact_fts_ids = {
+            int(row[0])
+            for row in connection.execute(
+                "SELECT rowid FROM mirror_notes_fts WHERE mirror_notes_fts MATCH ?",
+                (match_expression,),
+            ).fetchall()
+        }
+    rows = connection.execute(
+        """
+        SELECT mirror_note_id, source_note_id, title, body, directory,
+               tags_json, tags_text, source_updated_at, visibility
+        FROM mirror_notes
+        """
+    ).fetchall()
+    ranked: list[tuple[int, int, str, int, sqlite3.Row]] = []
+    for row in rows:
+        match = match_search_fields(
+            parsed_query,
+            title=row["title"],
+            body=row["body"],
+            directory=row["directory"],
+            tags=row["tags_text"],
+        )
+        if match is None:
+            continue
+        ranked.append(
+            (
+                match.score,
+                int(row["mirror_note_id"] in exact_fts_ids),
+                str(row["source_updated_at"]),
+                int(row["source_note_id"]),
+                row,
+            )
+        )
+    ranked.sort(key=lambda item: item[:4], reverse=True)
+    return [item[4] for item in ranked[: int(limit)]]
 
 
 def _validate_export_paths(

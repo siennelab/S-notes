@@ -392,6 +392,23 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(response.is_error)
                 self.assertEqual(response.structured_content["result_count"], 1)
 
+            multi_keyword = await session.call_tool(
+                "search_notes",
+                {
+                    "query": "ORBITAL_TAG_TERM，ORBITAL_TITLE_TERM",
+                    "limit": 10,
+                },
+            )
+            self.assertFalse(multi_keyword.is_error)
+            self.assertEqual(
+                multi_keyword.structured_content["result_count"],
+                1,
+            )
+            self.assertEqual(
+                multi_keyword.structured_content["results"][0]["note_id"],
+                self.note_ids["common"],
+            )
+
             injection_search = await session.call_tool(
                 "search_notes",
                 {"query": "FICTIONAL_INJECTION_NOTE", "limit": 10},

@@ -34,6 +34,7 @@ from src.database import (
     _set_note_tags_with_connection,
 )
 from src.redaction import load_redaction_rules
+from src.search_query import SearchQuery, match_search_fields, parse_search_query
 from src.services.ai_safe_materialization import materialize_ai_safe_note
 from src.tag_manager import parse_tags
 from src.time_utils import now_shanghai, now_shanghai_iso
@@ -226,7 +227,7 @@ def safe_search_notes(
         rows = _authorized_rows(connection, actor)
         safe_notes = [_safe_note(row, rules.replacements, connection) for row in rows]
 
-    needle = (query or "").strip().casefold()
+    parsed_query = parse_search_query(query)
     requested_tags = {
         str(value or "").strip().casefold() for value in (tags or []) if str(value or "").strip()
     }
@@ -240,7 +241,7 @@ def safe_search_notes(
             {tag.casefold() for tag in safe["tags"]}
         ):
             continue
-        match = _match_note(safe, needle)
+        match = _match_note(safe, parsed_query)
         if match is None:
             continue
         results.append({**_public_search_note(safe), **match})
@@ -1191,28 +1192,38 @@ def _open_ai_source_connection(
     return connection
 
 
-def _match_note(note: dict, needle: str) -> dict | None:
-    if not needle:
+def _match_note(note: dict, query: SearchQuery) -> dict | None:
+    if query.is_blank:
         return {
             "best_safe_snippet": _snippet(note["body"], ""),
             "matched_in": "all",
             "relevance": {"score": 1, "reason": "recent_safe_note"},
         }
-    title = note["title"].casefold()
-    tags = [tag.casefold() for tag in note["tags"]]
-    directory = note["directory"].casefold()
-    body = note["body"].casefold()
-    if title == needle:
-        return {"best_safe_snippet": note["title"], "matched_in": "title", "relevance": {"score": 400, "reason": "exact_title"}}
-    if needle in title:
-        return {"best_safe_snippet": _snippet(note["title"], needle), "matched_in": "title", "relevance": {"score": 350, "reason": "title"}}
-    if any(needle in tag for tag in tags):
-        return {"best_safe_snippet": ", ".join(note["tags"]), "matched_in": "tags", "relevance": {"score": 300, "reason": "tag"}}
-    if needle in directory:
-        return {"best_safe_snippet": note["directory"], "matched_in": "directory", "relevance": {"score": 200, "reason": "directory"}}
-    if needle in body:
-        return {"best_safe_snippet": _snippet(note["body"], needle), "matched_in": "body", "relevance": {"score": 100, "reason": "body"}}
-    return None
+    match = match_search_fields(
+        query,
+        title=note["title"],
+        tags=note["tags"],
+        directory=note["directory"],
+        body=note["body"],
+    )
+    if match is None:
+        return None
+    first_token = query.tokens[0]
+    if match.matched_in == "title":
+        snippet = _snippet(note["title"], first_token)
+    elif match.matched_in in {"tags", "title_tags"}:
+        snippet = " | ".join(
+            part for part in (note["title"], ", ".join(note["tags"])) if part
+        )
+    elif match.matched_in == "directory":
+        snippet = note["directory"]
+    else:
+        snippet = _snippet(note["body"], first_token)
+    return {
+        "best_safe_snippet": snippet,
+        "matched_in": match.matched_in,
+        "relevance": {"score": match.score, "reason": match.reason},
+    }
 
 
 def _public_search_note(note: dict) -> dict:

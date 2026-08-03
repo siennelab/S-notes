@@ -356,6 +356,16 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
             safe_redaction = await self.call(session, "search_notes", {"query": "MASKED"})
             self.assertEqual(safe_redaction["total_visible_matches"], 1)
             self.assertNotIn("TopSecret", json.dumps(safe_redaction, ensure_ascii=False))
+            multi_keyword = await self.call(
+                session,
+                "search_notes",
+                {"query": "gale-tag visible"},
+            )
+            self.assertEqual(multi_keyword["total_visible_matches"], 1)
+            self.assertEqual(
+                multi_keyword["results"][0]["note_id"],
+                self.ids["gale"],
+            )
 
             directories = await self.call(session, "list_directories", {})
             tags = await self.call(session, "list_tags", {})
