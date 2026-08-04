@@ -264,6 +264,27 @@ def _connect(database_path: Path = DATABASE_PATH) -> sqlite3.Connection:
 LAST_MIGRATION_REPORT: dict | None = None
 
 
+def _set_schema_meta(
+    connection: sqlite3.Connection,
+    meta_key: str,
+    meta_value: str,
+) -> None:
+    existing = connection.execute(
+        "SELECT meta_value FROM schema_meta WHERE meta_key = ?",
+        (meta_key,),
+    ).fetchone()
+    if existing is None:
+        connection.execute(
+            "INSERT INTO schema_meta(meta_key, meta_value) VALUES (?, ?)",
+            (meta_key, meta_value),
+        )
+    elif existing["meta_value"] != meta_value:
+        connection.execute(
+            "UPDATE schema_meta SET meta_value = ? WHERE meta_key = ?",
+            (meta_value, meta_key),
+        )
+
+
 def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
     global LAST_MIGRATION_REPORT
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -297,18 +318,20 @@ def initialize_database(database_path: Path = DATABASE_PATH) -> Path:
             "unknown_visibility_values": sorted(unknown_visibilities),
             "unknown_target_values": sorted(unknown_targets),
         }
-        connection.execute(
-            "INSERT OR REPLACE INTO schema_meta(meta_key, meta_value) VALUES (?, ?)",
-            ("ai_foundation_version", str(AI_SCHEMA_VERSION)),
+        _set_schema_meta(
+            connection,
+            "ai_foundation_version",
+            str(AI_SCHEMA_VERSION),
         )
         prior_report = connection.execute(
             "SELECT meta_value FROM schema_meta WHERE meta_key=?",
             ("task13a_last_migration_report",),
         ).fetchone()
         if needs_foundation or prior_report is None:
-            connection.execute(
-                "INSERT OR REPLACE INTO schema_meta(meta_key, meta_value) VALUES (?, ?)",
-                ("task13a_last_migration_report", json.dumps(report, ensure_ascii=False)),
+            _set_schema_meta(
+                connection,
+                "task13a_last_migration_report",
+                json.dumps(report, ensure_ascii=False),
             )
             retained_report = report
         else:
@@ -495,26 +518,55 @@ def _ensure_r1b_indexes_and_triggers(connection: sqlite3.Connection) -> None:
 def _seed_ai_targets(connection: sqlite3.Connection) -> None:
     timestamp = now_shanghai_iso()
     for item in AI_TARGET_DEFINITIONS:
-        connection.execute(
+        expected_fields = (
+            ("display_name", item.display_name),
+            ("slug", item.slug),
+            ("is_system", 1 if item.system else 0),
+            ("is_enabled", 1),
+        )
+        existing = connection.execute(
             """
-            INSERT INTO ai_targets (
-                target_id, display_name, slug, is_system, is_enabled,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(target_id) DO UPDATE SET
-                display_name=excluded.display_name,
-                slug=excluded.slug,
-                is_system=excluded.is_system,
-                updated_at=excluded.updated_at
+            SELECT display_name, slug, is_system, is_enabled
+            FROM ai_targets
+            WHERE target_id = ?
             """,
-            (
-                item.target_id,
-                item.display_name,
-                item.slug,
-                1 if item.system else 0,
-                timestamp,
-                timestamp,
-            ),
+            (item.target_id,),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                """
+                INSERT INTO ai_targets (
+                    target_id, display_name, slug, is_system, is_enabled,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.target_id,
+                    item.display_name,
+                    item.slug,
+                    1 if item.system else 0,
+                    1,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            continue
+
+        changed_fields = [
+            (column, expected)
+            for (column, expected), current in zip(expected_fields, existing)
+            if current != expected
+        ]
+        if not changed_fields:
+            continue
+
+        assignments = [f"{column} = ?" for column, _value in changed_fields]
+        assignments.append("updated_at = ?")
+        parameters = [value for _column, value in changed_fields]
+        parameters.extend((timestamp, item.target_id))
+        connection.execute(
+            f"UPDATE ai_targets SET {', '.join(assignments)} WHERE target_id = ?",
+            parameters,
         )
 
 
@@ -543,20 +595,32 @@ def _migrate_ai_visibility_values(connection: sqlite3.Connection) -> set[str]:
                 "UPDATE notes SET ai_visibility=? WHERE id=?",
                 (normalized, row["id"]),
             )
-    connection.execute(
+    inbox_needs_normalization = connection.execute(
         """
-        UPDATE ai_receipt_inbox
-        SET ai_visibility = CASE ai_visibility
-            WHEN '可直接给 AI' THEN 'full'
-            WHEN '脱敏后给 AI' THEN 'redacted'
-            WHEN 'AI完整可见' THEN 'full'
-            WHEN 'AI脱敏后可见' THEN 'redacted'
-            WHEN 'full' THEN 'full'
-            WHEN 'redacted' THEN 'redacted'
-            ELSE 'hidden'
-        END
+        SELECT 1
+        FROM ai_receipt_inbox
+        WHERE ai_visibility IS NULL
+           OR ai_visibility NOT IN ('full', 'redacted', 'hidden')
+        LIMIT 1
         """
     )
+    if inbox_needs_normalization.fetchone() is not None:
+        connection.execute(
+            """
+            UPDATE ai_receipt_inbox
+            SET ai_visibility = CASE ai_visibility
+                WHEN '可直接给 AI' THEN 'full'
+                WHEN '脱敏后给 AI' THEN 'redacted'
+                WHEN 'AI完整可见' THEN 'full'
+                WHEN 'AI脱敏后可见' THEN 'redacted'
+                WHEN 'full' THEN 'full'
+                WHEN 'redacted' THEN 'redacted'
+                ELSE 'hidden'
+            END
+            WHERE ai_visibility IS NULL
+               OR ai_visibility NOT IN ('full', 'redacted', 'hidden')
+            """
+        )
     return unknown
 
 
@@ -618,12 +682,22 @@ def _migrate_note_ai_targets_table(connection: sqlite3.Connection) -> set[str]:
 
 def _seed_ai_settings(connection: sqlite3.Connection) -> None:
     timestamp = now_shanghai_iso()
-    for key, value in (
+    defaults = (
         ("ai_create_requires_confirmation", "0"),
         ("ai_modify_requires_confirmation", "1"),
-    ):
+    )
+    existing_keys = {
+        row["setting_key"]
+        for row in connection.execute(
+            "SELECT setting_key FROM app_settings WHERE setting_key IN (?, ?)",
+            tuple(key for key, _value in defaults),
+        )
+    }
+    for key, value in defaults:
+        if key in existing_keys:
+            continue
         connection.execute(
-            "INSERT OR IGNORE INTO app_settings(setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
+            "INSERT INTO app_settings(setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
             (key, value, timestamp),
         )
 
