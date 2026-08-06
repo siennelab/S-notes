@@ -38,6 +38,7 @@ APPROVED_TOOLS = {
     "update_note_metadata",
     "get_operation_status",
 }
+READ_ONLY_TOOLS = {"search_notes", "get_note"}
 
 
 class StderrCapture:
@@ -170,9 +171,19 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
             directory=("项目", "GaleVisible", "无"),
         )
         self.create_note(
+            "clawbot", title="Clawbot visible", body="clawbot-body-needle",
+            visibility="full", targets=["clawbot"], tags=["clawbot-tag"],
+            directory=("项目", "ClawbotVisible", "无"),
+        )
+        self.create_note(
             "hidden", title="Hidden unique 7319", body="hidden-body-7319",
             visibility="hidden", targets=["gale"], tags=["hidden-tag-7319"],
             directory=("项目", "HiddenDirectory7319", "无"),
+        )
+        self.create_note(
+            "clawbot_hidden", title="Clawbot hidden 6124", body="clawbot-hidden-6124",
+            visibility="hidden", targets=["clawbot"], tags=["clawbot-hidden-tag-6124"],
+            directory=("项目", "ClawbotHidden6124", "无"),
         )
         self.create_note(
             "codex", title="Codex unique 8420", body="codex-body-8420",
@@ -183,6 +194,15 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
             "redacted", title="TopSecret redacted title", body="TopSecret redacted-body",
             visibility="redacted", targets=["gale"], tags=["TopSecret-tag"],
             directory=("项目", "TopSecret-directory", "无"),
+        )
+        self.create_note(
+            "clawbot_redacted",
+            title="TopSecret clawbot redacted title",
+            body="TopSecret clawbot-redacted-body",
+            visibility="redacted",
+            targets=["clawbot"],
+            tags=["TopSecret-clawbot-tag"],
+            directory=("项目", "TopSecretClawbotDirectory", "无"),
         )
         self.create_note(
             "unknown_visibility", title="Broken visibility 9531", body="broken-body-9531",
@@ -219,6 +239,7 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
         async with self.session() as (session, stderr):
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, APPROVED_TOOLS)
+            self.assertEqual(len(tools), 9)
             self.assertEqual((await session.list_resources()).resources, [])
             self.assertEqual((await session.list_prompts()).prompts, [])
             for tool in tools:
@@ -254,6 +275,11 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(oversized_page.isError)
             self.assertTrue(oversized_read.isError)
         self.assertNotIn("Traceback", stderr.getvalue())
+
+        async with self.session(SNOTES_MCP_READ_ONLY="0") as (session, _stderr):
+            tools = (await session.list_tools()).tools
+            self.assertEqual({tool.name for tool in tools}, APPROVED_TOOLS)
+            self.assertEqual(len(tools), 9)
 
     async def test_get_note_version_credentials_round_trip_and_then_conflict(self) -> None:
         service.set_ai_setting(service.CREATE_CONFIRMATION_KEY, False, self.database_path)
@@ -669,19 +695,61 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(connection.execute("PRAGMA quick_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
 
-    async def test_read_only_mode_rejects_writes_with_logged_receipt(self) -> None:
-        async with self.session(SNOTES_MCP_READ_ONLY="1") as (session, _stderr):
-            rejected = await self.call(
-                session,
+    async def test_read_only_mode_registers_only_safe_read_tools_for_clawbot(self) -> None:
+        async with self.session(
+            SNOTES_MCP_READ_ONLY="1",
+            SNOTES_MCP_ACTOR_TARGET_ID="clawbot",
+        ) as (session, _stderr):
+            tools = (await session.list_tools()).tools
+            self.assertEqual({tool.name for tool in tools}, READ_ONLY_TOOLS)
+            self.assertEqual(len(tools), 2)
+
+            blocked = await session.call_tool(
                 "create_note",
                 {"request_id": "readonly-create-1", "title": "No write", "content": "body"},
             )
-            self.assertEqual(rejected["status"], "rejected")
-            self.assertFalse(rejected["changed_formal_note"])
-            status = await self.call(
-                session, "get_operation_status", {"request_id": "readonly-create-1"}
+            self.assertTrue(blocked.isError)
+            blocked_text = json.dumps(
+                [item.model_dump() for item in blocked.content], ensure_ascii=False
+            ).lower()
+            self.assertIn("unknown tool: create_note", blocked_text)
+
+            common = await self.call(
+                session, "search_notes", {"query": "common-body-needle"}
             )
-            self.assertEqual(status["status"], "rejected")
+            self.assertEqual(common["total_visible_matches"], 1)
+            clawbot = await self.call(
+                session, "search_notes", {"query": "clawbot-body-needle"}
+            )
+            self.assertEqual(clawbot["total_visible_matches"], 1)
+            clawbot_note = await self.call(
+                session, "get_note", {"note_id": self.ids["clawbot"]}
+            )
+            self.assertEqual(clawbot_note["status"], "ok")
+
+            gale_only = await self.call(
+                session, "search_notes", {"query": "gale-body-needle"}
+            )
+            self.assertEqual(gale_only["total_visible_matches"], 0)
+            hidden = await self.call(
+                session, "search_notes", {"query": "clawbot-hidden-6124"}
+            )
+            self.assertEqual(hidden["total_visible_matches"], 0)
+
+            raw_redaction = await self.call(
+                session, "search_notes", {"query": "TopSecret"}
+            )
+            self.assertEqual(raw_redaction["total_visible_matches"], 0)
+            safe_redaction = await self.call(
+                session, "search_notes", {"query": "MASKED clawbot"}
+            )
+            self.assertEqual(safe_redaction["total_visible_matches"], 1)
+            redacted = await self.call(
+                session, "get_note", {"note_id": self.ids["clawbot_redacted"]}
+            )
+            redacted_text = json.dumps(redacted, ensure_ascii=False)
+            self.assertNotIn("TopSecret", redacted_text)
+            self.assertIn("[MASKED]", redacted_text)
         with _connect(self.database_path) as connection:
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM notes WHERE title='No write'").fetchone()[0],

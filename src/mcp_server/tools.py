@@ -382,6 +382,10 @@ def register_tools(mcp: FastMCP, config: RuntimeConfig) -> None:
         ),
         annotations=read_annotations,
     )
+    if config.read_only:
+        _enforce_strict_input_schemas(mcp)
+        return
+
     mcp.add_tool(
         adapter.list_directories,
         name="list_directories",
