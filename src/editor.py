@@ -554,17 +554,23 @@ class NotesEditor(QTextEdit):
 
         before_html = self.toHtml()
         cursor = self.textCursor()
-        if cursor.hasSelection():
-            text = self.sanitize_pasted_text(cursor.selection().toPlainText())
-            start = cursor.selectionStart()
-            cursor.beginEditBlock()
+        if not cursor.hasSelection():
+            cursor.select(QTextCursor.Document)
+        text = self.sanitize_pasted_text(cursor.selection().toPlainText())
+        start = cursor.selectionStart()
+        cursor.beginEditBlock()
+        try:
             cursor.insertText(text, self.clean_char_format())
             end = cursor.position()
-            self.normalize_format_range(start, end)
+            self.normalize_format_range(
+                start,
+                end,
+                normalize_block_chars=True,
+            )
+            self.setTextCursor(cursor)
+            self.setCurrentCharFormat(self.clean_char_format())
+        finally:
             cursor.endEditBlock()
-        else:
-            text = self.toPlainText()
-            self.setPlainText(self.sanitize_pasted_text(text))
 
         changed = self.toHtml() != before_html
         if changed:
@@ -1153,7 +1159,13 @@ class NotesEditor(QTextEdit):
             block = block.next()
         self.document().clearUndoRedoStacks()
 
-    def normalize_format_range(self, start: int, end: int) -> None:
+    def normalize_format_range(
+        self,
+        start: int,
+        end: int,
+        *,
+        normalize_block_chars: bool = False,
+    ) -> None:
         if end <= start:
             return
         clean_chars = self.clean_char_format()
@@ -1163,10 +1175,27 @@ class NotesEditor(QTextEdit):
         cursor.setPosition(end, QTextCursor.KeepAnchor)
         cursor.mergeCharFormat(clean_chars)
 
-        block = self.document().findBlock(start)
+        document = self.document()
+        document_end = document.characterCount() - 1
+        selects_entire_document = start == 0 and end == document_end
+        block = document.findBlock(start)
         while block.isValid() and block.position() <= end:
             block_cursor = QTextCursor(block)
             block_cursor.setBlockFormat(clean_block)
+            if normalize_block_chars:
+                block_text_end = block.position() + block.length() - 1
+                is_terminal_block = not block.next().isValid()
+                paragraph_boundary_selected = (
+                    end > block_text_end
+                    or (is_terminal_block and end == document_end)
+                )
+                fully_selected = selects_entire_document or (
+                    start <= block.position()
+                    and end >= block_text_end
+                    and paragraph_boundary_selected
+                )
+                if fully_selected:
+                    block_cursor.setBlockCharFormat(clean_chars)
             block = block.next()
 
     @staticmethod
