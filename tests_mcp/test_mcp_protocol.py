@@ -685,7 +685,13 @@ class McpProtocolTest(unittest.IsolatedAsyncioTestCase):
             failed_redaction = await self.call(
                 session, "search_notes", {"query": "gale-body-needle"}
             )
-            self.assertEqual(failed_redaction["status"], "failed")
+            self.assertEqual(failed_redaction["status"], "ok")
+            self.assertEqual(failed_redaction["total_visible_matches"], 1)
+            self.assertEqual(
+                [item["note_id"] for item in failed_redaction["results"]],
+                [self.ids["gale"]],
+            )
+            self.assertIn("脱敏规则不可用", failed_redaction["reason"])
         error_text = stderr.getvalue()
         self.assertNotIn("gale-body-needle", error_text)
         self.assertNotIn("gale-body", error_text)
