@@ -325,6 +325,88 @@ def _run_window_persistence_probe() -> None:
         "SQLite body columns diverged",
     )
 
+    conflict_note = create_note()
+    conflict_note = update_note(
+        conflict_note["id"],
+        title="虚构冲突原始标题",
+        content_html="<p>虚构冲突原始正文</p>",
+    )
+    window.load_note(conflict_note["id"])
+    opened_revision = window.current_note["revision"]
+    window.title_input.setText("虚构用户尚未保存标题")
+    window.body_edit.setPlainText("虚构用户尚未保存正文")
+    pending_title = window.title_input.text()
+    pending_html = window.body_edit.note_content_html()
+    external = update_note(
+        conflict_note["id"],
+        title="虚构其他来源标题",
+        content_html="<p>虚构其他来源正文</p>",
+    )
+    _assert(
+        external["revision"] == opened_revision + 1,
+        "external writer did not advance the conflict revision",
+    )
+    _assert(
+        not window.force_save_current_note(refresh_tree=False),
+        "stale GUI save unexpectedly succeeded",
+    )
+    conflict_stored = get_note(conflict_note["id"])
+    _assert(
+        conflict_stored["title"] == external["title"]
+        and conflict_stored["content_html"] == external["content_html"]
+        and conflict_stored["revision"] == external["revision"],
+        "stale GUI save overwrote the external revision",
+    )
+    _assert(
+        window.title_input.text() == pending_title
+        and window.body_edit.note_content_html() == pending_html,
+        "revision conflict changed the user's pending editor content",
+    )
+    _assert(
+        window.has_unsaved_changes
+        and window.current_note["revision"] == opened_revision
+        and not window.save_timer.isActive(),
+        "revision conflict did not preserve the stale dirty editor state",
+    )
+    _assert(
+        window.status_label.text()
+        == "保存冲突：这篇笔记已被其他来源修改，请重新加载后处理。",
+        "revision conflict did not show the explicit safe message",
+    )
+
+    normal_note = create_note()
+    first_normal_save = save_editor_state(
+        normal_note["id"],
+        title="虚构正常保存一",
+        content_html="<p>虚构正常正文一</p>",
+        main_category="临时",
+        sub_category="无",
+        sub_sub_category="无",
+        tags=[],
+        ai_visibility="AI不可见",
+        ai_targets=[],
+        expected_revision=normal_note["revision"],
+    )
+    second_normal_save = save_editor_state(
+        normal_note["id"],
+        title="虚构正常保存二",
+        content_html="<p>虚构正常正文二</p>",
+        main_category="临时",
+        sub_category="无",
+        sub_sub_category="无",
+        tags=[],
+        ai_visibility="AI不可见",
+        ai_targets=[],
+        expected_revision=first_normal_save["revision"],
+    )
+    _assert(
+        first_normal_save["revision"] == normal_note["revision"] + 1
+        and second_normal_save["revision"] == first_normal_save["revision"] + 1,
+        "sequential optimistic saves did not advance revisions",
+    )
+
+    window.load_note(first["id"])
+
     window.open_linked_note(second["id"])
     window.open_linked_note(first["id"])
     _assert(

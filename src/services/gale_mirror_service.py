@@ -159,12 +159,14 @@ def export_gale_mirror(
     rules = Path(redaction_rules_path)
     _validate_export_paths(source, output, rules, actor)
 
-    safe_notes, _warning = materialize_ai_safe_notes_for_target(
+    safe_notes, warning = materialize_ai_safe_notes_for_target(
         actor,
         database_path=source,
         redaction_rules_path=rules,
         source_read_only=True,
     )
+    if warning:
+        raise GaleMirrorError("redaction_rules_unavailable")
     safe_records = tuple(
         GaleMirrorSafeRecord.from_materialized(safe_note)
         for safe_note in safe_notes

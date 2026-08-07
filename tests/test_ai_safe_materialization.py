@@ -20,7 +20,8 @@ from src.database import (
     _set_note_tags_with_connection,
     initialize_database,
 )
-from src.redaction import apply_redactions
+from src.redaction import RedactionUnavailableError, apply_redactions
+from src.services import ai_access_service as service
 from src.services.ai_access_service import materialize_ai_safe_notes_for_target
 from src.services.ai_safe_materialization import materialize_ai_safe_note
 from src.time_utils import now_shanghai_iso
@@ -311,6 +312,165 @@ class AiSafeMaterializationTest(unittest.TestCase):
                 "ai_operations": 0,
                 "ai_receipt_inbox": 0,
             },
+        )
+
+    def test_redacted_note_fails_closed_when_rules_file_is_missing(self) -> None:
+        note_id = self.create_note(
+            title="FICTIONAL_MISSING_RULE_TITLE",
+            body="FICTIONAL_MISSING_RULE_BODY",
+            visibility=AI_VISIBILITY_REDACTED,
+            targets=["gale"],
+            tags=["FICTIONAL_MISSING_RULE_TAG"],
+            directory=("FICTIONAL_MISSING_RULE_DIR", "无", "无"),
+        )
+        self.rules_path.unlink()
+
+        with self.assertRaisesRegex(
+            RedactionUnavailableError, "规则文件不存在"
+        ):
+            service.safe_get_note_by_id(
+                note_id,
+                "gale",
+                database_path=self.database_path,
+                redaction_rules_path=self.rules_path,
+            )
+
+    def test_redacted_note_fails_closed_when_rules_json_is_invalid(self) -> None:
+        note_id = self.create_note(
+            title="FICTIONAL_INVALID_RULE_TITLE",
+            body="FICTIONAL_INVALID_RULE_BODY",
+            visibility=AI_VISIBILITY_REDACTED,
+            targets=["gale"],
+            tags=[],
+            directory=("临时", "无", "无"),
+        )
+        self.rules_path.write_text("{ invalid", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            RedactionUnavailableError, "规则文件无法解析"
+        ):
+            service.safe_get_note_by_id(
+                note_id,
+                "gale",
+                database_path=self.database_path,
+                redaction_rules_path=self.rules_path,
+            )
+
+    def test_redacted_note_fails_closed_when_replacements_are_empty(self) -> None:
+        self.create_note(
+            title="FICTIONAL_EMPTY_RULE_TITLE",
+            body="FICTIONAL_EMPTY_RULE_BODY",
+            visibility=AI_VISIBILITY_REDACTED,
+            targets=["gale"],
+            tags=[],
+            directory=("临时", "无", "无"),
+        )
+        self.rules_path.write_text(
+            json.dumps({"replacements": []}), encoding="utf-8"
+        )
+
+        safe_notes, warning = materialize_ai_safe_notes_for_target(
+            "gale",
+            database_path=self.database_path,
+            redaction_rules_path=self.rules_path,
+        )
+        self.assertEqual(safe_notes, [])
+        self.assertIn("没有有效 replacement", warning)
+        with self.assertRaisesRegex(
+            RedactionUnavailableError, "没有有效 replacement"
+        ):
+            materialize_ai_safe_note(
+                {
+                    "id": 99,
+                    "title": "FICTIONAL_LOW_LEVEL_SECRET",
+                    "content_html": "FICTIONAL_LOW_LEVEL_SECRET",
+                    "ai_visibility": AI_VISIBILITY_REDACTED,
+                },
+                authorized=True,
+                replacements=[],
+                body_renderer=lambda value: value,
+                redaction_transform=apply_redactions,
+            )
+
+    def test_full_note_remains_visible_when_redaction_rules_are_unavailable(self) -> None:
+        note_id = self.create_note(
+            title="FICTIONAL_FULL_VISIBLE_TITLE",
+            body="FICTIONAL_FULL_VISIBLE_BODY",
+            visibility=AI_VISIBILITY_FULL,
+            targets=["gale"],
+            tags=["FICTIONAL_FULL_VISIBLE_TAG"],
+            directory=("FICTIONAL_FULL_VISIBLE_DIR", "无", "无"),
+        )
+        redacted_id = self.create_note(
+            title="FICTIONAL_REDACTED_UNAVAILABLE_TITLE",
+            body="FICTIONAL_REDACTED_UNAVAILABLE_BODY",
+            visibility=AI_VISIBILITY_REDACTED,
+            targets=["gale"],
+            tags=[],
+            directory=("临时", "无", "无"),
+        )
+        self.rules_path.unlink()
+
+        note = service.safe_get_note_by_id(
+            note_id,
+            "gale",
+            database_path=self.database_path,
+            redaction_rules_path=self.rules_path,
+        )
+        search = service.safe_search_notes(
+            "FICTIONAL_FULL_VISIBLE_BODY",
+            "gale",
+            database_path=self.database_path,
+            redaction_rules_path=self.rules_path,
+        )
+        safe_notes, warning = materialize_ai_safe_notes_for_target(
+            "gale",
+            database_path=self.database_path,
+            redaction_rules_path=self.rules_path,
+        )
+
+        self.assertEqual(note["body"], "FICTIONAL_FULL_VISIBLE_BODY")
+        self.assertEqual(search["total_count"], 1)
+        self.assertIn("本地脱敏规则不可用", search["reason"])
+        self.assertEqual(safe_notes[0]["note_id"], note_id)
+        self.assertNotIn(redacted_id, {item["note_id"] for item in safe_notes})
+        self.assertIn("本地脱敏规则不可用", warning)
+
+    def test_case_insensitive_public_redaction_is_shared_by_all_ai_paths(self) -> None:
+        self.rules_path.write_text(
+            json.dumps({"FictionalSecret": "[MASKED]"}), encoding="utf-8"
+        )
+        note_id = self.create_note(
+            title="fictionalsecret title",
+            body="FICTIONALSECRET body and FictionalSecret tail",
+            visibility=AI_VISIBILITY_REDACTED,
+            targets=["gale"],
+            tags=["FiCtIoNaLsEcReT-tag"],
+            directory=("FICTIONALSECRET-dir", "无", "无"),
+        )
+
+        direct, direct_count = apply_redactions(
+            "fictionalsecret FICTIONALSECRET FictionalSecret",
+            [("FictionalSecret", "[MASKED]")],
+        )
+        note = service.safe_get_note_by_id(
+            note_id,
+            "gale",
+            database_path=self.database_path,
+            redaction_rules_path=self.rules_path,
+        )
+        safe_notes, _warning = materialize_ai_safe_notes_for_target(
+            "gale",
+            database_path=self.database_path,
+            redaction_rules_path=self.rules_path,
+        )
+
+        self.assertEqual(direct, "[MASKED] [MASKED] [MASKED]")
+        self.assertEqual(direct_count, 3)
+        self.assertEqual(note, service._public_full_note(safe_notes[0]))
+        self.assertNotIn(
+            "fictionalsecret",
+            json.dumps(note, ensure_ascii=False).casefold(),
         )
 
     def test_hidden_or_unauthorized_raw_note_has_no_safe_record(self) -> None:

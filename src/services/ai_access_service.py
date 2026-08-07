@@ -33,7 +33,11 @@ from src.database import (
     _set_note_ai_targets_with_connection,
     _set_note_tags_with_connection,
 )
-from src.redaction import load_redaction_rules
+from src.redaction import (
+    RedactionUnavailableError,
+    apply_redactions,
+    load_redaction_rules,
+)
 from src.search_query import SearchQuery, match_search_fields, parse_search_query
 from src.services.ai_safe_materialization import materialize_ai_safe_note
 from src.tag_manager import parse_tags
@@ -222,10 +226,12 @@ def safe_search_notes(
         )
         return {"items": [], "total_count": 0, "limit": clean_limit, "offset": clean_offset}
 
-    rules = load_redaction_rules(redaction_rules_path)
     with _connect(database_path) as connection:
         rows = _authorized_rows(connection, actor)
-        safe_notes = [_safe_note(row, rules.replacements, connection) for row in rows]
+        rows, replacements, redaction_warning = _available_rows_and_replacements(
+            rows, redaction_rules_path
+        )
+        safe_notes = [_safe_note(row, replacements, connection) for row in rows]
 
     parsed_query = parse_search_query(query)
     requested_tags = {
@@ -257,6 +263,7 @@ def safe_search_notes(
         "total_count": len(results),
         "limit": clean_limit,
         "offset": clean_offset,
+        "reason": redaction_warning,
     }
 
 
@@ -275,8 +282,10 @@ def safe_get_note_by_id(
         with _connect(database_path) as connection:
             row = _authorized_note(connection, int(note_id), actor)
             if row is not None:
-                rules = load_redaction_rules(redaction_rules_path)
-                note = _public_full_note(_safe_note(row, rules.replacements, connection))
+                replacements = _redaction_replacements_for_rows(
+                    [row], redaction_rules_path
+                )
+                note = _public_full_note(_safe_note(row, replacements, connection))
     _write_log(
         database_path, actor or str(actor_target_id), "get_note", request_id,
         note_id=int(note_id), result_count=1 if note else 0,
@@ -321,10 +330,13 @@ def safe_list_directory_records(
     actor = _validated_actor(actor_target_id)
     records: dict[tuple[int, str], dict] = {}
     if actor is not None:
-        rules = load_redaction_rules(redaction_rules_path)
         with _connect(database_path) as connection:
-            for row in _authorized_rows(connection, actor):
-                note = _safe_note(row, rules.replacements, connection)
+            rows = _authorized_rows(connection, actor)
+            rows, replacements, _warning = _available_rows_and_replacements(
+                rows, redaction_rules_path
+            )
+            for row in rows:
+                note = _safe_note(row, replacements, connection)
                 key = (int(note["directory_id"]), note["directory"])
                 records[key] = {
                     "directory_id": key[0],
@@ -351,10 +363,13 @@ def safe_list_tag_records(
     actor = _validated_actor(actor_target_id)
     records: dict[tuple[int, str], dict] = {}
     if actor is not None:
-        rules = load_redaction_rules(redaction_rules_path)
         with _connect(database_path) as connection:
-            for row in _authorized_rows(connection, actor):
-                note = _safe_note(row, rules.replacements, connection)
+            rows = _authorized_rows(connection, actor)
+            rows, replacements, _warning = _available_rows_and_replacements(
+                rows, redaction_rules_path
+            )
+            for row in rows:
+                note = _safe_note(row, replacements, connection)
                 for tag_record in note["tag_records"]:
                     key = (int(tag_record["tag_id"]), tag_record["name"])
                     records[key] = dict(tag_record)
@@ -744,11 +759,13 @@ def _safe_list_facets(
     actor = _validated_actor(actor_target_id)
     values: set[str] = set()
     if actor is not None:
-        rules = load_redaction_rules(redaction_rules_path)
         with _connect(database_path) as connection:
             rows = _authorized_rows(connection, actor)
+            rows, replacements, _warning = _available_rows_and_replacements(
+                rows, redaction_rules_path
+            )
             for row in rows:
-                note = _safe_note(row, rules.replacements, connection)
+                note = _safe_note(row, replacements, connection)
                 if facet == "tags":
                     values.update(note["tags"])
                 else:
@@ -1107,7 +1124,7 @@ def _safe_note(
         authorized=True,
         replacements=replacements,
         body_renderer=body_renderer or _html_to_text,
-        redaction_transform=redaction_transform or _apply_safe_redactions_with_count,
+        redaction_transform=redaction_transform or apply_redactions,
         tag_records=tag_records,
     )
     if values is None:
@@ -1145,20 +1162,13 @@ def materialize_ai_safe_notes_for_target(
             ),
             reverse=True,
         )
-        has_redacted_notes = any(
-            normalize_ai_visibility(row["ai_visibility"])
-            == AI_VISIBILITY_REDACTED
-            for row in rows
-        )
-        rules = (
-            load_redaction_rules(redaction_rules_path)
-            if has_redacted_notes
-            else None
+        rows, replacements, redaction_warning = _available_rows_and_replacements(
+            rows, redaction_rules_path
         )
         safe_notes = [
             _safe_note(
                 row,
-                rules.replacements if rules else [],
+                replacements,
                 connection,
                 body_renderer=body_renderer,
                 redaction_transform=redaction_transform,
@@ -1167,7 +1177,40 @@ def materialize_ai_safe_notes_for_target(
         ]
     finally:
         connection.close()
-    return safe_notes, rules.warning if rules else ""
+    return safe_notes, redaction_warning
+
+
+def _available_rows_and_replacements(
+    rows,
+    redaction_rules_path: Path,
+):
+    try:
+        replacements = _redaction_replacements_for_rows(
+            rows, redaction_rules_path
+        )
+    except RedactionUnavailableError as error:
+        available_rows = [
+            row
+            for row in rows
+            if normalize_ai_visibility(row["ai_visibility"])
+            != AI_VISIBILITY_REDACTED
+        ]
+        return available_rows, [], str(error)
+    return rows, replacements, ""
+
+
+def _redaction_replacements_for_rows(
+    rows,
+    redaction_rules_path: Path,
+) -> list[tuple[str, str]]:
+    has_redacted_notes = any(
+        normalize_ai_visibility(row["ai_visibility"])
+        == AI_VISIBILITY_REDACTED
+        for row in rows
+    )
+    if not has_redacted_notes:
+        return []
+    return load_redaction_rules(redaction_rules_path).replacements
 
 
 def _open_ai_source_connection(
@@ -1554,28 +1597,6 @@ def _clean_timestamp_credential(value: object) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
         text = text[1:-1].strip()
     return text
-
-
-def _apply_safe_redactions(text: str, replacements: list[tuple[str, str]]) -> str:
-    return _apply_safe_redactions_with_count(text, replacements)[0]
-
-
-def _apply_safe_redactions_with_count(
-    text: str,
-    replacements: list[tuple[str, str]],
-) -> tuple[str, int]:
-    redacted = text
-    count = 0
-    for source, target in replacements:
-        if source:
-            redacted, occurrences = re.subn(
-                re.escape(source),
-                lambda _match: target,
-                redacted,
-                flags=re.IGNORECASE,
-            )
-            count += occurrences
-    return redacted, count
 
 
 def _html_to_text(value: str) -> str:

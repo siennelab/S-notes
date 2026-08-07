@@ -8,6 +8,7 @@ from src.ai_targets import (
     AI_VISIBILITY_REDACTED,
     normalize_ai_visibility,
 )
+from src.redaction import RedactionUnavailableError
 from src.tag_manager import parse_tags
 
 
@@ -33,6 +34,10 @@ def materialize_ai_safe_note(
         AI_VISIBILITY_REDACTED,
     }:
         return None
+    if visibility == AI_VISIBILITY_REDACTED and not replacements:
+        raise RedactionUnavailableError(
+            "本地脱敏规则不可用：没有有效 replacement。"
+        )
 
     source_tag_records = (
         [

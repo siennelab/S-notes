@@ -37,6 +37,10 @@ AI_SCHEMA_VERSION = 2
 INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "备忘", "终端指令")
 
 
+class NoteRevisionConflictError(RuntimeError):
+    """Raised when an editor save is based on a stale note revision."""
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS directories (
     id INTEGER PRIMARY KEY,
@@ -1196,6 +1200,7 @@ def save_editor_state(
     tags: list[str],
     ai_visibility: str,
     ai_targets: list[str],
+    expected_revision: int | None = None,
     database_path: Path = DATABASE_PATH,
 ) -> dict:
     """Atomically save one complete editor state with a monotonic version."""
@@ -1207,7 +1212,7 @@ def save_editor_state(
         connection.execute("BEGIN IMMEDIATE")
         current = connection.execute(
             """
-            SELECT main_category, sub_category, sub_sub_category, updated_at
+            SELECT main_category, sub_category, sub_sub_category, revision, updated_at
             FROM notes
             WHERE id = ? AND is_deleted = 0
             """,
@@ -1229,8 +1234,25 @@ def save_editor_state(
         _set_note_ai_targets_with_connection(
             connection, note_id, normalized_target_ids, timestamp
         )
-        connection.execute(
-            """
+        update_parameters = [
+            title,
+            content_html,
+            content_html,
+            directory_id,
+            next_main,
+            next_sub,
+            next_sub_sub,
+            ", ".join(normalized_tags),
+            clean_visibility,
+            timestamp,
+            note_id,
+        ]
+        revision_clause = ""
+        if expected_revision is not None:
+            revision_clause = " AND revision = ?"
+            update_parameters.append(int(expected_revision))
+        cursor = connection.execute(
+            f"""
             UPDATE notes
             SET title = ?,
                 body_rich_text = ?,
@@ -1243,26 +1265,21 @@ def save_editor_state(
                 ai_visibility = ?,
                 revision = revision + 1,
                 updated_at = ?
-            WHERE id = ? AND is_deleted = 0
+            WHERE id = ? AND is_deleted = 0{revision_clause}
             """,
-            (
-                title,
-                content_html,
-                content_html,
-                directory_id,
-                next_main,
-                next_sub,
-                next_sub_sub,
-                ", ".join(normalized_tags),
-                clean_visibility,
-                timestamp,
-                note_id,
-            ),
+            tuple(update_parameters),
         )
+        if cursor.rowcount != 1:
+            if expected_revision is not None:
+                raise NoteRevisionConflictError(
+                    "这篇笔记已被其他来源修改，请重新加载后处理。"
+                )
+            raise ValueError(f"笔记不存在或已删除: {note_id}")
         saved = connection.execute(
             """
             SELECT
                 id,
+                revision,
                 title,
                 content_html,
                 main_category,

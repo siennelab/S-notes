@@ -94,6 +94,7 @@ class SnotesToolAdapter:
                 total_visible_matches=total,
                 has_more=offset + len(items) < total,
                 results=items,
+                reason=str(result.get("reason") or ""),
             )
         except Exception as error:
             _log_safe_failure("search_notes", error)

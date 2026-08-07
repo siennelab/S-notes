@@ -63,6 +63,7 @@ from src.database import (
     DEFAULT_MAIN_CATEGORY,
     DEFAULT_SUB_CATEGORY,
     DEFAULT_SUB_SUB_CATEGORY,
+    NoteRevisionConflictError,
     create_directory,
     create_note_in_directory,
     delete_directory,
@@ -2207,7 +2208,14 @@ class MainWindow(QMainWindow):
                 tags=parse_tags(self.tags_input.text()),
                 ai_visibility=self.ai_visibility_combo.currentText(),
                 ai_targets=self.selected_ai_targets(),
+                expected_revision=self.current_note["revision"],
             )
+        except NoteRevisionConflictError as error:
+            self.status_label.setText(f"保存冲突：{error}")
+            self.has_unsaved_changes = True
+            self.autosave_retry_count = 0
+            self.save_timer.stop()
+            return False
         except Exception as error:
             self.status_label.setText(f"保存失败：{error}")
             self.has_unsaved_changes = True

@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
 
 from src.ai_targets import AI_TARGETS, AI_VISIBILITY_OPTIONS, visibility_display
 from src.database import (
-    _connect,
     accept_ai_receipt_inbox_item,
     create_ai_receipt_inbox_item,
+    delete_ai_receipt_inbox_item,
     get_ai_receipt_inbox_item,
     list_ai_receipt_inbox_items,
     reject_ai_receipt_inbox_item,
@@ -609,13 +609,7 @@ class ReceiptInboxDialog(QWidget):
         message_box.open()
 
     def _delete_receipt_record(self, receipt_id: int) -> None:
-        current = get_ai_receipt_inbox_item(receipt_id)
-        if current is None:
-            raise ValueError(f"AI 回执不存在: {receipt_id}")
-        with _connect() as connection:
-            connection.execute("DELETE FROM ai_receipt_inbox WHERE id = ?", (receipt_id,))
-            if connection.total_changes == 0:
-                raise ValueError(f"AI 回执不存在: {receipt_id}")
+        delete_ai_receipt_inbox_item(receipt_id)
 
 
 class ReceiptImportPreviewDialog(QDialog):

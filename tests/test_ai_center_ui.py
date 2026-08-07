@@ -18,7 +18,9 @@ from src.database import (
     _connect,
     accept_ai_receipt_inbox_item,
     create_gale_submission,
+    delete_ai_receipt_inbox_item,
     get_ai_receipt_inbox_item,
+    get_note,
     initialize_database,
     list_ai_receipt_inbox_items,
     reject_ai_receipt_inbox_item,
@@ -209,6 +211,9 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
         def reject_receipt(receipt_id: int) -> dict:
             return reject_ai_receipt_inbox_item(receipt_id, self.database_path)
 
+        def delete_receipt(receipt_id: int) -> None:
+            delete_ai_receipt_inbox_item(receipt_id, self.database_path)
+
         patches = (
             patch("src.ai_center_dialog.list_ai_note_history", return_value=[]),
             patch("src.ai_center_dialog.list_ai_call_logs", return_value=[]),
@@ -236,8 +241,8 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
                 side_effect=reject_receipt,
             ),
             patch(
-                "src.receipt_inbox_dialog._connect",
-                new=lambda: _connect(self.database_path),
+                "src.receipt_inbox_dialog.delete_ai_receipt_inbox_item",
+                side_effect=delete_receipt,
             ),
         )
         for active_patch in patches:
@@ -780,6 +785,30 @@ class AiCenterSubmissionRefreshTest(unittest.TestCase):
                 ),
                 trash_count,
             )
+
+    def test_delete_accepted_linked_receipt_is_rejected_and_note_is_unchanged(self) -> None:
+        submission = self._submission("DELETE_ACCEPTED_LINKED")
+        accepted = accept_ai_receipt_inbox_item(
+            submission["id"], submission, self.database_path
+        )
+        note_before = get_note(accepted["note"]["id"], self.database_path)
+        dialog = self._build_dialog()
+        page = dialog.pending_page
+        self._click_filter(dialog, "processed")
+
+        with patch("src.receipt_inbox_dialog.QMessageBox.warning") as warning:
+            page.confirm_delete_receipt(submission["id"])
+            self._finish_delete_confirmation(page, confirm=True)
+
+        warning.assert_called_once()
+        self.assertIn("保留用于查账", str(warning.call_args))
+        self.assertIsNotNone(
+            get_ai_receipt_inbox_item(submission["id"], self.database_path)
+        )
+        self.assertEqual(
+            get_note(accepted["note"]["id"], self.database_path), note_before
+        )
+        self.assertEqual(set(page.cards), {submission["id"]})
 
     def test_delete_failure_keeps_receipt_and_reactivates_top_level(self) -> None:
         submission = self._processed_submission("DELETE_FAILURE")
