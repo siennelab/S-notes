@@ -1,5 +1,71 @@
-"""Interfaces owned by the application layer.
+"""Repository interfaces owned by Package 1 application services."""
 
-Package 0B intentionally defines no concrete ports. They will be introduced by
-the feature package that has a real use case for them.
-"""
+from __future__ import annotations
+
+from typing import Protocol, Sequence
+
+from src.snotes.domain.models import (
+    Directory,
+    Note,
+    NoteLocation,
+    TrashResult,
+    TrashSnapshot,
+)
+
+
+class NotesRepository(Protocol):
+    def create(self, location: NoteLocation) -> Note: ...
+
+    def get(self, note_id: int, *, include_deleted: bool = False) -> Note | None: ...
+
+    def save(
+        self,
+        note_id: int,
+        *,
+        title: str,
+        content_html: str,
+        location: NoteLocation,
+        expected_revision: int,
+    ) -> Note: ...
+
+    def rename(self, note_id: int, title: str) -> Note: ...
+
+    def move(self, note_id: int, location: NoteLocation) -> Note: ...
+
+    def move_many(self, note_ids: Sequence[int], location: NoteLocation) -> list[Note]: ...
+
+    def set_pinned(self, note_id: int, pinned: bool) -> Note: ...
+
+    def soft_delete(self, note_id: int) -> Note: ...
+
+    def restore(self, note_id: int) -> Note: ...
+
+    def permanently_delete_trashed(self, note_id: int) -> None: ...
+
+
+class DirectoriesRepository(Protocol):
+    def create(self, name: str, parent_id: int | None = None) -> Directory: ...
+
+    def list_active(self) -> list[Directory]: ...
+
+    def get_path(self, directory_id: int) -> tuple[str, ...]: ...
+
+    def rename(self, directory_id: int, name: str) -> None: ...
+
+    def soft_delete_tree(self, directory_id: int) -> str: ...
+
+    def restore_tree(self, directory_id: int) -> None: ...
+
+    def permanently_delete_tree(self, directory_id: int) -> None: ...
+
+    def list_trash(self) -> TrashSnapshot: ...
+
+    def empty_trash(self) -> TrashResult: ...
+
+
+class TagsRepository(Protocol):
+    def set_for_note(self, note_id: int, tags: Sequence[str]) -> list[str]: ...
+
+    def get_for_note(self, note_id: int) -> list[str]: ...
+
+    def list_all(self) -> list[str]: ...
