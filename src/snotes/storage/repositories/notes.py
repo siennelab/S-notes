@@ -76,6 +76,15 @@ class SQLiteNotesRepository(NotesRepository):
             ).fetchone()
         return note_from_row(row) if row is not None else None
 
+    def list_active(self) -> list[Note]:
+        with self.connections.read() as connection:
+            rows = connection.execute(
+                NOTE_SELECT
+                + " WHERE is_deleted = 0"
+                + " ORDER BY is_pinned DESC, updated_at DESC, id DESC"
+            ).fetchall()
+        return [note_from_row(row) for row in rows]
+
     def save(
         self,
         note_id: int,

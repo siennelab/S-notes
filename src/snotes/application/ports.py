@@ -18,6 +18,8 @@ class NotesRepository(Protocol):
 
     def get(self, note_id: int, *, include_deleted: bool = False) -> Note | None: ...
 
+    def list_active(self) -> list[Note]: ...
+
     def save(
         self,
         note_id: int,

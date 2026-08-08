@@ -18,6 +18,10 @@ class NoteService:
     def get_note(self, note_id: int, *, include_deleted: bool = False) -> Note | None:
         return self._notes.get(note_id, include_deleted=include_deleted)
 
+    def list_active_notes(self) -> list[Note]:
+        """Return ordinary active notes in the frozen R1 sidebar order."""
+        return self._notes.list_active()
+
     def save_note(
         self,
         note_id: int,
