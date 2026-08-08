@@ -1,6 +1,91 @@
 # S-notes Project Status
 
-This is the current repository handoff for S-notes R1.
+This is the current repository handoff for S-notes. Frozen R1 information is
+retained below; active R2 package closeouts are recorded first.
+
+## R2 Package 3 Formal Closeout
+
+Package 3 ordinary-product parity is formally accepted from base
+`599429935e7071b2da3c78f71c1c34a5b53b82a6`.
+
+### Completed Package 3 Scope
+
+- Ordinary search and exact `#tag` search.
+- Two-level `main category -> subcategory` UI and daily workflow; the third
+  category level is absent from normal create, edit, move, and filter paths.
+- Tags plus the recent and todo smart views.
+- Pin/unpin, multi-select, batch move, and drag move.
+- Trash, restore, permanent delete, and empty trash, including the accepted
+  deleted-directory tree and individual-note restore behavior.
+- Related notes and the related-notes drawer.
+- Ordinary Markdown, JSON, and SQLite-backup export.
+- Frozen-R1 UI composition parity and the accepted Package 3 UI delta fixes
+  across night, slate, and clay themes.
+- A repository-local `.venv` using the pinned Python 3.13 arm64, PySide6, and
+  PyInstaller build baseline; R2 production code has no R1 module dependency.
+- Three ownership remediations: one directory-prefix domain rule, tag text
+  parse/compare/write owned by `TagService`, and `#tag` interpretation owned by
+  the application search entry.
+- Removal of the obsolete, intentionally cancelled tag-chip dead chain.
+
+S completed Package 3 functional acceptance, UI parity acceptance, and UI
+delta acceptance. Codex audit and post-remediation self-audit passed with
+P0=0; Claude independent cross-audit passed with no new blocking finding.
+Package 4 has not started.
+
+### Closeout Verification
+
+- Package 3 targeted, parity, and UI tests: PASS.
+- Isolated Package 3 GUI smoke: PASS.
+- Repository-local arm64 candidate build and code-sign verification: PASS; the
+  candidate App was not installed or used to replace the formal App.
+- Architecture gate: PASS.
+- Full suite: 416/417. The one failure is the pre-existing, non-blocking P2
+  startup-error parity item recorded below; this is not a Package 3 regression.
+
+### Package 3 audit residual P2 Queue
+
+These items are recorded for later work and are not fixed by Package 3:
+
+1. `NoteService.notes_by_ids` has zero callers; evaluate deletion later.
+2. `TagService.list_tags` / `TagsRepository.list_all` have zero callers;
+   evaluate deletion later.
+3. Tag normalization is duplicated between `domain/tags.py normalize_tag` and
+   `storage/support.py normalize_tag`; `storage/support.py` also retains dead
+   `TAG_SPLIT_RE`. Consolidate under one domain owner later.
+4. `_ordinary_order` is duplicated in `NoteService` and `ExportService`;
+   consolidate later.
+5. `MainWindow` retains optional-service / `None` guards even though production
+   bootstrap always injects all services. Clean them later together with the
+   legacy tests that require those defensive paths.
+6. `floating_combo.py` fields `last_popup_direction` and
+   `last_popup_surface_geometry` are written but never read; clean them later.
+7. `ordered_directories` / refresh-path directory resolution repeatedly opens
+   SQLite connections. This is currently only a small performance debt.
+8. R2 invalid data-root startup error wrapping does not match the old R1 test
+   expectation in
+   `test_app_startup_reports_invalid_override_without_opening_gui`. R2 remains
+   fail-closed, but currently emits a raw traceback and exits 1 rather than a
+   clean error and exit 2. This behavior existed at the Package 3 base and is
+   not a Package 3 regression. Later either add an R2 startup error wrapper or
+   formally adjust the R1-era test expectation.
+
+### Mandatory Independent Queue: Third-Level Category Schema
+
+> R2 Package 8 正式接班 PASS 后、任何 R2 后续新功能开始之前，
+> 立即开独立小包，彻底移除第三级分类 schema 与相关兼容代码。
+
+- S confirmed that formal notes do not use third-level category data.
+- Package 3 removed the third level from normal UI and daily workflows.
+- The schema remains only because parity packages do not perform schema
+  migration.
+- This cleanup must not be deferred indefinitely.
+
+### Package 4 Next
+
+The next main package after Package 3 is Package 4: AI Center / AI safety
+parity. This records sequence only; Package 4 design and implementation have
+not started.
 
 ## Current Baseline
 

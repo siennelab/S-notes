@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QRectF, QSettings, Qt
-from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -62,6 +62,14 @@ class ThemeTokens:
     def document_code(self) -> str:
         return self.text
 
+    @property
+    def selection_background(self) -> str:
+        return self.accent_soft
+
+    @property
+    def selection_text(self) -> str:
+        return self.text
+
 
 THEMES: dict[str, ThemeTokens] = {
     "dark": ThemeTokens(
@@ -94,7 +102,18 @@ DEFAULT_THEME = "light-slate"
 THEME_LABELS = (("dark", "夜间"), ("light-slate", "石板"), ("light-clay", "陶土"))
 THEME_SETTINGS_KEY = "theme"
 ICON_DIR = Path(__file__).resolve().parents[2] / "icons"
+UI_FONT_FAMILY = "'PingFang SC', 'SF Pro Text', 'Helvetica Neue', sans-serif"
 _current_theme_name = DEFAULT_THEME
+THEME_SWATCH_COLORS = {
+    "dark": "#1B1D1E",
+    "light-slate": "#5F768B",
+    "light-clay": "#A84B2F",
+}
+THEME_SWATCH_RING_COLORS = {
+    "dark": "#555B60",
+    "light-slate": "#8FA1B1",
+    "light-clay": "#C6816A",
+}
 
 
 def normalize_theme_name(value: object) -> str:
@@ -133,29 +152,147 @@ def editor_document_style() -> str:
 def build_app_style(name: str) -> str:
     t = THEMES[normalize_theme_name(name)]
     return f"""
-QMainWindow, QWidget#shellRoot {{ background: {t.editor}; color: {t.text}; }}
-QWidget {{ color: {t.text}; font-size: 13px; font-family: 'PingFang SC', 'SF Pro Text', 'Helvetica Neue', sans-serif; }}
+QMainWindow, QDialog, QMessageBox, QInputDialog, QWidget#shellRoot {{ background: {t.editor}; color: {t.text}; }}
+QWidget {{ color: {t.text}; font-size: 13px; font-family: {UI_FONT_FAMILY}; }}
+QLabel {{ background: transparent; }}
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {{
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 8px;
+    background: {t.surface};
+    color: {t.text};
+    selection-background-color: {t.selection_background};
+    selection-color: {t.selection_text};
+    placeholder-text-color: {t.text_subtle};
+}}
+QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover, QComboBox:hover {{ background: {t.surface_hover}; }}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+    border-color: {t.focus}; background: {t.surface};
+}}
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {{
+    color: {t.disabled}; background: {t.surface};
+}}
+QComboBox {{ padding-right: 24px; combobox-popup: 0; }}
+QComboBox::drop-down {{ border: 0; width: 24px; }}
+QComboBox::down-arrow {{ image: none; width: 0; height: 0; }}
 #sidebar {{ background: {t.sidebar}; }}
 QSplitter::handle {{ background: {t.sidebar_separator}; }}
+QSplitter::handle:hover {{ background: {t.accent}; }}
 #brandLabel {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
+#sidebarClockTime, #sidebarClockDate {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 500; }}
+#sidebarSearch, #categoryFilter {{
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 8px;
+    background: {t.sidebar_control};
+    color: {t.sidebar_text};
+    selection-background-color: {t.sidebar_selected};
+    selection-color: {t.sidebar_text};
+}}
+#sidebarSearch:hover, #categoryFilter:hover {{ background: {t.sidebar_hover}; }}
+#sidebarSearch:focus, #categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
+#sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 0; }}
+#sidebar QComboBox QAbstractItemView {{
+    border: 1px solid {t.sidebar_separator};
+    background: {t.sidebar};
+    color: {t.sidebar_text};
+    selection-background-color: {t.sidebar_selected};
+    selection-color: {t.sidebar_text};
+    outline: 0;
+}}
+#sidebarComboPopupView, #comboPopupView {{
+    border: 0;
+    border-radius: 10px;
+    outline: 0;
+    padding: 4px;
+    selection-background-color: transparent;
+}}
+#sidebarComboPopupView {{ background: {t.sidebar}; color: {t.sidebar_text}; selection-color: {t.sidebar_text}; }}
+#comboPopupView {{ background: {t.surface}; color: {t.text}; selection-color: {t.text}; }}
+#sidebarComboPopupView::item, #comboPopupView::item {{ min-height: 32px; padding: 0; background: transparent; }}
+#sidebarComboPopupView::item:hover, #sidebarComboPopupView::item:selected {{
+    background: {t.sidebar_selected}; color: {t.sidebar_text};
+}}
+#sidebarComboPopupView::item:disabled {{ color: {t.sidebar_text_subtle}; }}
+#comboPopupView::item:hover, #comboPopupView::item:selected {{ background: {t.surface_hover}; color: {t.text}; }}
+#comboPopupView::item:disabled {{ color: {t.disabled}; }}
+#floatingComboPopup {{ background: transparent; border: 0; }}
+#directoryDropPopup {{
+    border: 1px solid {t.sidebar_separator};
+    border-radius: 8px;
+    background: {t.sidebar};
+    color: {t.sidebar_text};
+    outline: 0;
+}}
+#directoryDropPopup::item {{ min-height: 30px; padding: 0 8px; }}
+#directoryDropPopup::item:hover, #directoryDropPopup::item:selected {{
+    background: {t.sidebar_selected}; color: {t.sidebar_text};
+}}
+#smartTabButton, #categoryManagerButton, #categoryFilter, #noteList, #sidebarComboPopupView {{
+    font-family: {UI_FONT_FAMILY}; font-size: 13px;
+}}
+#smartTabButton, #categoryManagerButton {{ color: {t.sidebar_text_muted}; }}
+#smartTabButton:hover, #categoryManagerButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#smartTabButton:pressed, #categoryManagerButton:pressed {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#smartTabButton[active='true'] {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; font-weight: 600; }}
+#smartTabButton:disabled {{ color: {t.sidebar_text_subtle}; background: transparent; }}
 #noteList {{ border: 0; outline: 0; background: transparent; color: {t.sidebar_text_muted}; }}
 #noteList QWidget {{ background: transparent; }}
 #noteList::item {{ min-height: 32px; max-height: 32px; border-radius: 6px; padding: 0; }}
 #noteList::item:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
 #noteList::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#trashTree {{ border: 0; outline: 0; background: transparent; color: {t.sidebar_text_muted}; }}
+#trashTree::item {{ min-height: 30px; border-radius: 6px; padding: 0 8px; color: {t.sidebar_text_muted}; }}
+#trashTree::item:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#trashTree::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
 QPushButton, QToolButton {{ border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; background: transparent; color: {t.text}; }}
 QPushButton:hover, QToolButton:hover {{ background: {t.surface_hover}; }}
 QPushButton:pressed, QToolButton:pressed, QToolButton:checked {{ background: {t.surface_selected}; }}
 QPushButton:focus, QToolButton:focus {{ border-color: {t.focus}; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
-#newNoteButton {{ background: {t.accent}; color: {t.accent_text}; }}
+#newNoteButton {{ background: {t.accent}; color: {t.accent_text}; padding: 0; }}
 #newNoteButton:hover {{ background: {t.focus}; }}
+#newNoteButton:pressed {{ background: {t.accent_soft}; color: {t.accent}; }}
+#trashButton {{ color: {t.sidebar_text_muted}; padding: 0; }}
+#trashButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#trashButton:pressed {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#themeSwatch {{ border: 1px solid transparent; border-radius: 7px; padding: 0; }}
+#themeSwatch[themeName='dark'] {{ background: {THEME_SWATCH_COLORS['dark']}; }}
+#themeSwatch[themeName='light-slate'] {{ background: {THEME_SWATCH_COLORS['light-slate']}; }}
+#themeSwatch[themeName='light-clay'] {{ background: {THEME_SWATCH_COLORS['light-clay']}; }}
+#themeSwatch:hover {{ border-color: {t.sidebar_text_subtle}; }}
+#themeSwatch:pressed {{ border-color: {t.sidebar_text_muted}; }}
+#themeSwatch[active='true'] {{ border-width: 1px; border-radius: 8px; }}
+#themeSwatch[active='true'][themeName='dark'] {{ border-color: {THEME_SWATCH_RING_COLORS['dark']}; }}
+#themeSwatch[active='true'][themeName='light-slate'] {{ border-color: {THEME_SWATCH_RING_COLORS['light-slate']}; }}
+#themeSwatch[active='true'][themeName='light-clay'] {{ border-color: {THEME_SWATCH_RING_COLORS['light-clay']}; }}
 #themeButton {{ color: {t.sidebar_text_muted}; padding: 4px; }}
 #themeButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
 #themeButton[active='true'] {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
 #mainContentArea, #editorPane {{ background: {t.editor}; }}
-#titleInput {{ border: 0; border-bottom: 2px solid {t.editor_border}; border-radius: 0; padding: 8px; background: transparent; color: {t.text}; font-size: 26px; font-weight: 600; }}
-#titleInput:focus {{ border: 0; border-bottom: 2px solid {t.focus}; }}
+#titleInput {{ border: 0; border-radius: 0; padding: 0; background: {t.editor}; color: {t.text}; font-size: 26px; font-weight: 600; }}
+#titleInput:focus {{ border: 0; background: {t.editor}; }}
+#titleSeparator {{ border: 0; min-height: 2px; max-height: 2px; background: {t.title_separator}; }}
+#metadataSummaryButton {{
+    padding: 8px 0; background: {t.editor}; color: {t.text_muted};
+    font-size: 12.5px; text-align: left;
+}}
+#metadataSummaryButton:hover {{ background: {t.editor}; color: {t.text}; }}
+#metadataSummaryButton:pressed {{ background: {t.surface}; }}
+#metadataPanel {{ background: {t.surface}; color: {t.text}; border-radius: 8px; }}
+#metadataFieldLabel {{ color: {t.text_muted}; font-size: 12.5px; }}
+#metadataPanel QComboBox, #metadataPanel QLineEdit {{
+    background: {t.editor_paper}; color: {t.text}; placeholder-text-color: {t.text_subtle};
+}}
+#metadataPanel QComboBox:disabled, #metadataPanel QLineEdit:disabled {{
+    background: {t.editor_paper}; color: {t.disabled};
+}}
+#metadataCollapseButton {{ color: {t.text_muted}; padding: 0; }}
+#metadataCollapseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#actionBarButton, #deleteNoteButton {{ padding: 0; color: {t.text_muted}; }}
+#actionBarButton:hover, #deleteNoteButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#actionBarButton:pressed, #deleteNoteButton:pressed,
+#actionBarButton[active='true'] {{ background: {t.surface_selected}; color: {t.text}; }}
 #editorToolbar {{ background: transparent; border: 0; border-radius: 0; }}
 #findPanel {{ background: transparent; border: 0; border-radius: 0; }}
 #toolbarRow, #toolbarGroup {{ background: transparent; }}
@@ -164,11 +301,24 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #toolbarButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #toolbarButton:checked, #toolbarButton:pressed {{ background: {t.surface_selected}; color: {t.text}; }}
 #toolbarInput {{ border: 1px solid {t.editor_border}; border-radius: 6px; padding: 4px 8px; background: {t.surface}; color: {t.text}; }}
-#bodyEdit {{ border: 1px solid {t.editor_border}; border-radius: 4px; background: transparent; padding: 8px; color: {t.text}; font-size: 15px; }}
+#bodyEdit {{
+    border: 1px solid {t.editor_border}; border-radius: 4px; background: transparent;
+    padding: 8px; color: {t.text}; font-size: 15px;
+    selection-background-color: {t.selection_background}; selection-color: {t.selection_text};
+}}
 #bodyEdit QWidget {{ background: transparent; }}
 #bodyEdit:focus {{ border: 1px solid {t.focus}; }}
 #statusLabel {{ background: transparent; color: {t.text_subtle}; padding: 4px 0; font-size: 12.5px; }}
 #statusLabel[conflict='true'] {{ color: {t.warning}; }}
+#categoryManagerDialog {{ background: {t.window}; color: {t.text}; }}
+#categoryColumn {{ background: {t.surface}; border-radius: 8px; }}
+#categoryManagerTitle {{ color: {t.text_muted}; font-size: 12.5px; font-weight: 600; }}
+#categoryManagerList {{ border: 0; border-radius: 6px; background: transparent; color: {t.text}; outline: 0; }}
+#categoryManagerList::item {{ padding: 0 8px; }}
+#categoryManagerList::item:hover {{ background: {t.surface_hover}; }}
+#categoryManagerList::item:selected {{ background: {t.surface_selected}; color: {t.text}; }}
+#categoryNewButton {{ color: {t.text_muted}; text-align: left; padding: 4px 8px; }}
+#categoryNewButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 QMenu {{ background-color: {t.sidebar}; color: {t.sidebar_text}; border: 1px solid {t.sidebar_separator}; border-radius: 10px; padding: 8px; }}
 QMenu::item {{ background-color: transparent; color: {t.sidebar_text}; border-radius: 6px; padding: 8px 24px 8px 12px; }}
 QMenu::item:disabled {{ color: {t.sidebar_text_subtle}; }}
@@ -185,7 +335,21 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 def apply_theme(app: QApplication, name: str) -> ThemeTokens:
     tokens = set_current_theme(name)
     app.setStyleSheet(build_app_style(tokens.name))
+    apply_selection_palette(app, tokens)
     return tokens
+
+
+def apply_selection_palette(widget, tokens: ThemeTokens | None = None) -> None:
+    """Keep active and inactive text selections inside the current theme."""
+
+    tokens = tokens or current_theme()
+    palette = QPalette(widget.palette())
+    for group in (QPalette.Active, QPalette.Inactive):
+        palette.setColor(group, QPalette.Highlight, QColor(tokens.selection_background))
+        palette.setColor(group, QPalette.HighlightedText, QColor(tokens.selection_text))
+    palette.setColor(QPalette.Disabled, QPalette.Highlight, QColor(tokens.surface_selected))
+    palette.setColor(QPalette.Disabled, QPalette.HighlightedText, QColor(tokens.disabled))
+    widget.setPalette(palette)
 
 
 def apply_popup_menu_theme(

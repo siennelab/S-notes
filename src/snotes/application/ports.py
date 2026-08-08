@@ -10,6 +10,7 @@ from src.snotes.domain.models import (
     NoteLocation,
     TrashResult,
     TrashSnapshot,
+    ExportResult,
 )
 
 
@@ -71,3 +72,11 @@ class TagsRepository(Protocol):
     def get_for_note(self, note_id: int) -> list[str]: ...
 
     def list_all(self) -> list[str]: ...
+
+
+class OrdinaryExportWriter(Protocol):
+    def write_markdown(self, notes: Sequence[Note], scope: str) -> ExportResult: ...
+
+    def write_json(self, notes: Sequence[Note], scope: str) -> ExportResult: ...
+
+    def write_database_backup(self) -> ExportResult: ...

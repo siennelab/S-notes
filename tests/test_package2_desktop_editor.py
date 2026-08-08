@@ -239,13 +239,13 @@ class Package2DesktopEditorTests(unittest.TestCase):
 
     def test_single_surface_menu_indicator_and_fine_focus_lines(self) -> None:
         expected = {
-            "dark": ("#1B1D1E", "#393D3B", "#CB8A67"),
-            "light-slate": ("#F0F2F5", "#DCDCDC", "#526C83"),
-            "light-clay": ("#FFFFFF", "#D6CEC5", "#A84B2F"),
+            "dark": ("#1B1D1E", "#393D3B", "#76503E", "#CB8A67"),
+            "light-slate": ("#F0F2F5", "#DCDCDC", "#B9C0C6", "#526C83"),
+            "light-clay": ("#FFFFFF", "#D6CEC5", "#CFC5BA", "#A84B2F"),
         }
-        for theme_name, (editor, border, focus) in expected.items():
+        for theme_name, (editor, border, title_separator, focus) in expected.items():
             with self.subTest(theme=theme_name):
-                style = build_app_style(theme_name).replace(" ", "")
+                style = "".join(build_app_style(theme_name).split())
                 self.assertIn(
                     "QToolButton::menu-indicator{image:none;width:0;}",
                     style,
@@ -258,11 +258,12 @@ class Package2DesktopEditorTests(unittest.TestCase):
                 self.assertIn("#editorToolbar{background:transparent;", style)
                 self.assertIn("#findPanel{background:transparent;", style)
                 self.assertIn(
-                    f"#titleInput{{border:0;border-bottom:2pxsolid{border};",
+                    f"#titleSeparator{{border:0;min-height:2px;max-height:2px;"
+                    f"background:{title_separator};}}",
                     style,
                 )
                 self.assertIn(
-                    f"#titleInput:focus{{border:0;border-bottom:2pxsolid{focus};}}",
+                    f"#bodyEdit:focus{{border:1pxsolid{focus};}}",
                     style,
                 )
                 self.assertIn(
@@ -285,7 +286,7 @@ class Package2DesktopEditorTests(unittest.TestCase):
             (24, 16, 24, 12),
         )
         self.assertEqual(self.window.body_edit.document().documentMargin(), 2.0)
-        self.assertEqual(self.window.shell.splitter.handleWidth(), 1)
+        self.assertEqual(self.window.shell.splitter.handleWidth(), 4)
 
     def test_three_themes_render_sidebar_and_editor_as_two_real_surfaces(self) -> None:
         note = self.service.create_note()

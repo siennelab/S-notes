@@ -25,6 +25,17 @@ class NoteLocation:
         )
 
 
+def location_matches_directory_prefix(
+    note_location: NoteLocation,
+    directory_location: NoteLocation,
+) -> bool:
+    """Return whether a note belongs to the frozen-R1 directory prefix."""
+    prefix = tuple(
+        value for value in directory_location.values() if value not in {"", "无"}
+    )
+    return note_location.values()[: len(prefix)] == prefix
+
+
 @dataclass(frozen=True, slots=True)
 class Note:
     id: int
@@ -78,3 +89,19 @@ class TrashResult:
     note_count: int
     directory_count: int
     root_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class TrashSelectionResult:
+    note_ids: tuple[int, ...]
+    directory_ids: tuple[int, ...]
+
+    @property
+    def processed_count(self) -> int:
+        return len(self.note_ids) + len(self.directory_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class ExportResult:
+    path: str
+    note_count: int

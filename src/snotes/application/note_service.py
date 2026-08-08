@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from src.snotes.application.ports import NotesRepository
-from src.snotes.domain.models import Note, NoteLocation
+from src.snotes.domain.models import Note, NoteLocation, location_matches_directory_prefix
+from src.snotes.domain.relations import RelatedNote, build_related_notes
+from src.snotes.domain.search_query import match_search_fields, parse_search_query
+from src.snotes.domain.tags import normalize_tag, parse_tags
 
 
 class NoteService:
@@ -21,6 +24,80 @@ class NoteService:
     def list_active_notes(self) -> list[Note]:
         """Return ordinary active notes in the frozen R1 sidebar order."""
         return self._notes.list_active()
+
+    def notes_for_directory(self, location: NoteLocation | None = None) -> list[Note]:
+        if location is None:
+            return self._notes.list_active()
+        return [
+            note
+            for note in self._notes.list_active()
+            if location_matches_directory_prefix(note.location, location)
+        ]
+
+    def notes_by_ids(self, note_ids: Sequence[int]) -> list[Note]:
+        wanted = {int(note_id) for note_id in note_ids}
+        return self._ordinary_order(
+            [note for note in self._notes.list_active() if note.id in wanted]
+        )
+
+    def search_notes(self, query: str) -> list[Note]:
+        clean = query.strip()
+        if clean.startswith("#") and len(clean) > 1:
+            return self.notes_for_tag(clean[1:].strip())
+        parsed = parse_search_query(query)
+        if not parsed.tokens:
+            return []
+        matches: list[tuple[int, Note]] = []
+        for note in self._notes.list_active():
+            match = match_search_fields(
+                parsed,
+                title=note.title,
+                body=note.content_html,
+                directory=" / ".join(note.location.values()),
+                tags=(note.tags, *parse_tags(note.tags)),
+            )
+            if match is not None:
+                matches.append((match.score, note))
+        matches.sort(
+            key=lambda item: (
+                item[0], item[1].updated_at, item[1].created_at, item[1].id
+            ),
+            reverse=True,
+        )
+        return [note for _score, note in matches]
+
+    def notes_for_tag(self, tag: str) -> list[Note]:
+        wanted = normalize_tag(tag)
+        return self._ordinary_order(
+            [
+                note
+                for note in self._notes.list_active()
+                if wanted and wanted in parse_tags(note.tags)
+            ]
+        )
+
+    def smart_view(self, name: str) -> tuple[str, list[Note]]:
+        notes = self._notes.list_active()
+        if name == "pinned":
+            return "固定", self._ordinary_order(
+                [note for note in notes if note.is_pinned]
+            )
+        if name == "recent":
+            return "最近", self._ordinary_order(notes)[:10]
+        if name == "todo":
+            return "待办", self._ordinary_order(
+                [
+                    note
+                    for note in notes
+                    if note.main_category == "待办"
+                    or "todo" in parse_tags(note.tags)
+                    or "todo" in note.tags
+                ]
+            )
+        return "目录", []
+
+    def related_notes(self, note_id: int | None) -> list[RelatedNote]:
+        return build_related_notes(note_id, self._notes.list_active())
 
     def save_note(
         self,
@@ -59,3 +136,11 @@ class NoteService:
 
     def permanently_delete_note(self, note_id: int) -> None:
         self._notes.permanently_delete_trashed(note_id)
+
+    @staticmethod
+    def _ordinary_order(notes: Sequence[Note]) -> list[Note]:
+        return sorted(
+            notes,
+            key=lambda note: (note.updated_at, note.created_at, note.id),
+            reverse=True,
+        )

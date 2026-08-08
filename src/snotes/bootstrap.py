@@ -10,8 +10,13 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.note_service import NoteService
+from src.snotes.application.directory_service import DirectoryService
+from src.snotes.application.export_service import ExportService
+from src.snotes.application.tag_service import TagService
+from src.snotes.exporting.ordinary import OrdinaryExportWriter
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
+from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.main_window import MainWindow
 
@@ -47,10 +52,20 @@ def build_application(
     connections = initialize_database(root / "s_notes.db")
     directories = SQLiteDirectoriesRepository(connections)
     notes = SQLiteNotesRepository(connections, directories)
+    tags = SQLiteTagsRepository(connections)
     note_service = NoteService(notes)
+    directory_service = DirectoryService(directories, notes)
+    tag_service = TagService(tags)
+    export_service = ExportService(
+        notes,
+        OrdinaryExportWriter(root / "exports", root / "s_notes.db"),
+    )
     window = MainWindow(
         note_service,
         theme_settings_path=root / "config" / "ui_settings.ini",
+        directory_service=directory_service,
+        tag_service=tag_service,
+        export_service=export_service,
     )
     return application, window
 
