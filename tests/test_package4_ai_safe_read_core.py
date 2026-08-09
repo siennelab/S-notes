@@ -45,12 +45,20 @@ class Package4AiSafeReadCoreTests(unittest.TestCase):
             tags=("fictional-tag",),
         )
 
-    def test_common_full_is_readable_by_every_r1_actor(self) -> None:
+    def test_common_full_is_readable_by_every_registered_actor(self) -> None:
         self.assertEqual(
             AI_TARGET_IDS,
-            ("common", "gale", "clawbot", "codex", "ke-den", "gemini"),
+            (
+                "common",
+                "gale",
+                "clawbot",
+                "claude-code",
+                "ke-den",
+                "codex",
+                "gemini",
+            ),
         )
-        self.assertNotIn("claude-code", AI_TARGET_IDS)
+        self.assertIn("claude-code", AI_TARGET_IDS)
         for actor in AI_ACTOR_IDS:
             with self.subTest(actor=actor):
                 result = self.service.read_note(actor, self.source)
@@ -59,15 +67,21 @@ class Package4AiSafeReadCoreTests(unittest.TestCase):
                 self.assertFalse(result.redacted)
 
     def test_actor_only_full_is_readable_by_that_actor(self) -> None:
-        source = replace(self.source, targets=("codex",))
+        source = replace(self.source, targets=("claude-code",))
 
-        result = self.service.read_note("codex", source)
+        result = self.service.read_note("claude-code", source)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.content, source.content)
 
-    def test_unauthorized_or_unknown_actor_cannot_read(self) -> None:
+    def test_legacy_codex_grant_is_not_reinterpreted_as_claude_code(self) -> None:
         source = replace(self.source, targets=("codex",))
+
+        self.assertIsNotNone(self.service.read_note("codex", source))
+        self.assertIsNone(self.service.read_note("claude-code", source))
+
+    def test_unauthorized_or_unknown_actor_cannot_read(self) -> None:
+        source = replace(self.source, targets=("claude-code",))
 
         self.assertIsNone(self.service.read_note("gale", source))
         self.assertIsNone(self.service.read_note("unknown-actor", source))

@@ -129,19 +129,26 @@ class SQLiteNotesRepository(NotesRepository):
             ).fetchone()
             if exists is None:
                 raise NoteNotFoundError(note_id)
-            for target_id, display_name, slug, system in target_catalog:
+            for target_id, display_name, slug, system, selectable in target_catalog:
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO ai_targets (
+                    INSERT INTO ai_targets (
                         target_id, display_name, slug, is_system, is_enabled,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(target_id) DO UPDATE SET
+                        display_name = excluded.display_name,
+                        slug = excluded.slug,
+                        is_system = excluded.is_system,
+                        is_enabled = excluded.is_enabled,
+                        updated_at = excluded.updated_at
                     """,
                     (
                         target_id,
                         display_name,
                         slug,
                         1 if system else 0,
+                        1 if selectable else 0,
                         timestamp,
                         timestamp,
                     ),

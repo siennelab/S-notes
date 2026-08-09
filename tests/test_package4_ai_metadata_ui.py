@@ -55,7 +55,11 @@ class Package4AiMetadataUiTests(unittest.TestCase):
             self.window.shell.ai_visibility_combo.currentData(),
             "redacted",
         )
-        self.assertEqual(self.checked_target_ids(), ("common", "gale", "codex"))
+        self.assertEqual(self.checked_target_ids(), ("common", "gale"))
+        self.assertEqual(
+            self.window.shell.ai_legacy_targets_label.text(),
+            "历史授权：Codex",
+        )
 
     def test_visibility_edit_calls_service_persists_and_syncs_revision(self) -> None:
         note = self.create_note()
@@ -81,8 +85,8 @@ class Package4AiMetadataUiTests(unittest.TestCase):
 
         for expected in (
             ("common",),
-            ("gale",),
-            ("gale", "codex", "gemini"),
+            ("claude-code",),
+            ("gale", "clawbot", "claude-code", "ke-den"),
         ):
             for target_id, checkbox in self.window.shell.ai_target_checks.items():
                 checkbox.setChecked(target_id in expected)
@@ -109,13 +113,45 @@ class Package4AiMetadataUiTests(unittest.TestCase):
             self.window.shell.ai_visibility_combo.currentData(),
             "redacted",
         )
-        self.assertEqual(self.checked_target_ids(), ("ke-den", "gemini"))
+        self.assertEqual(self.checked_target_ids(), ("ke-den",))
+        self.assertEqual(
+            self.window.shell.ai_legacy_targets_label.text(),
+            "历史授权：Gemini",
+        )
         self.window.switch_note(first.id)
         self.assertEqual(
             self.window.shell.ai_visibility_combo.currentData(),
             "full",
         )
         self.assertEqual(self.checked_target_ids(), ("common",))
+        self.assertFalse(self.window.shell.ai_legacy_targets_label.isVisible())
+
+    def test_chooser_has_five_active_targets_and_preserves_legacy_on_edit(self) -> None:
+        self.assertEqual(
+            tuple(
+                (target_id, checkbox.text())
+                for target_id, checkbox in self.window.shell.ai_target_checks.items()
+            ),
+            (
+                ("common", "通用"),
+                ("gale", "Gale"),
+                ("clawbot", "Clawbot"),
+                ("claude-code", "Claude Code"),
+                ("ke-den", "Ke"),
+            ),
+        )
+        note = self.create_note()
+        service = self.window.ai_access_metadata_service
+        service.set_note_targets(note.id, ("codex",))
+        self.window.load_note(note.id)
+
+        self.window.shell.ai_target_checks["gale"].setChecked(True)
+        self.app.processEvents()
+
+        stored = service.get_note_metadata(note.id)
+        self.assertEqual(stored.target_ids, ("gale", "codex"))
+        self.assertEqual(stored.legacy_target_names, ("Codex",))
+        self.assertIn("Codex（历史）", self.window.shell.metadata_summary_button.text())
 
     def test_failed_write_restores_persisted_control_and_reports_failure(self) -> None:
         note = self.create_note()

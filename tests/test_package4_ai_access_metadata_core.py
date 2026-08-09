@@ -64,6 +64,8 @@ class Package4AiAccessMetadataCoreTests(unittest.TestCase):
         self.assertEqual(metadata.visibility, "hidden")
         self.assertEqual(metadata.target_ids, ())
         self.assertEqual(metadata.target_names, ())
+        self.assertEqual(metadata.legacy_target_ids, ())
+        self.assertEqual(metadata.legacy_target_names, ())
         self.assertEqual(metadata.revision, 1)
 
     def test_visibility_preserves_r1_codes_aliases_and_fail_closed_default(self) -> None:
@@ -85,14 +87,14 @@ class Package4AiAccessMetadataCoreTests(unittest.TestCase):
         self.assertEqual(unknown.visibility, "hidden")
         self.assertEqual(unknown.revision, 4)
 
-    def test_common_single_and_multiple_targets_round_trip_in_r1_order(self) -> None:
+    def test_five_active_targets_round_trip_in_registry_order(self) -> None:
         cases = (
             (("通用",), ("common",), ("通用",)),
-            (("ke-den",), ("ke-den",), ("ke-den",)),
+            (("Ke",), ("ke-den",), ("Ke",)),
             (
-                ("Codex", "Gale", "Codex", "Gemini"),
-                ("gale", "codex", "gemini"),
-                ("Gale", "Codex", "Gemini"),
+                ("Claude Code", "Gale", "Clawbot", "Ke"),
+                ("gale", "clawbot", "claude-code", "ke-den"),
+                ("Gale", "Clawbot", "Claude Code", "Ke"),
             ),
         )
         revision = self.note.revision
@@ -117,7 +119,7 @@ class Package4AiAccessMetadataCoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "未知 AI 适用对象"):
             self.metadata.set_note_targets(
                 self.note.id,
-                ("gale", "claude-code"),
+                ("gale", "deepseek"),
             )
 
         self.assertEqual(self.metadata.get_note_metadata(self.note.id), before)
@@ -142,8 +144,48 @@ class Package4AiAccessMetadataCoreTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(item.target_id for item in self.metadata.available_targets()),
-            ("common", "gale", "clawbot", "codex", "ke-den", "gemini"),
+            ("common", "gale", "clawbot", "claude-code", "ke-den"),
         )
+
+    def test_legacy_targets_remain_visible_and_survive_active_edits(self) -> None:
+        legacy = self.metadata.set_note_targets(
+            self.note.id,
+            ("codex", "gemini"),
+        )
+        self.assertEqual(legacy.legacy_target_ids, ("codex", "gemini"))
+        self.assertEqual(legacy.legacy_target_names, ("Codex", "Gemini"))
+
+        self.clock.advance()
+        visible = self.metadata.set_note_visibility(self.note.id, "full")
+        self.assertEqual(visible.target_ids, ("codex", "gemini"))
+
+        self.clock.advance()
+        edited = self.metadata.set_note_targets(self.note.id, ("gale",))
+        self.assertEqual(edited.target_ids, ("gale", "codex", "gemini"))
+        self.assertEqual(edited.legacy_target_ids, ("codex", "gemini"))
+
+    def test_ke_display_change_updates_catalog_without_changing_stable_id(self) -> None:
+        timestamp = self.clock.value.isoformat(timespec="seconds")
+        with self.connections.write() as connection:
+            connection.execute(
+                """
+                INSERT INTO ai_targets (
+                    target_id, display_name, slug, is_system, is_enabled,
+                    created_at, updated_at
+                ) VALUES ('ke-den', 'ke-den', 'ke_den', 0, 1, ?, ?)
+                """,
+                (timestamp, timestamp),
+            )
+
+        updated = self.metadata.set_note_targets(self.note.id, ("Ke",))
+
+        self.assertEqual(updated.target_ids, ("ke-den",))
+        self.assertEqual(updated.target_names, ("Ke",))
+        with self.connections.read() as connection:
+            row = connection.execute(
+                "SELECT target_id, display_name FROM ai_targets WHERE target_id='ke-den'"
+            ).fetchone()
+        self.assertEqual((row["target_id"], row["display_name"]), ("ke-den", "Ke"))
 
 
 if __name__ == "__main__":

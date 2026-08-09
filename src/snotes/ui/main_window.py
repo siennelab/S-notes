@@ -230,6 +230,7 @@ class MainWindow(QMainWindow):
                 self.shell.set_ai_metadata_values(
                     metadata.visibility,
                     metadata.target_ids,
+                    metadata.legacy_target_names,
                 )
             self.shell.update_metadata_summary()
             self.has_unsaved_changes = False
@@ -299,6 +300,7 @@ class MainWindow(QMainWindow):
         self.shell.set_ai_metadata_values(
             metadata.visibility,
             metadata.target_ids,
+            metadata.legacy_target_names,
         )
         refreshed = self.note_service.get_note(self.current_note.id)
         if refreshed is None:
@@ -316,6 +318,7 @@ class MainWindow(QMainWindow):
                 self.shell.set_ai_metadata_values(
                     metadata.visibility,
                     metadata.target_ids,
+                    metadata.legacy_target_names,
                 )
             except Exception:
                 pass

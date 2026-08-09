@@ -8,6 +8,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.snotes.application.ai_actor_registry import (
+    AI_ACTOR_IDS,
+    AI_TARGET_COMMON_ID,
+    AI_TARGET_DEFINITIONS,
+    AI_TARGET_IDS,
+    AiTargetDefinition,
+    normalize_target_ids as normalize_registry_target_ids,
+    resolve_target_id,
+)
+
 
 AI_VISIBILITY_HIDDEN = "hidden"
 AI_VISIBILITY_FULL = "full"
@@ -18,41 +28,6 @@ AI_VISIBILITY_VALUES = (
     AI_VISIBILITY_REDACTED,
 )
 
-AI_TARGET_COMMON_ID = "common"
-
-
-@dataclass(frozen=True, slots=True)
-class AiTargetDefinition:
-    target_id: str
-    display_name: str
-    slug: str
-    system: bool = False
-
-
-AI_TARGET_DEFINITIONS = (
-    AiTargetDefinition("common", "通用", "general", True),
-    AiTargetDefinition("gale", "Gale", "gale"),
-    AiTargetDefinition("clawbot", "Clawbot", "clawbot"),
-    AiTargetDefinition("codex", "Codex", "codex"),
-    AiTargetDefinition("ke-den", "ke-den", "ke_den"),
-    AiTargetDefinition("gemini", "Gemini", "gemini"),
-)
-AI_TARGET_IDS = tuple(item.target_id for item in AI_TARGET_DEFINITIONS)
-AI_ACTOR_IDS = tuple(
-    target_id for target_id in AI_TARGET_IDS if target_id != AI_TARGET_COMMON_ID
-)
-
-_AI_TARGET_DISPLAY_BY_ID = {
-    item.target_id: item.display_name for item in AI_TARGET_DEFINITIONS
-}
-_AI_TARGET_ID_BY_DISPLAY = {
-    item.display_name: item.target_id for item in AI_TARGET_DEFINITIONS
-}
-_LEGACY_AI_TARGET_IDS = {
-    "G经理": "gale",
-    "微信 clawde": "clawbot",
-    "ke-den Claude": "ke-den",
-}
 AI_VISIBILITY_LABELS = {
     AI_VISIBILITY_HIDDEN: "AI不可见",
     AI_VISIBILITY_FULL: "AI完整可见",
@@ -183,17 +158,8 @@ def visibility_display(value: object) -> str:
 
 
 def normalize_target_ids(values: Sequence[str]) -> list[str]:
-    """Resolve R1 target IDs/display names, rejecting unknown target values."""
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        target_id = _resolve_target_id(value)
-        if target_id is None:
-            raise ValueError(f"未知 AI 适用对象：{value}")
-        if target_id not in seen:
-            normalized.append(target_id)
-            seen.add(target_id)
-    return normalized
+    """Compatibility export of the shared stable-identity normalizer."""
+    return normalize_registry_target_ids(values)
 
 
 def is_actor_authorized(actor_id: str, targets: Sequence[str]) -> bool:
@@ -203,7 +169,7 @@ def is_actor_authorized(actor_id: str, targets: Sequence[str]) -> bool:
     resolved_targets = {
         target_id
         for value in targets
-        if (target_id := _resolve_target_id(value)) is not None
+        if (target_id := resolve_target_id(value)) is not None
     }
     return AI_TARGET_COMMON_ID in resolved_targets or actor_id in resolved_targets
 
@@ -282,17 +248,8 @@ def _append_rule(
         replacements.append((source, target))
 
 
-def _resolve_target_id(value: object) -> str | None:
-    text = str(value or "").strip()
-    if text in _AI_TARGET_DISPLAY_BY_ID:
-        return text
-    if text in _AI_TARGET_ID_BY_DISPLAY:
-        return _AI_TARGET_ID_BY_DISPLAY[text]
-    return _LEGACY_AI_TARGET_IDS.get(text)
-
-
 def _validated_actor(value: object) -> str | None:
-    actor_id = _resolve_target_id(value)
+    actor_id = resolve_target_id(value)
     if actor_id in AI_ACTOR_IDS:
         return actor_id
     return None

@@ -183,6 +183,9 @@ class SnotesShell(QWidget):
         self.ai_targets_layout.setContentsMargins(0, 0, 0, 0)
         self.ai_targets_layout.setSpacing(12)
         self.ai_target_checks: dict[str, QCheckBox] = {}
+        self.ai_legacy_targets_label = QLabel()
+        self.ai_legacy_targets_label.setObjectName("aiLegacyTargetsLabel")
+        self.ai_legacy_targets_label.setVisible(False)
         ai_row.addWidget(self.ai_targets_widget, stretch=1)
         self.metadata_collapse_button = QPushButton()
         self.metadata_collapse_button.setObjectName("metadataCollapseButton")
@@ -212,6 +215,7 @@ class SnotesShell(QWidget):
             checkbox.setProperty("targetId", target_id)
             self.ai_target_checks[target_id] = checkbox
             self.ai_targets_layout.addWidget(checkbox)
+        self.ai_targets_layout.addWidget(self.ai_legacy_targets_label)
         self.ai_targets_layout.addStretch(1)
         self.ai_metadata_configured = True
         self.ai_visibility_combo.setEnabled(True)
@@ -223,6 +227,7 @@ class SnotesShell(QWidget):
         self,
         visibility: str,
         target_ids: Sequence[str],
+        legacy_target_names: Sequence[str] = (),
     ) -> None:
         index = self.ai_visibility_combo.findData(visibility)
         self.ai_visibility_combo.blockSignals(True)
@@ -233,6 +238,16 @@ class SnotesShell(QWidget):
             checkbox.blockSignals(True)
             checkbox.setChecked(target_id in selected)
             checkbox.blockSignals(False)
+        legacy_names = tuple(legacy_target_names)
+        self.ai_legacy_targets_label.setText(
+            f"历史授权：{' / '.join(legacy_names)}" if legacy_names else ""
+        )
+        self.ai_legacy_targets_label.setToolTip(
+            "历史授权仅为当前笔记保留，不在新授权列表中提供。"
+            if legacy_names
+            else ""
+        )
+        self.ai_legacy_targets_label.setVisible(bool(legacy_names))
         self.update_metadata_summary()
 
     def clear_ai_metadata_values(self) -> None:
@@ -245,6 +260,8 @@ class SnotesShell(QWidget):
             checkbox.blockSignals(True)
             checkbox.setChecked(False)
             checkbox.blockSignals(False)
+        self.ai_legacy_targets_label.clear()
+        self.ai_legacy_targets_label.setVisible(False)
         self.update_metadata_summary()
 
     def selected_ai_target_ids(self) -> tuple[str, ...]:
@@ -315,6 +332,15 @@ class SnotesShell(QWidget):
                 for checkbox in self.ai_target_checks.values()
                 if checkbox.isChecked()
             ]
+            if not self.ai_legacy_targets_label.isHidden():
+                legacy_text = self.ai_legacy_targets_label.text().removeprefix(
+                    "历史授权："
+                )
+                target_names.extend(
+                    f"{name}（历史）"
+                    for name in legacy_text.split(" / ")
+                    if name
+                )
             if not target_names:
                 targets_text = "无"
             elif len(target_names) <= 3:

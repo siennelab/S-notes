@@ -14,7 +14,7 @@ from src.snotes.domain.models import (
 )
 
 
-AiTargetCatalogEntry = tuple[str, str, str, bool]
+AiTargetCatalogEntry = tuple[str, str, str, bool, bool]
 
 
 class NotesRepository(Protocol):

@@ -5,12 +5,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from src.snotes.application.ai_safe_read_service import (
+from src.snotes.application.ai_actor_registry import (
     AI_TARGET_DEFINITIONS,
-    AI_VISIBILITY_VALUES,
     AiTargetDefinition,
-    normalize_ai_visibility,
     normalize_target_ids,
+    selectable_target_definitions,
+    target_definition,
+)
+from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_VALUES,
+    normalize_ai_visibility,
     visibility_display,
 )
 from src.snotes.application.ports import AiTargetCatalogEntry, NotesRepository
@@ -23,6 +27,8 @@ class AiAccessMetadata:
     visibility: str
     target_ids: tuple[str, ...]
     target_names: tuple[str, ...]
+    legacy_target_ids: tuple[str, ...]
+    legacy_target_names: tuple[str, ...]
     revision: int
     updated_at: str
 
@@ -43,7 +49,7 @@ class AiAccessMetadataService:
         )
 
     def available_targets(self) -> tuple[AiTargetDefinition, ...]:
-        return AI_TARGET_DEFINITIONS
+        return selectable_target_definitions()
 
     def get_note_metadata(self, note_id: int) -> AiAccessMetadata:
         note, target_ids = self._notes.get_ai_access_metadata(note_id)
@@ -67,6 +73,21 @@ class AiAccessMetadataService:
         targets: Sequence[str],
     ) -> AiAccessMetadata:
         target_ids = normalize_target_ids(targets)
+        _note, stored_target_ids = self._notes.get_ai_access_metadata(note_id)
+        preserved_legacy_ids = tuple(
+            target_id
+            for target_id in stored_target_ids
+            if (
+                (definition := target_definition(target_id)) is None
+                or not definition.selectable
+            )
+        )
+        requested = set(target_ids)
+        target_ids.extend(
+            target_id
+            for target_id in preserved_legacy_ids
+            if target_id not in requested
+        )
         note, stored_target_ids = self._notes.set_ai_targets(
             note_id,
             target_ids,
@@ -77,7 +98,13 @@ class AiAccessMetadataService:
     @staticmethod
     def _target_catalog() -> tuple[AiTargetCatalogEntry, ...]:
         return tuple(
-            (item.target_id, item.display_name, item.slug, item.system)
+            (
+                item.target_id,
+                item.display_name,
+                item.slug,
+                item.system,
+                item.selectable,
+            )
             for item in AI_TARGET_DEFINITIONS
         )
 
@@ -90,11 +117,25 @@ class AiAccessMetadataService:
         definitions = tuple(
             item for item in AI_TARGET_DEFINITIONS if item.target_id in target_set
         )
+        known_ids = {item.target_id for item in definitions}
+        unknown_ids = tuple(
+            sorted(target_set - known_ids, key=str.casefold)
+        )
+        legacy_definitions = tuple(
+            item for item in definitions if not item.selectable
+        )
+        legacy_ids = tuple(item.target_id for item in legacy_definitions) + unknown_ids
+        legacy_names = tuple(
+            item.display_name for item in legacy_definitions
+        ) + tuple(f"未知对象（{target_id}）" for target_id in unknown_ids)
         return AiAccessMetadata(
             note_id=note.id,
             visibility=normalize_ai_visibility(note.ai_visibility),
-            target_ids=tuple(item.target_id for item in definitions),
-            target_names=tuple(item.display_name for item in definitions),
+            target_ids=tuple(item.target_id for item in definitions) + unknown_ids,
+            target_names=tuple(item.display_name for item in definitions)
+            + tuple(f"未知对象（{target_id}）" for target_id in unknown_ids),
+            legacy_target_ids=legacy_ids,
+            legacy_target_names=legacy_names,
             revision=note.revision,
             updated_at=note.updated_at,
         )
