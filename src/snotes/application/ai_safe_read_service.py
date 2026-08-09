@@ -53,7 +53,7 @@ _LEGACY_AI_TARGET_IDS = {
     "微信 clawde": "clawbot",
     "ke-den Claude": "ke-den",
 }
-_AI_VISIBILITY_LABELS = {
+AI_VISIBILITY_LABELS = {
     AI_VISIBILITY_HIDDEN: "AI不可见",
     AI_VISIBILITY_FULL: "AI完整可见",
     AI_VISIBILITY_REDACTED: "AI脱敏后可见",
@@ -62,7 +62,7 @@ _LEGACY_AI_VISIBILITY_CODES = {
     "不导出给 AI": AI_VISIBILITY_HIDDEN,
     "可直接给 AI": AI_VISIBILITY_FULL,
     "脱敏后给 AI": AI_VISIBILITY_REDACTED,
-    **{label: code for code, label in _AI_VISIBILITY_LABELS.items()},
+    **{label: code for code, label in AI_VISIBILITY_LABELS.items()},
 }
 
 
@@ -173,9 +173,13 @@ class AiSafeReadService:
 def normalize_ai_visibility(value: object) -> str:
     """Preserve R1 visibility aliases; unknown values fail closed to hidden."""
     text = str(value or "").strip()
-    if text in _AI_VISIBILITY_LABELS:
+    if text in AI_VISIBILITY_LABELS:
         return text
     return _LEGACY_AI_VISIBILITY_CODES.get(text, AI_VISIBILITY_HIDDEN)
+
+
+def visibility_display(value: object) -> str:
+    return AI_VISIBILITY_LABELS[normalize_ai_visibility(value)]
 
 
 def normalize_target_ids(values: Sequence[str]) -> list[str]:

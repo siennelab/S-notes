@@ -288,13 +288,15 @@ class Package3UiTests(unittest.TestCase):
         }
         second_row_y = {
             widget.mapTo(shell.metadata_panel, widget.rect().topLeft()).y()
-            for widget in (shell.ai_visibility_placeholder, shell.ai_targets_placeholder)
+            for widget in (shell.ai_visibility_combo, shell.ai_targets_widget)
         }
         self.assertEqual(len(first_row_y), 1)
         self.assertEqual(len(second_row_y), 1)
         self.assertLess(next(iter(first_row_y)), next(iter(second_row_y)))
-        self.assertTrue(shell.ai_visibility_placeholder.isEnabled() is False)
-        self.assertTrue(shell.ai_targets_placeholder.isEnabled() is False)
+        self.assertTrue(shell.ai_visibility_combo.isEnabled())
+        self.assertTrue(shell.ai_targets_widget.isEnabled())
+        self.assertEqual(len(shell.ai_target_checks), 6)
+        self.assertIsInstance(shell.ai_visibility_combo, FloatingComboBox)
         self.assertIsInstance(shell.main_combo, FloatingComboBox)
         self.assertIsInstance(shell.sub_combo, FloatingComboBox)
 

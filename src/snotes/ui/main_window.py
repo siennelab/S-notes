@@ -7,6 +7,10 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QInputDialog, QMainWindow, QMessageBox
 
+from src.snotes.application.ai_access_metadata_service import (
+    AiAccessMetadata,
+    AiAccessMetadataService,
+)
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.note_service import NoteService
@@ -46,12 +50,14 @@ class MainWindow(QMainWindow):
         directory_service: DirectoryService | None = None,
         tag_service: TagService | None = None,
         export_service: ExportService | None = None,
+        ai_access_metadata_service: AiAccessMetadataService | None = None,
     ) -> None:
         super().__init__()
         self.note_service = note_service
         self.directory_service = directory_service
         self.tag_service = tag_service
         self.export_service = export_service
+        self.ai_access_metadata_service = ai_access_metadata_service
         self.theme_settings_path = Path(theme_settings_path)
         self.current_note: Note | None = None
         self.current_mode = "directory"
@@ -66,6 +72,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("S-notes")
         self.resize(1420, 880)
         self.shell = SnotesShell(self.theme_settings_path)
+        if self.ai_access_metadata_service is not None:
+            self.shell.configure_ai_metadata(
+                self.ai_access_metadata_service.available_visibility_options(),
+                tuple(
+                    (item.target_id, item.display_name)
+                    for item in self.ai_access_metadata_service.available_targets()
+                ),
+            )
         self.directory_workflow = DirectoryUiWorkflow(self.directory_service, self)
         self.setCentralWidget(self.shell)
         self.save_timer = QTimer(self)
@@ -117,6 +131,12 @@ class MainWindow(QMainWindow):
         self.shell.tags_input.textChanged.connect(self.mark_note_dirty)
         for combo in (self.shell.main_combo, self.shell.sub_combo):
             combo.currentTextChanged.connect(self._location_changed)
+        if self.ai_access_metadata_service is not None:
+            self.shell.ai_visibility_combo.currentIndexChanged.connect(
+                self._ai_visibility_changed
+            )
+            for checkbox in self.shell.ai_target_checks.values():
+                checkbox.stateChanged.connect(self._ai_targets_changed)
         self.shell.reload_button.clicked.connect(self.reload_after_conflict)
         self.shell.pin_button.clicked.connect(self.toggle_current_pin)
         self.shell.links_button.clicked.connect(self.toggle_links)
@@ -191,6 +211,13 @@ class MainWindow(QMainWindow):
             self.status_label.setText("无法加载：笔记不存在或已删除")
             self.refresh_note_list()
             return False
+        metadata = None
+        if self.ai_access_metadata_service is not None:
+            try:
+                metadata = self.ai_access_metadata_service.get_note_metadata(note_id)
+            except Exception as error:
+                self.shell.set_normal_status(f"AI 元数据加载失败：{error}")
+                return False
         self.is_loading_note = True
         try:
             self.current_note = note
@@ -199,6 +226,11 @@ class MainWindow(QMainWindow):
             self.body_edit.document().setModified(False)
             self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
             populate_location_controls(self.shell, note, self.directory_service)
+            if metadata is not None:
+                self.shell.set_ai_metadata_values(
+                    metadata.visibility,
+                    metadata.target_ids,
+                )
             self.shell.update_metadata_summary()
             self.has_unsaved_changes = False
             self.conflict_active = False
@@ -223,6 +255,71 @@ class MainWindow(QMainWindow):
             return
         self.shell.set_normal_status("未保存")
         self.save_timer.start(self.AUTOSAVE_DELAY_MS)
+
+    def _ai_visibility_changed(self, _index: int = -1) -> None:
+        if (
+            self.is_loading_note
+            or self.current_note is None
+            or self.ai_access_metadata_service is None
+        ):
+            return
+        visibility = self.shell.ai_visibility_combo.currentData()
+        if visibility is None:
+            return
+        try:
+            metadata = self.ai_access_metadata_service.set_note_visibility(
+                self.current_note.id,
+                visibility,
+            )
+        except Exception as error:
+            self._restore_ai_metadata_after_failure(error)
+            return
+        self._accept_ai_metadata_write(metadata)
+
+    def _ai_targets_changed(self, _state: int = 0) -> None:
+        if (
+            self.is_loading_note
+            or self.current_note is None
+            or self.ai_access_metadata_service is None
+        ):
+            return
+        try:
+            metadata = self.ai_access_metadata_service.set_note_targets(
+                self.current_note.id,
+                self.shell.selected_ai_target_ids(),
+            )
+        except Exception as error:
+            self._restore_ai_metadata_after_failure(error)
+            return
+        self._accept_ai_metadata_write(metadata)
+
+    def _accept_ai_metadata_write(self, metadata: AiAccessMetadata) -> None:
+        if self.current_note is None:
+            return
+        self.shell.set_ai_metadata_values(
+            metadata.visibility,
+            metadata.target_ids,
+        )
+        refreshed = self.note_service.get_note(self.current_note.id)
+        if refreshed is None:
+            self.shell.set_normal_status("AI 元数据已保存，但笔记重载失败")
+            return
+        self.current_note = refreshed
+        self.shell.set_normal_status("未保存" if self.has_unsaved_changes else "已保存")
+
+    def _restore_ai_metadata_after_failure(self, error: Exception) -> None:
+        if self.current_note is not None and self.ai_access_metadata_service is not None:
+            try:
+                metadata = self.ai_access_metadata_service.get_note_metadata(
+                    self.current_note.id
+                )
+                self.shell.set_ai_metadata_values(
+                    metadata.visibility,
+                    metadata.target_ids,
+                )
+            except Exception:
+                pass
+        self.shell.set_normal_status(f"AI 元数据保存失败：{error}")
 
     def force_save_current_note(self) -> bool:
         self.save_timer.stop()
@@ -478,6 +575,7 @@ class MainWindow(QMainWindow):
         self.title_input.clear()
         self.body_edit.clear()
         self.shell.tags_input.clear()
+        self.shell.clear_ai_metadata_values()
         self.shell.update_metadata_summary()
         self.has_unsaved_changes = False
         self.save_timer.stop()

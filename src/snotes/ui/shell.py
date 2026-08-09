@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSize, Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QFrame,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,6 +39,7 @@ class SnotesShell(QWidget):
         super().__init__(parent)
         self.settings = QSettings(str(theme_settings_path), QSettings.IniFormat)
         self.metadata_expanded = False
+        self.ai_metadata_configured = False
         self.setObjectName("shellRoot")
         self.setAttribute(Qt.WA_StyledBackground, True)
         root_layout = QHBoxLayout(self)
@@ -164,18 +167,23 @@ class SnotesShell(QWidget):
         visibility_label = QLabel("AI 可见性")
         visibility_label.setObjectName("metadataFieldLabel")
         ai_row.addWidget(visibility_label)
-        self.ai_visibility_placeholder = FloatingComboBox()
-        self.ai_visibility_placeholder.addItem("Package 4 未接线")
-        self.ai_visibility_placeholder.setFixedSize(180, 28)
-        self.ai_visibility_placeholder.setEnabled(False)
-        ai_row.addWidget(self.ai_visibility_placeholder)
+        self.ai_visibility_combo = FloatingComboBox()
+        self.ai_visibility_combo.configure_popup(210)
+        self.ai_visibility_combo.setFixedSize(180, 28)
+        self.ai_visibility_combo.setEnabled(False)
+        ai_row.addWidget(self.ai_visibility_combo)
         ai_label = QLabel("AI 对象")
         ai_label.setObjectName("metadataFieldLabel")
         ai_row.addWidget(ai_label)
-        self.ai_targets_placeholder = QLineEdit("Package 4 未接线")
-        self.ai_targets_placeholder.setFixedHeight(28)
-        self.ai_targets_placeholder.setEnabled(False)
-        ai_row.addWidget(self.ai_targets_placeholder, stretch=1)
+        self.ai_targets_widget = QWidget()
+        self.ai_targets_widget.setObjectName("aiTargetsWidget")
+        self.ai_targets_widget.setFixedHeight(28)
+        self.ai_targets_widget.setMinimumWidth(0)
+        self.ai_targets_layout = QHBoxLayout(self.ai_targets_widget)
+        self.ai_targets_layout.setContentsMargins(0, 0, 0, 0)
+        self.ai_targets_layout.setSpacing(12)
+        self.ai_target_checks: dict[str, QCheckBox] = {}
+        ai_row.addWidget(self.ai_targets_widget, stretch=1)
         self.metadata_collapse_button = QPushButton()
         self.metadata_collapse_button.setObjectName("metadataCollapseButton")
         self.metadata_collapse_button.setFixedSize(28, 28)
@@ -188,6 +196,63 @@ class SnotesShell(QWidget):
         self.sub_combo.currentTextChanged.connect(self.update_metadata_summary)
         self.tags_input.textChanged.connect(self.update_metadata_summary)
         self.set_metadata_expanded(False)
+
+    def configure_ai_metadata(
+        self,
+        visibility_options: Sequence[tuple[str, str]],
+        target_options: Sequence[tuple[str, str]],
+    ) -> None:
+        self.ai_visibility_combo.clear()
+        for visibility, label in visibility_options:
+            self.ai_visibility_combo.addItem(label, visibility)
+        for target_id, display_name in target_options:
+            checkbox = QCheckBox(display_name)
+            checkbox.setObjectName("aiTargetCheck")
+            checkbox.setFixedHeight(24)
+            checkbox.setProperty("targetId", target_id)
+            self.ai_target_checks[target_id] = checkbox
+            self.ai_targets_layout.addWidget(checkbox)
+        self.ai_targets_layout.addStretch(1)
+        self.ai_metadata_configured = True
+        self.ai_visibility_combo.setEnabled(True)
+        for checkbox in self.ai_target_checks.values():
+            checkbox.setEnabled(True)
+        self.clear_ai_metadata_values()
+
+    def set_ai_metadata_values(
+        self,
+        visibility: str,
+        target_ids: Sequence[str],
+    ) -> None:
+        index = self.ai_visibility_combo.findData(visibility)
+        self.ai_visibility_combo.blockSignals(True)
+        self.ai_visibility_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.ai_visibility_combo.blockSignals(False)
+        selected = set(target_ids)
+        for target_id, checkbox in self.ai_target_checks.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(target_id in selected)
+            checkbox.blockSignals(False)
+        self.update_metadata_summary()
+
+    def clear_ai_metadata_values(self) -> None:
+        self.ai_visibility_combo.blockSignals(True)
+        self.ai_visibility_combo.setCurrentIndex(
+            0 if self.ai_visibility_combo.count() else -1
+        )
+        self.ai_visibility_combo.blockSignals(False)
+        for checkbox in self.ai_target_checks.values():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+        self.update_metadata_summary()
+
+    def selected_ai_target_ids(self) -> tuple[str, ...]:
+        return tuple(
+            target_id
+            for target_id, checkbox in self.ai_target_checks.items()
+            if checkbox.isChecked()
+        )
 
     def _build_status(self, layout: QVBoxLayout) -> None:
         status_row = QHBoxLayout()
@@ -244,8 +309,25 @@ class SnotesShell(QWidget):
         path = main if sub == "无" else f"{main} / {sub}"
         tags = parse_tags(self.tags_input.text())
         tag_text = " ".join(f"#{tag}" for tag in tags) if tags else "无标签"
+        if self.ai_metadata_configured:
+            target_names = [
+                checkbox.text()
+                for checkbox in self.ai_target_checks.values()
+                if checkbox.isChecked()
+            ]
+            if not target_names:
+                targets_text = "无"
+            elif len(target_names) <= 3:
+                targets_text = " / ".join(target_names)
+            else:
+                targets_text = f"{' / '.join(target_names[:3])} 等 {len(target_names)} 项"
+            visibility_text = self.ai_visibility_combo.currentText()
+        else:
+            targets_text = "未接线"
+            visibility_text = "未接线"
         self.metadata_summary_button.setText(
-            f"{path} · {tag_text} · AI对象：未接线 · AI可见性：未接线"
+            f"{path} · {tag_text} · AI对象：{targets_text} · "
+            f"AI可见性：{visibility_text}"
         )
 
     @staticmethod
@@ -299,6 +381,11 @@ class SnotesShell(QWidget):
             widget.setVisible(available)
         self.metadata_panel.setVisible(available and self.metadata_expanded)
         self.empty_label.setVisible(not available)
+        self.ai_visibility_combo.setEnabled(
+            available and self.ai_metadata_configured
+        )
+        for checkbox in self.ai_target_checks.values():
+            checkbox.setEnabled(available and self.ai_metadata_configured)
 
     def set_normal_status(self, text: str) -> None:
         self.status_label.setProperty("conflict", False)

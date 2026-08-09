@@ -11,6 +11,7 @@ from src.snotes.application.ai_safe_read_service import (
     AiTargetDefinition,
     normalize_ai_visibility,
     normalize_target_ids,
+    visibility_display,
 )
 from src.snotes.application.ports import AiTargetCatalogEntry, NotesRepository
 from src.snotes.domain.models import Note
@@ -34,6 +35,12 @@ class AiAccessMetadataService:
 
     def available_visibilities(self) -> tuple[str, ...]:
         return AI_VISIBILITY_VALUES
+
+    def available_visibility_options(self) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (visibility, visibility_display(visibility))
+            for visibility in AI_VISIBILITY_VALUES
+        )
 
     def available_targets(self) -> tuple[AiTargetDefinition, ...]:
         return AI_TARGET_DEFINITIONS

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
+from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
@@ -54,6 +55,7 @@ def build_application(
     notes = SQLiteNotesRepository(connections, directories)
     tags = SQLiteTagsRepository(connections)
     note_service = NoteService(notes)
+    ai_access_metadata_service = AiAccessMetadataService(notes)
     directory_service = DirectoryService(directories, notes)
     tag_service = TagService(tags)
     export_service = ExportService(
@@ -66,6 +68,7 @@ def build_application(
         directory_service=directory_service,
         tag_service=tag_service,
         export_service=export_service,
+        ai_access_metadata_service=ai_access_metadata_service,
     )
     return application, window
 
