@@ -12,6 +12,11 @@ from pathlib import Path
 AI_VISIBILITY_HIDDEN = "hidden"
 AI_VISIBILITY_FULL = "full"
 AI_VISIBILITY_REDACTED = "redacted"
+AI_VISIBILITY_VALUES = (
+    AI_VISIBILITY_HIDDEN,
+    AI_VISIBILITY_FULL,
+    AI_VISIBILITY_REDACTED,
+)
 
 AI_TARGET_COMMON_ID = "common"
 
@@ -171,6 +176,20 @@ def normalize_ai_visibility(value: object) -> str:
     if text in _AI_VISIBILITY_LABELS:
         return text
     return _LEGACY_AI_VISIBILITY_CODES.get(text, AI_VISIBILITY_HIDDEN)
+
+
+def normalize_target_ids(values: Sequence[str]) -> list[str]:
+    """Resolve R1 target IDs/display names, rejecting unknown target values."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        target_id = _resolve_target_id(value)
+        if target_id is None:
+            raise ValueError(f"未知 AI 适用对象：{value}")
+        if target_id not in seen:
+            normalized.append(target_id)
+            seen.add(target_id)
+    return normalized
 
 
 def is_actor_authorized(actor_id: str, targets: Sequence[str]) -> bool:

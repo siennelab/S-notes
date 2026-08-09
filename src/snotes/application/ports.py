@@ -14,12 +14,33 @@ from src.snotes.domain.models import (
 )
 
 
+AiTargetCatalogEntry = tuple[str, str, str, bool]
+
+
 class NotesRepository(Protocol):
     def create(self, location: NoteLocation) -> Note: ...
 
     def get(self, note_id: int, *, include_deleted: bool = False) -> Note | None: ...
 
     def list_active(self) -> list[Note]: ...
+
+    def get_ai_access_metadata(
+        self,
+        note_id: int,
+    ) -> tuple[Note, tuple[str, ...]]: ...
+
+    def set_ai_visibility(
+        self,
+        note_id: int,
+        visibility: str,
+    ) -> tuple[Note, tuple[str, ...]]: ...
+
+    def set_ai_targets(
+        self,
+        note_id: int,
+        target_ids: Sequence[str],
+        target_catalog: Sequence[AiTargetCatalogEntry],
+    ) -> tuple[Note, tuple[str, ...]]: ...
 
     def save(
         self,

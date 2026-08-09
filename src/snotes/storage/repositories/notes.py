@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
-from src.snotes.application.ports import NotesRepository
+from src.snotes.application.ports import AiTargetCatalogEntry, NotesRepository
 from src.snotes.domain.errors import NoteNotFoundError, NoteRevisionConflictError
 from src.snotes.domain.models import DEFAULT_AI_VISIBILITY, Note, NoteLocation
 from src.snotes.storage.connection import SQLiteConnectionFactory
@@ -84,6 +84,91 @@ class SQLiteNotesRepository(NotesRepository):
                 + " ORDER BY is_pinned DESC, updated_at DESC, id DESC"
             ).fetchall()
         return [note_from_row(row) for row in rows]
+
+    def get_ai_access_metadata(
+        self,
+        note_id: int,
+    ) -> tuple[Note, tuple[str, ...]]:
+        with self.connections.read() as connection:
+            note = self.read_from_connection(connection, note_id, False)
+            target_ids = self._read_ai_target_ids(connection, note_id)
+        return note, target_ids
+
+    def set_ai_visibility(
+        self,
+        note_id: int,
+        visibility: str,
+    ) -> tuple[Note, tuple[str, ...]]:
+        timestamp = timestamp_seconds(self.clock)
+        with self.connections.write() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE notes
+                SET ai_visibility = ?, revision = revision + 1, updated_at = ?
+                WHERE id = ? AND is_deleted = 0
+                """,
+                (visibility, timestamp, note_id),
+            )
+            if cursor.rowcount != 1:
+                raise NoteNotFoundError(note_id)
+            note = self.read_from_connection(connection, note_id, False)
+            target_ids = self._read_ai_target_ids(connection, note_id)
+        return note, target_ids
+
+    def set_ai_targets(
+        self,
+        note_id: int,
+        target_ids: Sequence[str],
+        target_catalog: Sequence[AiTargetCatalogEntry],
+    ) -> tuple[Note, tuple[str, ...]]:
+        timestamp = timestamp_seconds(self.clock)
+        with self.connections.write() as connection:
+            exists = connection.execute(
+                "SELECT id FROM notes WHERE id = ? AND is_deleted = 0",
+                (note_id,),
+            ).fetchone()
+            if exists is None:
+                raise NoteNotFoundError(note_id)
+            for target_id, display_name, slug, system in target_catalog:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO ai_targets (
+                        target_id, display_name, slug, is_system, is_enabled,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        target_id,
+                        display_name,
+                        slug,
+                        1 if system else 0,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            connection.execute(
+                "DELETE FROM note_ai_targets WHERE note_id = ?", (note_id,)
+            )
+            for target_id in target_ids:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO note_ai_targets (
+                        note_id, target_id, created_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (note_id, target_id, timestamp),
+                )
+            connection.execute(
+                """
+                UPDATE notes
+                SET revision = revision + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, note_id),
+            )
+            note = self.read_from_connection(connection, note_id, False)
+            stored_target_ids = self._read_ai_target_ids(connection, note_id)
+        return note, stored_target_ids
 
     def save(
         self,
@@ -273,3 +358,16 @@ class SQLiteNotesRepository(NotesRepository):
         if row is None:
             raise NoteNotFoundError(note_id, deleted_allowed=include_deleted)
         return note_from_row(row)
+
+    @staticmethod
+    def _read_ai_target_ids(connection, note_id: int) -> tuple[str, ...]:
+        rows = connection.execute(
+            """
+            SELECT target_id
+            FROM note_ai_targets
+            WHERE note_id = ?
+            ORDER BY target_id COLLATE NOCASE ASC
+            """,
+            (note_id,),
+        ).fetchall()
+        return tuple(str(row["target_id"]) for row in rows)
