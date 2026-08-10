@@ -21,8 +21,12 @@ class TagService:
     def list_tags(self) -> list[str]:
         return self._tags.list_all()
 
+    @staticmethod
+    def normalize_tags_text(value: str) -> tuple[str, ...]:
+        return tuple(parse_tags(value))
+
     def set_note_tags_from_text(self, note_id: int, value: str) -> list[str]:
-        wanted = parse_tags(value)
+        wanted = list(self.normalize_tags_text(value))
         current = self.get_note_tags(note_id)
         if set(wanted) == set(current):
             return current

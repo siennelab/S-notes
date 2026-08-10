@@ -163,7 +163,8 @@ class Package3UiTests(unittest.TestCase):
         sidebar = self.window.shell.sidebar
         self.assertEqual(sidebar.search_input.placeholderText(), "搜索笔记或 #标签")
         self.assertEqual(set(sidebar.smart_buttons), {"recent", "todo", "ai"})
-        self.assertFalse(sidebar.ai_center_button.isEnabled())
+        self.assertTrue(sidebar.ai_center_button.isEnabled())
+        self.assertEqual(sidebar.ai_center_button.toolTip(), "打开 AI 中心")
         self.assertFalse(hasattr(sidebar, "tagRequested"))
         self.assertEqual(len(sidebar.findChildren(QComboBox, "tagBrowser")), 0)
         self.assertEqual(sidebar.findChildren(QTreeWidget), [sidebar.trash_tree])

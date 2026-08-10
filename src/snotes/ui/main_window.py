@@ -11,6 +11,7 @@ from src.snotes.application.ai_access_metadata_service import (
     AiAccessMetadata,
     AiAccessMetadataService,
 )
+from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.note_service import NoteService
@@ -19,6 +20,7 @@ from src.snotes.domain.errors import NoteRevisionConflictError
 from src.snotes.domain.models import Note, NoteLocation
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.directory_dialog import DirectoryUiWorkflow
+from src.snotes.ui.ai_center_dialog import AiCenterDialog
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
 from src.snotes.ui.location_controls import (
     location_from_path,
@@ -51,6 +53,7 @@ class MainWindow(QMainWindow):
         tag_service: TagService | None = None,
         export_service: ExportService | None = None,
         ai_access_metadata_service: AiAccessMetadataService | None = None,
+        receipt_inbox_service: AiReceiptInboxService | None = None,
     ) -> None:
         super().__init__()
         self.note_service = note_service
@@ -58,6 +61,8 @@ class MainWindow(QMainWindow):
         self.tag_service = tag_service
         self.export_service = export_service
         self.ai_access_metadata_service = ai_access_metadata_service
+        self.receipt_inbox_service = receipt_inbox_service
+        self.ai_center_dialog: AiCenterDialog | None = None
         self.theme_settings_path = Path(theme_settings_path)
         self.current_note: Note | None = None
         self.current_mode = "directory"
@@ -72,6 +77,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("S-notes")
         self.resize(1420, 880)
         self.shell = SnotesShell(self.theme_settings_path)
+        self.shell.sidebar.set_ai_center_available(
+            self.receipt_inbox_service is not None
+        )
         if self.ai_access_metadata_service is not None:
             self.shell.configure_ai_metadata(
                 self.ai_access_metadata_service.available_visibility_options(),
@@ -126,6 +134,7 @@ class MainWindow(QMainWindow):
         sidebar.restoreTrashRequested.connect(self.restore_trash_items)
         sidebar.permanentDeleteTrashRequested.connect(self.permanently_delete_trash_items)
         sidebar.emptyTrashRequested.connect(self.empty_trash)
+        sidebar.aiCenterRequested.connect(self.open_ai_center)
         self.title_input.textChanged.connect(self.mark_note_dirty)
         self.body_edit.textChanged.connect(self.mark_note_dirty)
         self.shell.tags_input.textChanged.connect(self.mark_note_dirty)
@@ -144,6 +153,32 @@ class MainWindow(QMainWindow):
         self.shell.delete_button.clicked.connect(self.delete_current_note)
         self.shell.link_drawer.closeRequested.connect(self.toggle_links)
         self.shell.link_drawer.noteSelected.connect(self.open_related_note)
+
+    def open_ai_center(self) -> None:
+        if (
+            self.receipt_inbox_service is None
+            or self.ai_access_metadata_service is None
+        ):
+            return
+        if self.ai_center_dialog is not None:
+            self.ai_center_dialog.show()
+            self.ai_center_dialog.raise_()
+            self.ai_center_dialog.activateWindow()
+            return
+        dialog = AiCenterDialog(
+            self.receipt_inbox_service,
+            self.ai_access_metadata_service,
+            self,
+        )
+        self.ai_center_dialog = dialog
+        dialog.receiptAccepted.connect(self._receipt_note_created)
+        dialog.destroyed.connect(lambda: setattr(self, "ai_center_dialog", None))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _receipt_note_created(self, note_id: int) -> None:
+        self.refresh_note_list(note_id)
 
     def refresh_note_list(self, selected_note_id: int | None = None) -> None:
         if selected_note_id is None and self.current_note is not None:

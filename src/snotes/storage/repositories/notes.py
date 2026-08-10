@@ -10,6 +10,10 @@ from src.snotes.application.ports import AiTargetCatalogEntry, NotesRepository
 from src.snotes.domain.errors import NoteNotFoundError, NoteRevisionConflictError
 from src.snotes.domain.models import DEFAULT_AI_VISIBILITY, Note, NoteLocation
 from src.snotes.storage.connection import SQLiteConnectionFactory
+from src.snotes.storage.ai_metadata import (
+    replace_note_ai_targets,
+    sync_ai_target_catalog,
+)
 from src.snotes.storage.mappers import note_from_row
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.support import Clock, next_note_updated_at, now_shanghai, timestamp_seconds
@@ -129,42 +133,8 @@ class SQLiteNotesRepository(NotesRepository):
             ).fetchone()
             if exists is None:
                 raise NoteNotFoundError(note_id)
-            for target_id, display_name, slug, system, selectable in target_catalog:
-                connection.execute(
-                    """
-                    INSERT INTO ai_targets (
-                        target_id, display_name, slug, is_system, is_enabled,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(target_id) DO UPDATE SET
-                        display_name = excluded.display_name,
-                        slug = excluded.slug,
-                        is_system = excluded.is_system,
-                        is_enabled = excluded.is_enabled,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        target_id,
-                        display_name,
-                        slug,
-                        1 if system else 0,
-                        1 if selectable else 0,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
-            connection.execute(
-                "DELETE FROM note_ai_targets WHERE note_id = ?", (note_id,)
-            )
-            for target_id in target_ids:
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO note_ai_targets (
-                        note_id, target_id, created_at
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (note_id, target_id, timestamp),
-                )
+            sync_ai_target_catalog(connection, target_catalog, timestamp)
+            replace_note_ai_targets(connection, note_id, target_ids, timestamp)
             connection.execute(
                 """
                 UPDATE notes

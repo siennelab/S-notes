@@ -29,19 +29,12 @@ class SQLiteTagsRepository(TagsRepository):
             ).fetchone()
             if exists is None:
                 raise NoteNotFoundError(note_id)
-            connection.execute("DELETE FROM note_tags WHERE note_id = ?", (note_id,))
-            for tag in normalized:
-                connection.execute(
-                    "INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)",
-                    (tag, timestamp),
-                )
-                tag_id = connection.execute(
-                    "SELECT id FROM tags WHERE name = ?", (tag,)
-                ).fetchone()["id"]
-                connection.execute(
-                    "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)",
-                    (note_id, tag_id),
-                )
+            self.replace_for_note_in_connection(
+                connection,
+                note_id,
+                normalized,
+                timestamp,
+            )
             connection.execute(
                 """
                 UPDATE notes
@@ -51,6 +44,47 @@ class SQLiteTagsRepository(TagsRepository):
                 (", ".join(normalized), timestamp, note_id),
             )
         return normalized
+
+    def set_for_new_note_in_connection(
+        self,
+        connection,
+        note_id: int,
+        tags: Sequence[str],
+        timestamp: str,
+    ) -> tuple[str, ...]:
+        normalized = tuple(normalize_tags(tags))
+        self.replace_for_note_in_connection(
+            connection,
+            note_id,
+            normalized,
+            timestamp,
+        )
+        connection.execute(
+            "UPDATE notes SET tags = ?, updated_at = ? WHERE id = ?",
+            (", ".join(normalized), timestamp, note_id),
+        )
+        return normalized
+
+    @staticmethod
+    def replace_for_note_in_connection(
+        connection,
+        note_id: int,
+        tags: Sequence[str],
+        timestamp: str,
+    ) -> None:
+        connection.execute("DELETE FROM note_tags WHERE note_id = ?", (note_id,))
+        for tag in tags:
+            connection.execute(
+                "INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)",
+                (tag, timestamp),
+            )
+            tag_id = connection.execute(
+                "SELECT id FROM tags WHERE name = ?", (tag,)
+            ).fetchone()["id"]
+            connection.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)",
+                (note_id, tag_id),
+            )
 
     def get_for_note(self, note_id: int) -> list[str]:
         with self.connections.read() as connection:

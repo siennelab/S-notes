@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Protocol, Sequence
 
+from src.snotes.domain.ai_receipts import (
+    AiReceiptAcceptCommand,
+    AiReceiptAcceptPersistence,
+    AiReceiptDiscardPersistence,
+    AiReceiptInboxItem,
+)
 from src.snotes.domain.models import (
     Directory,
     Note,
@@ -15,6 +21,31 @@ from src.snotes.domain.models import (
 
 
 AiTargetCatalogEntry = tuple[str, str, str, bool, bool]
+
+
+class AiReceiptInboxRepository(Protocol):
+    def list_pending(self) -> list[AiReceiptInboxItem]: ...
+
+    def list_processed(self) -> list[AiReceiptInboxItem]: ...
+
+    def get(self, receipt_id: int) -> AiReceiptInboxItem | None: ...
+
+    def delete_if_unchanged(
+        self,
+        receipt_id: int,
+        *,
+        expected_status: str,
+        expected_note_id: int | None,
+    ) -> bool: ...
+
+    def accept_pending(
+        self,
+        receipt_id: int,
+        command: AiReceiptAcceptCommand,
+        target_catalog: Sequence[AiTargetCatalogEntry],
+    ) -> AiReceiptAcceptPersistence: ...
+
+    def discard_pending(self, receipt_id: int) -> AiReceiptDiscardPersistence: ...
 
 
 class NotesRepository(Protocol):

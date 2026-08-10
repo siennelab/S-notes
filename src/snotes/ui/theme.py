@@ -310,6 +310,25 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #bodyEdit:focus {{ border: 1px solid {t.focus}; }}
 #statusLabel {{ background: transparent; color: {t.text_subtle}; padding: 4px 0; font-size: 12.5px; }}
 #statusLabel[conflict='true'] {{ color: {t.warning}; }}
+#aiCenterDialog {{ background: {t.window}; color: {t.text}; }}
+#receiptInboxTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#receiptTabButton {{ color: {t.text_muted}; padding: 4px 8px; }}
+#receiptTabButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#receiptTabButton[active='true'] {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}
+#receiptEmptyState {{ color: {t.text_subtle}; font-size: 13px; }}
+#receiptScroll, #receiptScrollContent {{ border: 0; background: {t.window}; }}
+#receiptCard {{ border: 0; border-radius: 8px; background: {t.surface}; }}
+#receiptCard[expanded='true'], #receiptCard:hover {{ background: {t.surface_hover}; }}
+#receiptCard:focus {{ border: 1px solid {t.focus}; }}
+#receiptCardTitle {{ color: {t.text}; font-size: 13px; font-weight: 600; }}
+#receiptCardSummary, #receiptFieldLabel {{ color: {t.text_muted}; font-size: 11px; }}
+#receiptParseErrorDetail {{ color: {t.warning}; font-size: 11px; }}
+#receiptCardDetails {{ background: transparent; }}
+#receiptAcceptButton {{ background: {t.accent}; color: {t.accent_text}; padding: 4px 8px; }}
+#receiptAcceptButton:hover {{ background: {t.focus}; }}
+#receiptRejectButton, #aiCenterCloseButton {{ color: {t.text_muted}; background: transparent; padding: 4px 8px; }}
+#receiptRejectButton:hover, #aiCenterCloseButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#receiptLinkedNote {{ color: {t.accent}; font-size: 12px; }}
 #categoryManagerDialog {{ background: {t.window}; color: {t.text}; }}
 #categoryColumn {{ background: {t.surface}; border-radius: 8px; }}
 #categoryManagerTitle {{ color: {t.text_muted}; font-size: 12.5px; font-weight: 600; }}

@@ -10,12 +10,14 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.tag_service import TagService
 from src.snotes.exporting.ordinary import OrdinaryExportWriter
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
+from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
@@ -58,6 +60,12 @@ def build_application(
     ai_access_metadata_service = AiAccessMetadataService(notes)
     directory_service = DirectoryService(directories, notes)
     tag_service = TagService(tags)
+    receipt_inbox_service = AiReceiptInboxService(
+        SQLiteAiReceiptInboxRepository(connections, directories, tags),
+        notes=note_service,
+        tags=tag_service,
+        ai_metadata=ai_access_metadata_service,
+    )
     export_service = ExportService(
         notes,
         OrdinaryExportWriter(root / "exports", root / "s_notes.db"),
@@ -69,6 +77,7 @@ def build_application(
         tag_service=tag_service,
         export_service=export_service,
         ai_access_metadata_service=ai_access_metadata_service,
+        receipt_inbox_service=receipt_inbox_service,
     )
     return application, window
 

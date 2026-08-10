@@ -51,6 +51,29 @@ class AiAccessMetadataService:
     def available_targets(self) -> tuple[AiTargetDefinition, ...]:
         return selectable_target_definitions()
 
+    def prepare_values(
+        self,
+        visibility: object,
+        targets: Sequence[str],
+    ) -> tuple[str, tuple[str, ...]]:
+        """Apply the same metadata policy before a transactional note create."""
+        return (
+            normalize_ai_visibility(visibility),
+            tuple(normalize_target_ids(targets)),
+        )
+
+    def target_catalog(self) -> tuple[AiTargetCatalogEntry, ...]:
+        return tuple(
+            (
+                item.target_id,
+                item.display_name,
+                item.slug,
+                item.system,
+                item.selectable,
+            )
+            for item in AI_TARGET_DEFINITIONS
+        )
+
     def get_note_metadata(self, note_id: int) -> AiAccessMetadata:
         note, target_ids = self._notes.get_ai_access_metadata(note_id)
         return self._materialize(note, target_ids)
@@ -91,22 +114,9 @@ class AiAccessMetadataService:
         note, stored_target_ids = self._notes.set_ai_targets(
             note_id,
             target_ids,
-            self._target_catalog(),
+            self.target_catalog(),
         )
         return self._materialize(note, stored_target_ids)
-
-    @staticmethod
-    def _target_catalog() -> tuple[AiTargetCatalogEntry, ...]:
-        return tuple(
-            (
-                item.target_id,
-                item.display_name,
-                item.slug,
-                item.system,
-                item.selectable,
-            )
-            for item in AI_TARGET_DEFINITIONS
-        )
 
     @staticmethod
     def _materialize(
