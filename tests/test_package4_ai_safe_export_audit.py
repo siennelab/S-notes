@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from src.snotes.bootstrap import build_application
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
+from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.theme import THEMES, build_app_style
 
 
@@ -315,6 +316,20 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         ) as information:
             dialog._export_ai_safe()
         information.assert_called_once()
+        self.window.ai_audit_service.record_event(
+            "gale",
+            "export",
+            request_id="ui-cancel-1",
+            status="cancelled",
+            failure_reason="sensitive_confirmation_cancelled",
+            entered_confirmation=True,
+        )
+        self.window.ai_audit_service.record_event(
+            "gale",
+            "search",
+            request_id="search-ui",
+            status="success",
+        )
 
         self.window.open_ai_center()
         self.app.processEvents()
@@ -325,15 +340,41 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         )
         center.tabs.setCurrentWidget(center.log_page)
         self.app.processEvents()
-        self.assertEqual(center.log_table.rowCount(), 1)
+        self.assertIsInstance(center.log_filter, FloatingComboBox)
+        self.assertEqual(center.log_filter.objectName(), "aiCallLogFilter")
+        self.assertEqual(center.log_filter.itemText(1), "导出")
+        self.assertEqual(center.log_filter.itemData(1), "export")
+        self.assertEqual(center.log_table.rowCount(), 3)
         displayed = " ".join(
-            center.log_table.item(0, column).text()
+            center.log_table.item(row, column).text()
+            for row in range(center.log_table.rowCount())
             for column in range(center.log_table.columnCount())
         )
         self.assertIn("Gale", displayed)
-        self.assertIn("export", displayed)
-        self.assertIn("success", displayed)
+        self.assertIn("导出", displayed)
+        self.assertIn("搜索", displayed)
+        self.assertIn("读取", displayed)
+        self.assertIn("成功", displayed)
+        self.assertIn("已取消", displayed)
+        self.assertIn("人工确认已取消", displayed)
+        self.assertNotIn("export", displayed)
+        self.assertNotIn("read", displayed)
+        self.assertNotIn("success", displayed)
+        self.assertNotIn("cancelled", displayed)
         self.assertNotIn("Safe UI body", displayed)
+
+        export_index = center.log_filter.findData("export")
+        center.log_filter.setCurrentIndex(export_index)
+        self.app.processEvents()
+        self.assertEqual(center.log_filter.currentData(), "export")
+        self.assertEqual(center.log_table.rowCount(), 2)
+        filtered_request_ids = {
+            center.log_table.item(row, 3).text()
+            for row in range(center.log_table.rowCount())
+        }
+        self.assertEqual(len(filtered_request_ids), 2)
+        self.assertIn("ui-cancel-1", filtered_request_ids)
+        self.assertNotIn("search-ui", filtered_request_ids)
 
     def test_export_and_call_log_controls_are_themed_in_all_three_modes(self) -> None:
         for theme_name in THEMES:
@@ -341,6 +382,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
                 style = build_app_style(theme_name)
                 self.assertIn("#aiSafeExportSection", style)
                 self.assertIn("#aiCallLogTable", style)
+                self.assertIn("#aiCallLogFilter", style)
                 self.assertIn("#aiCenterTabs QTabBar::tab:selected", style)
 
 

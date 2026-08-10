@@ -39,6 +39,68 @@ from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.theme import repolish
 
 
+AUDIT_OPERATION_LABELS = {
+    "export": "导出",
+    "read": "读取",
+    "search": "搜索",
+    "get_note": "读取笔记",
+    "list_directories": "查看目录",
+    "list_tags": "查看标签",
+    "create": "新建笔记",
+    "prepend": "前置追加",
+    "append": "追加内容",
+    "metadata": "修改资料",
+    "restore": "恢复笔记",
+    "operation_status": "查询操作状态",
+}
+
+AUDIT_STATUS_LABELS = {
+    "success": "成功",
+    "cancelled": "已取消",
+    "failed": "失败",
+    "created": "已创建",
+    "updated": "已更新",
+    "not_found": "未找到",
+    "conflict": "发生冲突",
+    "rejected": "已拒绝",
+    "accepted": "已接受",
+    "pending_confirmation": "待人工确认",
+    "no_change": "无变化",
+}
+
+AUDIT_HANDLING_MODE_LABELS = {
+    "read": "读取",
+    "direct": "直接执行",
+    "pending": "待人工确认",
+    "human_approved": "人工确认",
+    "human_rejected": "人工拒绝",
+    "none": "无",
+}
+
+AUDIT_FAILURE_REASON_LABELS = {
+    "unknown_actor": "未知 AI 对象",
+    "redaction_unavailable": "脱敏规则不可用",
+    "sensitive_confirmation_cancelled": "人工确认已取消",
+    "package_write_failed": "资料包写入失败",
+}
+
+
+def _audit_display_text(
+    value: object,
+    labels: dict[str, str],
+    *,
+    unknown_label: str,
+) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "—"
+    if text in labels:
+        return labels[text]
+    if any("\u4e00" <= character <= "\u9fff" for character in text):
+        return text
+    return f"{unknown_label}（{text}）"
+
+
 class ReceiptCard(QFrame):
     toggleRequested = Signal(int)
     acceptRequested = Signal(int)
@@ -516,11 +578,21 @@ class AiCenterDialog(QWidget):
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("操作类型"))
         self.log_filter = FloatingComboBox()
+        self.log_filter.setObjectName("aiCallLogFilter")
+        self.log_filter.setFixedHeight(32)
+        self.log_filter.setMinimumWidth(180)
         self.log_filter.configure_popup(200)
         self.log_filter.addItem("全部", None)
         if self.audit is not None:
             for operation_type in self.audit.operation_filter_options():
-                self.log_filter.addItem(operation_type, operation_type)
+                self.log_filter.addItem(
+                    _audit_display_text(
+                        operation_type,
+                        AUDIT_OPERATION_LABELS,
+                        unknown_label="其他操作",
+                    ),
+                    operation_type,
+                )
         self.log_filter.currentIndexChanged.connect(self.refresh_logs)
         toolbar.addWidget(self.log_filter)
         toolbar.addStretch(1)
@@ -569,19 +641,35 @@ class AiCenterDialog(QWidget):
         )
         self.log_table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
-            status = row.status
+            status = _audit_display_text(
+                row.status,
+                AUDIT_STATUS_LABELS,
+                unknown_label="其他状态",
+            )
             if row.failure_reason:
-                status += f" · {row.failure_reason}"
+                status += " · " + _audit_display_text(
+                    row.failure_reason,
+                    AUDIT_FAILURE_REASON_LABELS,
+                    unknown_label="其他原因",
+                )
             if row.is_duplicate:
                 status += " · 重复请求"
             values = (
                 row.called_at.replace("T", " ")[:19],
                 row.actor_display,
-                row.operation_type,
+                _audit_display_text(
+                    row.operation_type,
+                    AUDIT_OPERATION_LABELS,
+                    unknown_label="其他操作",
+                ),
                 row.request_id,
                 row.note_id or "",
                 row.result_count,
-                row.handling_mode,
+                _audit_display_text(
+                    row.handling_mode,
+                    AUDIT_HANDLING_MODE_LABELS,
+                    unknown_label="其他方式",
+                ),
                 status,
             )
             for column, value in enumerate(values):

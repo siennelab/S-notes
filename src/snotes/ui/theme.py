@@ -328,6 +328,13 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #aiCenterTabs QTabBar::tab:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #aiCenterTabs QTabBar::tab:selected {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}
 #aiCallLogPage {{ background: {t.window}; }}
+#aiCallLogFilter {{
+    border: 1px solid {t.editor_border}; border-radius: 6px;
+    padding: 4px 26px 4px 9px; background: {t.surface}; color: {t.text};
+}}
+#aiCallLogFilter:hover {{ background: {t.surface_hover}; }}
+#aiCallLogFilter:focus {{ border-color: {t.focus}; background: {t.surface}; }}
+#aiCallLogFilter:disabled {{ color: {t.disabled}; background: {t.surface}; }}
 #aiCallLogTable {{
     border: 0; border-radius: 8px; background: {t.surface}; color: {t.text};
     gridline-color: {t.editor_border}; selection-background-color: {t.surface_selected};
