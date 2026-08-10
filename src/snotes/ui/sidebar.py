@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.snotes.domain.models import Directory, Note, TrashSnapshot
+from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.sidebar_widgets import (
     DirectoryFilterCombo,
     DirectoryDropButton,
@@ -116,10 +117,12 @@ class NoteSidebar(QWidget):
         actor_layout = QHBoxLayout(self.ai_actor_filter_widget)
         actor_layout.setContentsMargins(0, 0, 0, 0)
         actor_layout.setSpacing(6)
-        actor_label = QLabel("AI 对象")
-        actor_label.setObjectName("aiActorFilterLabel")
-        actor_layout.addWidget(actor_label)
-        self.ai_actor_filter_combo = DirectoryFilterCombo()
+        self.ai_actor_filter_label = QLabel("AI 对象")
+        self.ai_actor_filter_label.setObjectName("aiActorFilterLabel")
+        self.ai_actor_filter_label.setFixedHeight(28)
+        self.ai_actor_filter_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        actor_layout.addWidget(self.ai_actor_filter_label)
+        self.ai_actor_filter_combo = FloatingComboBox(surface_role="sidebar")
         self.ai_actor_filter_combo.setObjectName("aiActorFilterCombo")
         self.ai_actor_filter_combo.setFixedHeight(28)
         self.ai_actor_filter_combo.setMinimumWidth(0)

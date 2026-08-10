@@ -180,7 +180,7 @@ QSplitter::handle {{ background: {t.sidebar_separator}; }}
 QSplitter::handle:hover {{ background: {t.accent}; }}
 #brandLabel {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 600; }}
 #sidebarClockTime, #sidebarClockDate {{ color: {t.sidebar_text}; font-size: 15px; font-weight: 500; }}
-#sidebarSearch, #categoryFilter {{
+#sidebarSearch, #categoryFilter, #aiActorFilterCombo {{
     border: 1px solid transparent;
     border-radius: 6px;
     padding: 4px 8px;
@@ -189,8 +189,16 @@ QSplitter::handle:hover {{ background: {t.accent}; }}
     selection-background-color: {t.sidebar_selected};
     selection-color: {t.sidebar_text};
 }}
-#sidebarSearch:hover, #categoryFilter:hover {{ background: {t.sidebar_hover}; }}
-#sidebarSearch:focus, #categoryFilter:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
+#sidebarSearch:hover, #categoryFilter:hover, #aiActorFilterCombo:hover {{ background: {t.sidebar_hover}; }}
+#sidebarSearch:focus, #categoryFilter:focus, #aiActorFilterCombo:focus {{ border-color: {t.focus}; background: {t.sidebar_control}; }}
+#aiActorFilter {{ background: transparent; }}
+#aiActorFilterLabel {{
+    color: {t.sidebar_text_muted}; font-size: 12px; font-weight: 600; padding-left: 2px;
+}}
+#aiActorFilterCombo {{ border-color: {t.sidebar_separator}; padding: 3px 26px 3px 9px; }}
+#aiActorFilterCombo:disabled {{
+    border-color: transparent; background: {t.sidebar_control}; color: {t.sidebar_text_subtle};
+}}
 #sidebarSearch QToolButton {{ background: transparent; border: 0; padding: 0; }}
 #sidebar QComboBox QAbstractItemView {{
     border: 1px solid {t.sidebar_separator};
@@ -228,7 +236,7 @@ QSplitter::handle:hover {{ background: {t.accent}; }}
 #directoryDropPopup::item:hover, #directoryDropPopup::item:selected {{
     background: {t.sidebar_selected}; color: {t.sidebar_text};
 }}
-#smartTabButton, #categoryManagerButton, #categoryFilter, #noteList, #sidebarComboPopupView {{
+#smartTabButton, #categoryManagerButton, #categoryFilter, #aiActorFilterCombo, #noteList, #sidebarComboPopupView {{
     font-family: {UI_FONT_FAMILY}; font-size: 13px;
 }}
 #smartTabButton, #categoryManagerButton {{ color: {t.sidebar_text_muted}; }}

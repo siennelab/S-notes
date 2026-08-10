@@ -16,6 +16,9 @@ from src.snotes.storage.repositories.directories import SQLiteDirectoriesReposit
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.ui.floating_combo import FloatingComboBox
+from src.snotes.ui.sidebar_widgets import DirectoryFilterCombo
+from src.snotes.ui.theme import THEMES, build_app_style
 
 
 class Package4AiMaterialsQueryTests(unittest.TestCase):
@@ -262,6 +265,43 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
         self.assertFalse(sidebar.ai_actor_filter_widget.isVisible())
         self.assertFalse(hasattr(self.window, "search_timer"))
         self.assertIn(ke.id, {note.id for note in self.window.visible_notes})
+
+    def test_slate_actor_filter_reuses_sidebar_surface_and_targeted_states(self) -> None:
+        self.window.set_theme("light-slate")
+        self.window.show_smart_view("ai")
+        self.window.show()
+        self.app.processEvents()
+        sidebar = self.window.shell.sidebar
+        combo = sidebar.ai_actor_filter_combo
+        label = sidebar.ai_actor_filter_label
+        tokens = THEMES["light-slate"]
+        style = build_app_style("light-slate")
+
+        self.assertIsInstance(combo, FloatingComboBox)
+        self.assertNotIsInstance(combo, DirectoryFilterCombo)
+        self.assertEqual(combo.surface_role, "sidebar")
+        self.assertEqual(combo.height(), 28)
+        self.assertEqual(label.height(), combo.height())
+        self.assertEqual(combo.objectName(), "aiActorFilterCombo")
+        self.assertIn("#aiActorFilterCombo {", style)
+        self.assertIn("#aiActorFilterCombo:hover", style)
+        self.assertIn("#aiActorFilterCombo:focus", style)
+        self.assertIn("#aiActorFilterCombo:disabled", style)
+        self.assertIn(f"background: {tokens.sidebar_control};", style)
+        self.assertIn(f"color: {tokens.sidebar_text_subtle};", style)
+
+        combo.setFocus()
+        combo.showPopup()
+        self.app.processEvents()
+        self.assertTrue(combo.view().isVisible())
+        self.assertEqual(combo.view().objectName(), "sidebarComboPopupView")
+        combo.hidePopup()
+        combo.setEnabled(False)
+        self.app.processEvents()
+        self.assertFalse(combo.isEnabled())
+        combo.setEnabled(True)
+        self.assertEqual(sidebar.main_filter_combo.objectName(), "categoryFilter")
+        self.assertEqual(sidebar.sub_filter_combo.objectName(), "categoryFilter")
 
     def test_visibility_and_target_edits_refresh_current_ai_view(self) -> None:
         note = self.add_note("Editable Gale", targets=("gale",))
