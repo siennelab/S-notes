@@ -10,14 +10,20 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
+from src.snotes.application.ai_safe_export_service import AiSafeExportService
+from src.snotes.application.ai_safe_read_service import AiSafeReadService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.tag_service import TagService
 from src.snotes.exporting.ordinary import OrdinaryExportWriter
+from src.snotes.exporting.ordinary import html_to_markdown
+from src.snotes.exporting.ai_safe import AiSafePackageWriter
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
+from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
@@ -70,6 +76,16 @@ def build_application(
         notes,
         OrdinaryExportWriter(root / "exports", root / "s_notes.db"),
     )
+    ai_audit_service = AiAuditService(SQLiteAiAuditRepository(connections))
+    ai_safe_export_service = AiSafeExportService(
+        notes,
+        AiSafeReadService(
+            root / "config" / "local_redaction_rules.json",
+            body_renderer=html_to_markdown,
+        ),
+        AiSafePackageWriter(root / "exports" / "ai_readbox"),
+        ai_audit_service,
+    )
     window = MainWindow(
         note_service,
         theme_settings_path=root / "config" / "ui_settings.ini",
@@ -78,6 +94,8 @@ def build_application(
         export_service=export_service,
         ai_access_metadata_service=ai_access_metadata_service,
         receipt_inbox_service=receipt_inbox_service,
+        ai_safe_export_service=ai_safe_export_service,
+        ai_audit_service=ai_audit_service,
     )
     return application, window
 

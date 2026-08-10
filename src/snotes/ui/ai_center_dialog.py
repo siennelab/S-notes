@@ -10,6 +10,7 @@ from PySide6.QtGui import QCloseEvent, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,11 +19,15 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
@@ -468,6 +473,7 @@ class AiCenterDialog(QWidget):
         self,
         service: AiReceiptInboxService,
         metadata: AiAccessMetadataService,
+        audit: AiAuditService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
@@ -480,12 +486,19 @@ class AiCenterDialog(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        title = QLabel("AI中心 · Receipt Lifecycle")
+        self.audit = audit
+        title = QLabel("AI中心")
         title.setObjectName("receiptInboxTitle")
         layout.addWidget(title)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("aiCenterTabs")
         self.receipt_view = ReceiptInboxView(service, metadata, self)
         self.receipt_view.receiptAccepted.connect(self.receiptAccepted)
-        layout.addWidget(self.receipt_view, stretch=1)
+        self.tabs.addTab(self.receipt_view, "待确认 / 已处理")
+        self.log_page = self._build_log_page()
+        self.tabs.addTab(self.log_page, "调用记录")
+        self.tabs.currentChanged.connect(self._tab_changed)
+        layout.addWidget(self.tabs, stretch=1)
         footer = QHBoxLayout()
         footer.addStretch(1)
         self.close_button = QPushButton("关闭")
@@ -493,6 +506,90 @@ class AiCenterDialog(QWidget):
         self.close_button.clicked.connect(self.close)
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
+
+    def _build_log_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("aiCallLogPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(10)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("操作类型"))
+        self.log_filter = FloatingComboBox()
+        self.log_filter.configure_popup(200)
+        self.log_filter.addItem("全部", None)
+        if self.audit is not None:
+            for operation_type in self.audit.operation_filter_options():
+                self.log_filter.addItem(operation_type, operation_type)
+        self.log_filter.currentIndexChanged.connect(self.refresh_logs)
+        toolbar.addWidget(self.log_filter)
+        toolbar.addStretch(1)
+        refresh_button = QPushButton("刷新")
+        refresh_button.clicked.connect(self.refresh_logs)
+        toolbar.addWidget(refresh_button)
+        layout.addLayout(toolbar)
+
+        self.log_table = QTableWidget(0, 8)
+        self.log_table.setObjectName("aiCallLogTable")
+        self.log_table.setHorizontalHeaderLabels(
+            [
+                "时间",
+                "来源",
+                "操作",
+                "请求 ID",
+                "笔记 ID",
+                "结果数",
+                "处理方式",
+                "状态/原因",
+            ]
+        )
+        self.log_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.log_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.log_table.setAlternatingRowColors(False)
+        self.log_table.verticalHeader().setVisible(False)
+        self.log_table.horizontalHeader().setStretchLastSection(True)
+        self.log_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
+        layout.addWidget(self.log_table, stretch=1)
+        self.refresh_logs()
+        return page
+
+    def _tab_changed(self, index: int) -> None:
+        if index == self.tabs.indexOf(self.log_page):
+            self.refresh_logs()
+        else:
+            self.receipt_view.refresh_receipts()
+
+    def refresh_logs(self, *_args) -> None:
+        rows = (
+            self.audit.list_call_logs(self.log_filter.currentData())
+            if self.audit is not None
+            else ()
+        )
+        self.log_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            status = row.status
+            if row.failure_reason:
+                status += f" · {row.failure_reason}"
+            if row.is_duplicate:
+                status += " · 重复请求"
+            values = (
+                row.called_at.replace("T", " ")[:19],
+                row.actor_display,
+                row.operation_type,
+                row.request_id,
+                row.note_id or "",
+                row.result_count,
+                row.handling_mode,
+                status,
+            )
+            for column, value in enumerate(values):
+                self.log_table.setItem(
+                    row_index,
+                    column,
+                    QTableWidgetItem(str(value)),
+                )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.finished.emit(0)

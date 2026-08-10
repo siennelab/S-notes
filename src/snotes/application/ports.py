@@ -10,6 +10,8 @@ from src.snotes.domain.ai_receipts import (
     AiReceiptDiscardPersistence,
     AiReceiptInboxItem,
 )
+from src.snotes.domain.ai_audit import AiAuditEvent, AiCallLog
+from src.snotes.domain.ai_safe_export import AiSafeExportPlan, AiSafeExportResult
 from src.snotes.domain.models import (
     Directory,
     Note,
@@ -139,3 +141,13 @@ class OrdinaryExportWriter(Protocol):
     def write_json(self, notes: Sequence[Note], scope: str) -> ExportResult: ...
 
     def write_database_backup(self) -> ExportResult: ...
+
+
+class AiSafePackageWriter(Protocol):
+    def write_plan(self, plan: AiSafeExportPlan) -> AiSafeExportResult: ...
+
+
+class AiAuditRepository(Protocol):
+    def record(self, event: AiAuditEvent) -> None: ...
+
+    def list(self, operation_type: str | None = None) -> list[AiCallLog]: ...

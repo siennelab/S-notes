@@ -69,6 +69,14 @@ class AiSafeReadResult:
     redacted: bool
     redaction_count: int
 
+    @property
+    def was_transformed(self) -> bool:
+        return self.redacted
+
+    @property
+    def transform_count(self) -> int:
+        return self.redaction_count
+
 
 @dataclass(frozen=True, slots=True)
 class RedactionRules:
@@ -97,11 +105,37 @@ class AiSafeReadService:
     ) -> AiSafeReadResult | None:
         """Return a derived safe record, or ``None`` when access is denied."""
         actor_id = _validated_actor(actor)
+        return self._read_materialized(actor_id, source, allow_common=False)
+
+    def read_for_export_target(
+        self,
+        target: object,
+        source: AiSafeReadSource,
+    ) -> AiSafeReadResult | None:
+        """Materialize for a selectable package target, including common-only."""
+        target_id = resolve_target_id(target)
+        if target_id not in AI_TARGET_IDS:
+            target_id = None
+        return self._read_materialized(target_id, source, allow_common=True)
+
+    def _read_materialized(
+        self,
+        actor_id: str | None,
+        source: AiSafeReadSource,
+        *,
+        allow_common: bool,
+    ) -> AiSafeReadResult | None:
         visibility = normalize_ai_visibility(source.visibility)
+        authorized = (
+            _common_target_authorized(source.targets)
+            if allow_common and actor_id == AI_TARGET_COMMON_ID
+            else actor_id is not None
+            and is_actor_authorized(actor_id, source.targets)
+        )
         if (
             actor_id is None
             or visibility == AI_VISIBILITY_HIDDEN
-            or not is_actor_authorized(actor_id, source.targets)
+            or not authorized
         ):
             return None
 
@@ -253,3 +287,7 @@ def _validated_actor(value: object) -> str | None:
     if actor_id in AI_ACTOR_IDS:
         return actor_id
     return None
+
+
+def _common_target_authorized(targets: Sequence[str]) -> bool:
+    return any(resolve_target_id(value) == AI_TARGET_COMMON_ID for value in targets)

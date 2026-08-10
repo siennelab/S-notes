@@ -320,6 +320,29 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #statusLabel[conflict='true'] {{ color: {t.warning}; }}
 #aiCenterDialog {{ background: {t.window}; color: {t.text}; }}
 #receiptInboxTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
+#aiCenterTabs::pane {{ border: 0; top: 0; background: {t.window}; }}
+#aiCenterTabs QTabBar::tab {{
+    border: 0; border-radius: 6px; padding: 7px 14px;
+    background: transparent; color: {t.text_muted};
+}}
+#aiCenterTabs QTabBar::tab:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#aiCenterTabs QTabBar::tab:selected {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}
+#aiCallLogPage {{ background: {t.window}; }}
+#aiCallLogTable {{
+    border: 0; border-radius: 8px; background: {t.surface}; color: {t.text};
+    gridline-color: {t.editor_border}; selection-background-color: {t.surface_selected};
+}}
+#aiCallLogTable::item {{ padding: 5px 7px; }}
+#aiCallLogTable QHeaderView::section {{
+    border: 0; border-bottom: 1px solid {t.editor_border};
+    padding: 6px 8px; background: {t.surface}; color: {t.text_muted};
+}}
+#exportDialog {{ background: {t.window}; }}
+#aiSafeExportSection {{
+    border: 1px solid {t.editor_border}; border-radius: 8px;
+    background: {t.surface};
+}}
+#exportSectionTitle {{ color: {t.text}; font-weight: 600; }}
 #receiptTabButton {{ color: {t.text_muted}; padding: 4px 8px; }}
 #receiptTabButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #receiptTabButton[active='true'] {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}

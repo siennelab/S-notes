@@ -12,6 +12,8 @@ from src.snotes.application.ai_access_metadata_service import (
     AiAccessMetadataService,
 )
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
+from src.snotes.application.ai_audit_service import AiAuditService
+from src.snotes.application.ai_safe_export_service import AiSafeExportService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.note_service import NoteService
@@ -54,6 +56,8 @@ class MainWindow(QMainWindow):
         export_service: ExportService | None = None,
         ai_access_metadata_service: AiAccessMetadataService | None = None,
         receipt_inbox_service: AiReceiptInboxService | None = None,
+        ai_safe_export_service: AiSafeExportService | None = None,
+        ai_audit_service: AiAuditService | None = None,
     ) -> None:
         super().__init__()
         self.note_service = note_service
@@ -62,6 +66,8 @@ class MainWindow(QMainWindow):
         self.export_service = export_service
         self.ai_access_metadata_service = ai_access_metadata_service
         self.receipt_inbox_service = receipt_inbox_service
+        self.ai_safe_export_service = ai_safe_export_service
+        self.ai_audit_service = ai_audit_service
         self.ai_center_dialog: AiCenterDialog | None = None
         self.theme_settings_path = Path(theme_settings_path)
         self.current_note: Note | None = None
@@ -173,6 +179,7 @@ class MainWindow(QMainWindow):
         dialog = AiCenterDialog(
             self.receipt_inbox_service,
             self.ai_access_metadata_service,
+            self.ai_audit_service,
             self,
         )
         self.ai_center_dialog = dialog
@@ -613,7 +620,12 @@ class MainWindow(QMainWindow):
             selected_note_ids=tuple(self.shell.sidebar.selected_note_ids()),
             selected_directories=selected_locations,
         )
-        ExportDialog(self.export_service, context, self).exec()
+        ExportDialog(
+            self.export_service,
+            context,
+            self,
+            ai_safe_export_service=self.ai_safe_export_service,
+        ).exec()
 
     def _location_changed(self) -> None:
         if self.is_loading_note or self.current_note is None:
