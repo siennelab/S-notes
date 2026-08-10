@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
@@ -59,6 +61,7 @@ class NoteSidebar(QWidget):
     permanentDeleteTrashRequested = Signal(object, object)
     emptyTrashRequested = Signal()
     aiCenterRequested = Signal()
+    aiActorFilterRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -108,6 +111,26 @@ class NoteSidebar(QWidget):
         smart_row.addWidget(self.ai_center_button, stretch=1)
         layout.addLayout(smart_row)
 
+        self.ai_actor_filter_widget = QWidget()
+        self.ai_actor_filter_widget.setObjectName("aiActorFilter")
+        actor_layout = QHBoxLayout(self.ai_actor_filter_widget)
+        actor_layout.setContentsMargins(0, 0, 0, 0)
+        actor_layout.setSpacing(6)
+        actor_label = QLabel("AI 对象")
+        actor_label.setObjectName("aiActorFilterLabel")
+        actor_layout.addWidget(actor_label)
+        self.ai_actor_filter_combo = DirectoryFilterCombo()
+        self.ai_actor_filter_combo.setObjectName("aiActorFilterCombo")
+        self.ai_actor_filter_combo.setFixedHeight(28)
+        self.ai_actor_filter_combo.setMinimumWidth(0)
+        self.ai_actor_filter_combo.configure_popup(170)
+        self.ai_actor_filter_combo.currentIndexChanged.connect(
+            self._ai_actor_filter_changed
+        )
+        actor_layout.addWidget(self.ai_actor_filter_combo, stretch=1)
+        layout.addWidget(self.ai_actor_filter_widget)
+        self.ai_actor_filter_widget.setVisible(False)
+
         self._build_directory_filters(layout)
         self._build_content_stack(layout)
         self._build_footer(layout)
@@ -123,6 +146,22 @@ class NoteSidebar(QWidget):
         self.ai_center_button.setToolTip(
             "打开 AI 中心" if available else "Package 4 尚未接线"
         )
+
+    def configure_ai_actor_filters(
+        self,
+        targets: Sequence[tuple[str, str]],
+    ) -> None:
+        self.ai_actor_filter_combo.blockSignals(True)
+        self.ai_actor_filter_combo.clear()
+        self.ai_actor_filter_combo.addItem("全部", None)
+        for target_id, display_name in targets:
+            self.ai_actor_filter_combo.addItem(display_name, target_id)
+        self.ai_actor_filter_combo.setCurrentIndex(0)
+        self.ai_actor_filter_combo.blockSignals(False)
+
+    def selected_ai_actor_id(self) -> str | None:
+        value = self.ai_actor_filter_combo.currentData()
+        return str(value) if value is not None else None
     def _build_header(self, layout: QVBoxLayout) -> None:
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -441,6 +480,9 @@ class NoteSidebar(QWidget):
     def _search_text_changed(self, value: str) -> None:
         self.searchRequested.emit(value)
 
+    def _ai_actor_filter_changed(self, _index: int = -1) -> None:
+        self.aiActorFilterRequested.emit(self.selected_ai_actor_id())
+
     def clear_search(self) -> None:
         self.search_input.blockSignals(True)
         self.search_input.clear()
@@ -451,6 +493,10 @@ class NoteSidebar(QWidget):
             button.setProperty("active", self.mode == "smart_view" and name == getattr(self, "active_smart_view", ""))
             button.setChecked(bool(button.property("active")))
             repolish(button)
+        self.ai_actor_filter_widget.setVisible(
+            self.mode == "smart_view"
+            and getattr(self, "active_smart_view", "") == "ai"
+        )
 
     def set_active_smart_view(self, name: str) -> None:
         self.active_smart_view = name

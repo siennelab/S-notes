@@ -68,6 +68,8 @@ class MainWindow(QMainWindow):
         self.current_mode = "directory"
         self.current_filter = ""
         self.current_directory_path: tuple[str, ...] = ()
+        self.ai_materials_actor_id: str | None = None
+        self.ai_materials_query = ""
         self.visible_notes: list[Note] = []
         self.is_loading_note = False
         self.has_unsaved_changes = False
@@ -81,13 +83,15 @@ class MainWindow(QMainWindow):
             self.receipt_inbox_service is not None
         )
         if self.ai_access_metadata_service is not None:
+            target_options = tuple(
+                (item.target_id, item.display_name)
+                for item in self.ai_access_metadata_service.available_targets()
+            )
             self.shell.configure_ai_metadata(
                 self.ai_access_metadata_service.available_visibility_options(),
-                tuple(
-                    (item.target_id, item.display_name)
-                    for item in self.ai_access_metadata_service.available_targets()
-                ),
+                target_options,
             )
+            self.shell.sidebar.configure_ai_actor_filters(target_options)
         self.directory_workflow = DirectoryUiWorkflow(self.directory_service, self)
         self.setCentralWidget(self.shell)
         self.save_timer = QTimer(self)
@@ -135,6 +139,7 @@ class MainWindow(QMainWindow):
         sidebar.permanentDeleteTrashRequested.connect(self.permanently_delete_trash_items)
         sidebar.emptyTrashRequested.connect(self.empty_trash)
         sidebar.aiCenterRequested.connect(self.open_ai_center)
+        sidebar.aiActorFilterRequested.connect(self.set_ai_materials_actor_filter)
         self.title_input.textChanged.connect(self.mark_note_dirty)
         self.body_edit.textChanged.connect(self.mark_note_dirty)
         self.shell.tags_input.textChanged.connect(self.mark_note_dirty)
@@ -203,7 +208,19 @@ class MainWindow(QMainWindow):
             self.visible_notes = self.note_service.notes_for_tag(self.current_filter)
             self.shell.sidebar.show_flat(self.visible_notes, mode="tag", selected_note_id=selected_note_id)
         elif self.current_mode == "smart_view":
-            _title, self.visible_notes = self.note_service.smart_view(self.current_filter)
+            _title, self.visible_notes = self.note_service.smart_view(
+                self.current_filter,
+                actor_target_id=(
+                    self.ai_materials_actor_id
+                    if self.current_filter == "ai"
+                    else None
+                ),
+                query=(
+                    self.ai_materials_query
+                    if self.current_filter == "ai"
+                    else ""
+                ),
+            )
             self.shell.sidebar.show_flat(self.visible_notes, mode="smart_view", selected_note_id=selected_note_id)
         else:
             self.current_mode = "directory"
@@ -343,6 +360,7 @@ class MainWindow(QMainWindow):
             return
         self.current_note = refreshed
         self.shell.set_normal_status("未保存" if self.has_unsaved_changes else "已保存")
+        self.refresh_note_list(refreshed.id)
 
     def _restore_ai_metadata_after_failure(self, error: Exception) -> None:
         if self.current_note is not None and self.ai_access_metadata_service is not None:
@@ -425,6 +443,10 @@ class MainWindow(QMainWindow):
         self.show_directory()
 
     def show_search(self, query: str) -> None:
+        if self.current_mode == "smart_view" and self.current_filter == "ai":
+            self.ai_materials_query = query
+            self.refresh_note_list()
+            return
         if not query.strip():
             self.show_directory()
         else:
@@ -438,6 +460,7 @@ class MainWindow(QMainWindow):
         self.refresh_note_list()
     def show_smart_view(self, name: str) -> None:
         self.shell.sidebar.clear_search()
+        self.ai_materials_query = ""
         if self.current_mode == "smart_view" and self.current_filter == name:
             self.current_directory_path = ()
             self.show_directory()
@@ -446,6 +469,13 @@ class MainWindow(QMainWindow):
         self.current_filter = name
         self.shell.sidebar.set_active_smart_view(name)
         self.refresh_note_list()
+
+    def set_ai_materials_actor_filter(self, actor_target_id: object) -> None:
+        self.ai_materials_actor_id = (
+            str(actor_target_id) if actor_target_id is not None else None
+        )
+        if self.current_mode == "smart_view" and self.current_filter == "ai":
+            self.refresh_note_list()
 
     def set_note_pinned(self, note_id: int, pinned: bool) -> None:
         if not self.force_save_current_note():

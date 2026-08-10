@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from src.snotes.application.ai_actor_registry import resolve_target_id
+from src.snotes.application.ai_safe_read_service import AI_VISIBILITY_VALUES
 from src.snotes.application.ports import NotesRepository
 from src.snotes.domain.models import Note, NoteLocation, location_matches_directory_prefix
 from src.snotes.domain.relations import RelatedNote, build_related_notes
@@ -76,7 +78,18 @@ class NoteService:
             ]
         )
 
-    def smart_view(self, name: str) -> tuple[str, list[Note]]:
+    def smart_view(
+        self,
+        name: str,
+        *,
+        actor_target_id: str | None = None,
+        query: str = "",
+    ) -> tuple[str, list[Note]]:
+        if name == "ai":
+            return "AI资料", self.ai_materials(
+                actor_target_id=actor_target_id,
+                query=query,
+            )
         notes = self._notes.list_active()
         if name == "pinned":
             return "固定", self._ordinary_order(
@@ -95,6 +108,46 @@ class NoteService:
                 ]
             )
         return "目录", []
+
+    def ai_materials(
+        self,
+        *,
+        actor_target_id: str | None = None,
+        query: str = "",
+    ) -> list[Note]:
+        """Return frozen-R1 AI-material notes with actor and search combined."""
+        actor_id = None
+        if actor_target_id is not None:
+            actor_id = resolve_target_id(actor_target_id)
+            if actor_id is None:
+                raise ValueError(f"未知 AI 适用对象：{actor_target_id}")
+        parsed = parse_search_query(query)
+        if not parsed.is_blank and not parsed.tokens:
+            return []
+        notes = self._notes.list_ai_materials(
+            actor_target_id=actor_id,
+            visible_values=AI_VISIBILITY_VALUES[1:],
+        )
+        if not parsed.tokens:
+            return self._ordinary_order(notes)
+        matches: list[tuple[int, Note]] = []
+        for note in notes:
+            match = match_search_fields(
+                parsed,
+                title=note.title,
+                body=note.content_html,
+                directory=" / ".join(note.location.values()),
+                tags=(note.tags, *parse_tags(note.tags)),
+            )
+            if match is not None:
+                matches.append((match.score, note))
+        matches.sort(
+            key=lambda item: (
+                item[0], item[1].updated_at, item[1].created_at, item[1].id
+            ),
+            reverse=True,
+        )
+        return [note for _score, note in matches]
 
     def related_notes(self, note_id: int | None) -> list[RelatedNote]:
         return build_related_notes(note_id, self._notes.list_active())

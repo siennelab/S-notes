@@ -55,6 +55,13 @@ class NotesRepository(Protocol):
 
     def list_active(self) -> list[Note]: ...
 
+    def list_ai_materials(
+        self,
+        *,
+        actor_target_id: str | None,
+        visible_values: Sequence[str],
+    ) -> list[Note]: ...
+
     def get_ai_access_metadata(
         self,
         note_id: int,

@@ -89,6 +89,44 @@ class SQLiteNotesRepository(NotesRepository):
             ).fetchall()
         return [note_from_row(row) for row in rows]
 
+    def list_ai_materials(
+        self,
+        *,
+        actor_target_id: str | None,
+        visible_values: Sequence[str],
+    ) -> list[Note]:
+        visibility_values = tuple(str(value) for value in visible_values)
+        if not visibility_values:
+            return []
+        parameters: list[object] = list(visibility_values)
+        clauses = [
+            "notes.is_deleted = 0",
+            "notes.ai_visibility IN ("
+            + ", ".join("?" for _value in visibility_values)
+            + ")",
+        ]
+        if actor_target_id is not None:
+            clauses.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM note_ai_targets
+                    WHERE note_ai_targets.note_id = notes.id
+                      AND note_ai_targets.target_id = ?
+                )
+                """
+            )
+            parameters.append(actor_target_id)
+        with self.connections.read() as connection:
+            rows = connection.execute(
+                NOTE_SELECT
+                + " WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY notes.updated_at DESC, notes.created_at DESC, notes.id DESC",
+                parameters,
+            ).fetchall()
+        return [note_from_row(row) for row in rows]
+
     def get_ai_access_metadata(
         self,
         note_id: int,
