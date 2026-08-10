@@ -176,13 +176,11 @@ class AiReceiptInboxService:
             actor_id = resolve_target_id(receipt.actor_target_id)
             if actor_id not in AI_ACTOR_IDS:
                 raise ValueError("回执中的 AI 身份未知或不可用。")
-            visibility, target_ids = ai_metadata.prepare_values("full", (actor_id,))
             allow_directory_creation = False
-        else:
-            visibility, target_ids = ai_metadata.prepare_values(
-                fields.visibility,
-                fields.target_ids,
-            )
+        visibility, target_ids = ai_metadata.prepare_values(
+            fields.visibility,
+            fields.target_ids,
+        )
 
         command = AiReceiptAcceptCommand(
             title=fields.title.strip() or "未命名 AI 回执",

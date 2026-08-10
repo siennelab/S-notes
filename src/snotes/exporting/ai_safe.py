@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from src.snotes.application.ai_actor_registry import AI_TARGET_COMMON_ID
 from src.snotes.domain.ai_safe_export import (
     AiSafeExportPlan,
     AiSafeExportResult,
@@ -65,7 +66,7 @@ class AiSafePackageWriter:
             "target": plan.actor_name,
             "target_includes": (
                 ["通用"]
-                if plan.actor_id == "common"
+                if plan.actor_id == AI_TARGET_COMMON_ID
                 else ["通用", plan.actor_name]
             ),
             "note_count": plan.note_count,

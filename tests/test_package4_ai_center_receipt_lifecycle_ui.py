@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
 from src.snotes.bootstrap import build_application
+from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.connection import SQLiteConnectionFactory
 
 
@@ -165,6 +166,57 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.assertIsNot(self.window.ai_center_dialog, first)
         self.assertEqual(set(self.window.ai_center_dialog.receipt_view.cards), {5})
 
+    def test_request_id_receipt_defaults_and_final_ui_metadata_are_persisted(self) -> None:
+        self.window.note_service.create_note(NoteLocation("项目", "虚构", "无"))
+        self._insert_receipt(
+            6,
+            "pending",
+            title="AI metadata choice",
+            visibility="full",
+            targets="gale",
+            request_id="fictional-ui-request-6",
+            actor_target_id="gale",
+            operation_type="create",
+        )
+        self.window.open_ai_center()
+        self.app.processEvents()
+        view = self.window.ai_center_dialog.receipt_view
+        QTest.mouseClick(view.cards[6], Qt.LeftButton)
+        self.app.processEvents()
+        card = view.cards[6]
+
+        self.assertEqual(card.visibility_combo.currentData(), "full")
+        self.assertTrue(card.target_checks["gale"].isChecked())
+        self.assertFalse(card.target_checks["ke-den"].isChecked())
+
+        card.visibility_combo.setCurrentIndex(
+            card.visibility_combo.findData("redacted")
+        )
+        card.target_checks["gale"].setChecked(False)
+        card.target_checks["ke-den"].setChecked(True)
+        QTest.mouseClick(card.accept_button, Qt.LeftButton)
+        self.app.processEvents()
+
+        receipt = self.window.receipt_inbox_service.get_receipt(6)
+        self.assertEqual(receipt.status, "accepted")
+        metadata = self.window.ai_access_metadata_service.get_note_metadata(
+            receipt.note_id
+        )
+        self.assertEqual(metadata.visibility, "redacted")
+        self.assertEqual(metadata.target_ids, ("ke-den",))
+        self.assertNotIn("gale", metadata.target_ids)
+
+    def test_ai_center_tooltip_has_no_package_phase_copy(self) -> None:
+        button = self.window.shell.sidebar.ai_center_button
+        self.assertEqual(button.toolTip(), "打开 AI 中心")
+        self.window.shell.sidebar.set_ai_center_available(False)
+        self.assertFalse(button.isEnabled())
+        self.assertEqual(button.toolTip(), "AI 中心当前不可用")
+        self.assertNotIn("Package 4", button.toolTip())
+        self.window.shell.sidebar.set_ai_center_available(True)
+        self.assertTrue(button.isEnabled())
+        self.assertEqual(button.toolTip(), "打开 AI 中心")
+
     def _confirm_delete(self, view, receipt_id: int) -> None:
         view.confirm_delete_receipt(receipt_id)
         self.app.processEvents()
@@ -191,22 +243,43 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
             target_ids=("gale",),
         )
 
-    def _insert_receipt(self, receipt_id: int, status: str, *, title: str) -> None:
+    def _insert_receipt(
+        self,
+        receipt_id: int,
+        status: str,
+        *,
+        title: str,
+        visibility: str = "hidden",
+        targets: str = "",
+        request_id: str | None = None,
+        actor_target_id: str | None = None,
+        operation_type: str | None = None,
+    ) -> None:
         with self.connections.write() as connection:
             connection.execute(
                 """
                 INSERT INTO ai_receipt_inbox (
                     id, raw_text, parse_status, status, source, action, title,
                     main_category, sub_category, sub_sub_category, tags,
-                    ai_visibility, ai_targets, body, created_at, updated_at
+                    ai_visibility, ai_targets, body, created_at, updated_at,
+                    request_id, actor_target_id, operation_type
                 ) VALUES (
                     ?, 'FICTIONAL_UI_RAW', 'parsed', ?, 'Fictional UI', '新增',
-                    ?, '项目', '虚构', '无', 'fixture', 'hidden', '',
+                    ?, '项目', '虚构', '无', 'fixture', ?, ?,
                     'FICTIONAL_UI_BODY', '2026-08-10T07:00:00',
-                    '2026-08-10T08:00:00'
+                    '2026-08-10T08:00:00', ?, ?, ?
                 )
                 """,
-                (receipt_id, status, title),
+                (
+                    receipt_id,
+                    status,
+                    title,
+                    visibility,
+                    targets,
+                    request_id,
+                    actor_target_id,
+                    operation_type,
+                ),
             )
 
     def _note_counts(self) -> tuple[int, int]:

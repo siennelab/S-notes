@@ -320,7 +320,43 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.assertEqual(after["notes"], counts_before["notes"])
         self.assertEqual(after["trash"], counts_before["trash"])
 
-    def test_request_id_create_accept_preserves_operation_idempotency(self) -> None:
+    def test_request_id_accept_uses_default_or_single_edited_metadata(self) -> None:
+        cases = (
+            (86, "full", ("gale",), "full", ("gale",)),
+            (87, "redacted", ("gale",), "redacted", ("gale",)),
+            (88, "full", ("ke-den",), "full", ("ke-den",)),
+        )
+        for receipt_id, visibility, targets, expected_visibility, expected_targets in cases:
+            with self.subTest(receipt_id=receipt_id):
+                self._insert_receipt(
+                    receipt_id,
+                    status="pending",
+                    request_id=f"fictional-create-request-{receipt_id}",
+                    actor_target_id="gale",
+                    operation_type="create",
+                )
+                accepted = self.receipts.accept_receipt(
+                    receipt_id,
+                    AiReceiptAcceptFields(
+                        title=f"Request-id note {receipt_id}",
+                        body="Request-id body",
+                        main_category="项目",
+                        sub_category="虚构",
+                        sub_sub_category="无",
+                        tags="request-id",
+                        visibility=visibility,
+                        target_ids=targets,
+                    ),
+                )
+
+                metadata = self.metadata.get_note_metadata(accepted.note.id)
+                self.assertEqual(metadata.visibility, expected_visibility)
+                self.assertEqual(metadata.target_ids, expected_targets)
+                receipt = self.receipts.get_receipt(receipt_id)
+                self.assertEqual(receipt.status, "accepted")
+                self.assertEqual(receipt.note_id, accepted.note.id)
+
+    def test_request_id_create_accept_preserves_edited_metadata_and_idempotency(self) -> None:
         self._insert_receipt(
             84,
             status="pending",
@@ -351,8 +387,8 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             sub_category="虚构",
             sub_sub_category="无",
             tags="request-id",
-            visibility="hidden",
-            target_ids=("common",),
+            visibility="redacted",
+            target_ids=("ke-den",),
         )
 
         first = self.receipts.accept_receipt(84, fields)
@@ -361,8 +397,8 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.assertEqual(first.note.id, second.note.id)
         self.assertEqual(len(self.notes.list_active_notes()), before_count + 1)
         metadata = self.metadata.get_note_metadata(first.note.id)
-        self.assertEqual(metadata.visibility, "full")
-        self.assertEqual(metadata.target_ids, ("gale",))
+        self.assertEqual(metadata.visibility, "redacted")
+        self.assertEqual(metadata.target_ids, ("ke-den",))
         with self.connections.read() as connection:
             operation = connection.execute(
                 "SELECT status, result_json FROM ai_operations WHERE request_id = ?",

@@ -175,8 +175,15 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
             visibility="full",
             targets=("gale",),
         )
-        plan = self.window.ai_safe_export_service.build_plan("common")
-        self.assertEqual([item.note_id for item in plan.rendered_notes], [common.id])
+        outcome = self.window.ai_safe_export_service.export("common")
+        self.assertEqual(
+            [item.note_id for item in outcome.plan.rendered_notes],
+            [common.id],
+        )
+        manifest = json.loads(
+            outcome.result.manifest_path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["target_includes"], ["通用"])
 
     def test_broken_rule_cases_exclude_transformed_note_but_keep_full(self) -> None:
         full = self.add_note(

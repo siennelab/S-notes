@@ -107,7 +107,7 @@ class NoteSidebar(QWidget):
         self.ai_center_button.setObjectName("smartTabButton")
         self.ai_center_button.setFixedHeight(28)
         self.ai_center_button.setEnabled(False)
-        self.ai_center_button.setToolTip("Package 4 尚未接线")
+        self.ai_center_button.setToolTip("打开 AI 中心")
         self.ai_center_button.clicked.connect(lambda: self.aiCenterRequested.emit())
         smart_row.addWidget(self.ai_center_button, stretch=1)
         layout.addLayout(smart_row)
@@ -147,7 +147,7 @@ class NoteSidebar(QWidget):
     def set_ai_center_available(self, available: bool) -> None:
         self.ai_center_button.setEnabled(available)
         self.ai_center_button.setToolTip(
-            "打开 AI 中心" if available else "Package 4 尚未接线"
+            "打开 AI 中心" if available else "AI 中心当前不可用"
         )
 
     def configure_ai_actor_filters(
