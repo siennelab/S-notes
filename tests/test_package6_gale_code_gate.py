@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -57,7 +58,6 @@ class FakePublishTransport:
         self.calls: list[tuple] = []
         self.upload_error: str | None = None
         self.activation = GaleActivationResult("success", "none")
-        self.healthy = True
         self.rollback_result = GaleActivationResult("success", "operator_rollback")
 
     def upload_candidate(self, path: Path, sha256: str) -> None:
@@ -71,9 +71,13 @@ class FakePublishTransport:
 
     def health(self, sha256: str) -> bool:
         self.calls.append(("health", sha256))
-        return self.healthy
+        raise AssertionError("post-activate health belongs to the remote activator")
 
     def rollback(self, current: str, previous: str):
+        if re.fullmatch(r"[0-9a-f]{64}", current) is None:
+            raise AssertionError("invalid current sha256")
+        if re.fullmatch(r"[0-9a-f]{64}", previous) is None:
+            raise AssertionError("invalid previous sha256")
         self.calls.append(("rollback", current, previous))
         return self.rollback_result
 
@@ -231,8 +235,10 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         self.assertEqual((manual.status, automatic.status), ("success", "success"))
         self.assertEqual([call[0] for call in transport.calls].count("upload"), 2)
         self.assertEqual([call[0] for call in transport.calls].count("activate"), 2)
+        self.assertNotIn("health", [call[0] for call in transport.calls])
+        self.assertNotIn("rollback", [call[0] for call in transport.calls])
 
-    def test_publish_failures_preserve_previous_and_rollback_health(self) -> None:
+    def test_publish_failures_preserve_previous_without_second_rollback(self) -> None:
         old = self.root / "local-failure" / "gale-mirror.db"
         old.parent.mkdir()
         old.write_bytes(b"FICTIONAL_OLD_CURRENT")
@@ -264,15 +270,19 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             ).publish_manual()
             self.assertEqual(result.reason, reason)
             self.assertTrue(result.previous_preserved)
+            self.assertNotIn("health", [call[0] for call in transport.calls])
+            self.assertNotIn("rollback", [call[0] for call in transport.calls])
+
+    def test_publish_fake_enforces_real_rollback_hash_contract(self) -> None:
         transport = FakePublishTransport()
-        transport.healthy = False
-        result = GalePublishService(
-            self.mirror, transport, self.audit,
-            mirror_path=self.root / "health" / "gale-mirror.db",
-        ).publish_manual()
-        self.assertEqual(result.reason, "health_failed")
-        self.assertTrue(result.rolled_back)
-        self.assertIn("rollback", [call[0] for call in transport.calls])
+        with self.assertRaisesRegex(AssertionError, "invalid previous sha256"):
+            transport.rollback("a" * 64, "")
+        result = transport.rollback("a" * 64, "b" * 64)
+        self.assertEqual(result.status, "success")
+        self.assertEqual(
+            transport.calls,
+            [("rollback", "a" * 64, "b" * 64)],
+        )
 
     def test_frozen_oracle_rollback_command_protocol(self) -> None:
         current = "a" * 64

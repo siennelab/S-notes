@@ -213,14 +213,6 @@ class GalePublishService:
                     rolled_back=activation.rolled_back,
                     previous_preserved=activation.previous_preserved,
                 )
-            elif not self._transport.health(mirror.sha256):
-                rollback = self._transport.rollback(mirror.sha256, "")
-                result = GalePublishResult(
-                    "failed", mirror.sha256, verified.note_count,
-                    reason="health_failed", uploaded=True,
-                    rolled_back=rollback.status == "success",
-                    previous_preserved=rollback.previous_preserved,
-                )
             else:
                 result = GalePublishResult(
                     "success", mirror.sha256, verified.note_count,
