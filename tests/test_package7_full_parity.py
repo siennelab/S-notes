@@ -3,14 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
-from src.snotes.bootstrap import CANDIDATE_LABEL_ENV, build_application
+from src.snotes.bootstrap import build_application
 from src.snotes.domain.ai_receipts import GaleReceiptImport
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
@@ -69,29 +68,6 @@ class Package7FullParityTests(unittest.TestCase):
             window.receipt_inbox_service.get_receipt(receipt.id).status,
             "discarded",
         )
-
-    def test_explicit_candidate_label_marks_window_without_changing_default(
-        self,
-    ) -> None:
-        with patch.dict(
-            "os.environ",
-            {CANDIDATE_LABEL_ENV: "Package 7 Candidate · FICTIONAL DATA"},
-        ):
-            _application, candidate = build_application(
-                [], data_root=self.data_root / "candidate"
-            )
-        self.addCleanup(candidate.close)
-        self.assertEqual(
-            candidate.windowTitle(),
-            "S-notes — Package 7 Candidate · FICTIONAL DATA",
-        )
-
-        _application, ordinary = build_application(
-            [], data_root=self.data_root / "ordinary"
-        )
-        self.addCleanup(ordinary.close)
-        self.assertEqual(ordinary.windowTitle(), "S-notes")
-
 
 if __name__ == "__main__":
     unittest.main()

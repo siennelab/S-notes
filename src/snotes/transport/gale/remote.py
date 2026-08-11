@@ -27,7 +27,6 @@ REMOTE_STAGING_OUTBOX = "/usr/local/sbin/snotes-gale-r1b-outbox"
 MAX_TRANSPORT_BYTES = 6 * 1024 * 1024
 MAX_EXPORT_COUNT = 100
 IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
-ISOLATED_INCOMING_PATTERN = re.compile(r"^/tmp/snotes-p6-gateb-[A-Za-z0-9._-]+$")
 OUTBOX_MODES = {
     "production": (REMOTE_OUTBOX, AI_ACTOR_GALE_ID),
     "staging": (REMOTE_STAGING_OUTBOX, GALE_STAGING_SOURCE_ACTOR),
@@ -40,16 +39,10 @@ class SystemOraclePublishTransport(GalePublishTransport):
         *,
         upload_timeout_seconds: int = 60,
         activation_timeout_seconds: int = 120,
-        incoming_directory: str = REMOTE_INCOMING,
     ) -> None:
         self.upload_timeout_seconds = int(upload_timeout_seconds)
         self.activation_timeout_seconds = int(activation_timeout_seconds)
-        if (
-            incoming_directory != REMOTE_INCOMING
-            and not ISOLATED_INCOMING_PATTERN.fullmatch(incoming_directory)
-        ):
-            raise GaleError("remote_incoming_invalid")
-        self.incoming_directory = incoming_directory
+        self.incoming_directory = REMOTE_INCOMING
 
     def upload_candidate(self, mirror_path: Path, sha256: str) -> None:
         _validate_hash(sha256)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -37,7 +36,6 @@ from src.snotes.ui.main_window import MainWindow
 
 
 DATA_ROOT_ENV = "S_NOTES_DATA_ROOT"
-CANDIDATE_LABEL_ENV = "S_NOTES_CANDIDATE_LABEL"
 
 
 def resolve_rebuild_data_root(data_root: Path | None = None) -> Path:
@@ -105,9 +103,6 @@ def build_application(
         ai_audit_service=ai_audit_service,
         gale_control_service=gale_control_service,
     )
-    candidate_label = os.environ.get(CANDIDATE_LABEL_ENV, "").strip()
-    if candidate_label:
-        window.setWindowTitle(f"S-notes — {candidate_label}")
     return application, window
 
 

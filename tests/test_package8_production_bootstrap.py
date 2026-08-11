@@ -159,7 +159,6 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
             environment = os.environ.copy()
             environment.pop(DATA_ROOT_ENV_NAME, None)
             environment.pop("SNOTES_MCP_DATA_ROOT", None)
-            environment.pop("S_NOTES_CANDIDATE_LABEL", None)
             environment.update(
                 {
                     "HOME": str(home),

@@ -46,6 +46,7 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.transport.gale.remote import (
+    REMOTE_INCOMING,
     SystemOracleOutboxTransport,
     SystemOraclePublishTransport,
     parse_export_payload,
@@ -419,10 +420,8 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             runner.call_args.args[0],
         )
 
-    def test_publish_transport_accepts_only_named_gateb_isolated_directory(self) -> None:
-        transport = SystemOraclePublishTransport(
-            incoming_directory="/tmp/snotes-p6-gateb-fictional"
-        )
+    def test_publish_transport_uses_only_fixed_production_incoming_directory(self) -> None:
+        transport = SystemOraclePublishTransport()
         completed = CompletedProcess([], 0, stdout=b"", stderr=b"")
         with patch(
             "src.snotes.transport.gale.remote._run", return_value=completed
@@ -431,11 +430,13 @@ class Package6GaleCodeGateTests(unittest.TestCase):
                 self.root / "fictional.db", "a" * 64
             )
         self.assertIn(
-            "oracle-a1:/tmp/snotes-p6-gateb-fictional/" + "a" * 64 + ".db",
+            f"oracle-a1:{REMOTE_INCOMING}/" + "a" * 64 + ".db",
             runner.call_args.args[0],
         )
-        with self.assertRaises(GaleError):
-            SystemOraclePublishTransport(incoming_directory="/tmp/arbitrary")
+        with self.assertRaises(TypeError):
+            SystemOraclePublishTransport(
+                incoming_directory="/tmp/caller-supplied-incoming"
+            )
 
     def test_staging_pull_imports_through_existing_receipt_owner(self) -> None:
         submission = self._submission()

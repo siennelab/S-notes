@@ -7,7 +7,6 @@ import time
 import hashlib
 import json
 from dataclasses import asdict
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -373,46 +372,6 @@ class GalePullService:
             is_duplicate=bool(duplicates),
         )
         return result
-
-
-@dataclass(slots=True)
-class GaleAutoPublishScheduler:
-    quiet_seconds: int = 15 * 60
-    maximum_wait_seconds: int = 30 * 60
-    retry_delay_seconds: int = 5 * 60
-    enabled: bool = False
-    pending_hash: str = ""
-    first_change_at: float | None = None
-    last_change_at: float | None = None
-    retry_not_before: float | None = None
-    running: bool = False
-
-    def observe(self, source_hash: str, now: float) -> None:
-        if source_hash != self.pending_hash:
-            if not self.pending_hash:
-                self.first_change_at = now
-            self.pending_hash = source_hash
-            self.last_change_at = now
-
-    def should_publish(
-        self,
-        now: float,
-        *,
-        resumed: bool = False,
-        network_restored: bool = False,
-    ) -> bool:
-        if not self.enabled or self.running or not self.pending_hash:
-            return False
-        if resumed or network_restored:
-            return True
-        if self.retry_not_before is not None and now < self.retry_not_before:
-            return False
-        return bool(
-            self.last_change_at is not None
-            and now - self.last_change_at >= self.quiet_seconds
-            or self.first_change_at is not None
-            and now - self.first_change_at >= self.maximum_wait_seconds
-        )
 
 
 def _location(value: str) -> NoteLocation:
