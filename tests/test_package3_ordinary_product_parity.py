@@ -105,20 +105,22 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         r1_path = self.root / "r1.db"
         r1_database.initialize_database(r1_path)
         fixtures = (
-            ("Alpha 中文", "<p>正文 node.js</p>", NoteLocation("项目", "网络", "无"), ("vps",)),
-            ("目录命中", "<p>普通</p>", NoteLocation("Alpha", "中文", "无"), ()),
+            ("Alpha 中文", "<p>正文 node.js</p>", NoteLocation("项目", "网络"), ("vps",)),
+            ("目录命中", "<p>普通</p>", NoteLocation("Alpha", "中文"), ()),
             ("正文命中", "<p>Alpha 与 中文</p>", NoteLocation(), ("misc",)),
             ("技术词", "<p>C++ C# wg-hi</p>", NoteLocation(), ()),
         )
         for title, body, location, tags in fixtures:
-            r1_note = r1_database.create_note_in_directory(*location.values(), r1_path)
+            r1_note = r1_database.create_note_in_directory(
+                location.main, location.sub, "无", r1_path
+            )
             r1_database.update_note(
                 r1_note["id"],
                 title=title,
                 content_html=body,
                 main_category=location.main,
                 sub_category=location.sub,
-                sub_sub_category=location.sub_sub,
+                sub_sub_category="无",
                 database_path=r1_path,
             )
             if tags:
@@ -134,13 +136,13 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         exact = self.create_note(
             "Alpha 中文",
             "<p>正文 C++ node.js</p>",
-            NoteLocation("项目", "网络", "无"),
+            NoteLocation("项目", "网络"),
             ("todo", "vps"),
         )
         directory_match = self.create_note(
             "目录命中",
             "<p>普通正文</p>",
-            NoteLocation("Alpha", "中文", "无"),
+            NoteLocation("Alpha", "中文"),
         )
         body_match = self.create_note(
             "正文命中",
@@ -184,7 +186,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
     def test_directory_multi_move_drag_target_and_pin_round_trip(self) -> None:
         root = self.directories.create_directory("客户")
         child = self.directories.create_directory("虚构项目", root.id)
-        target = NoteLocation("客户", "虚构项目", "无")
+        target = NoteLocation("客户", "虚构项目")
         first = self.create_note("批量甲", "<p>甲</p>")
         second = self.create_note("批量乙", "<p>乙</p>")
         moved = self.notes.move_notes([first.id, second.id, first.id], target)
@@ -202,7 +204,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         note = self.create_note(
             "树内可单独恢复",
             "<p>虚构</p>",
-            NoteLocation("待删除树", "子层", "无"),
+            NoteLocation("待删除树", "子层"),
         )
         group = self.directories.soft_delete_directory(root.id)
         snapshot = self.directories.list_trash()
@@ -219,7 +221,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
     def test_batch_restore_permanent_delete_and_empty_trash(self) -> None:
         restore_root = self.directories.create_directory("恢复树")
         restore_child = self.directories.create_directory("恢复子层", restore_root.id)
-        restored_note = self.create_note("随树恢复", "<p>恢复</p>", NoteLocation("恢复树", "恢复子层", "无"))
+        restored_note = self.create_note("随树恢复", "<p>恢复</p>", NoteLocation("恢复树", "恢复子层"))
         self.directories.soft_delete_directory(restore_root.id)
         result = self.directories.restore_trash_items(
             [restored_note.id],
@@ -247,7 +249,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         current = self.create_note(
             "当前标题",
             "<p>请看 [[手动目标]]，另有 正文目标。</p>",
-            NoteLocation("项目", "共同目录", "无"),
+            NoteLocation("项目", "共同目录"),
             ("共享",),
         )
         manual = self.create_note("手动目标", "<p>内容</p>")
@@ -255,7 +257,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         same = self.create_note(
             "同目录标签",
             "<p>内容</p>",
-            NoteLocation("项目", "共同目录", "无"),
+            NoteLocation("项目", "共同目录"),
             ("共享",),
         )
         text = self.create_note("正文目标", "<p>内容</p>")
@@ -271,7 +273,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         note = self.create_note(
             '导出:/测试?"',
             "<p><strong>粗体</strong></p><ul><li>项目</li></ul>",
-            NoteLocation("资料", "导出", "无"),
+            NoteLocation("资料", "导出"),
             ("Alpha", "中文"),
         )
         markdown = self.exports.export_current(note.id, "markdown")
@@ -279,7 +281,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         self.assertEqual(markdown_path.name, "导出测试_20260807_123456.md")
         markdown_text = markdown_path.read_text(encoding="utf-8")
         self.assertIn("# 导出:/测试?\"", markdown_text)
-        self.assertIn("- 目录：资料 / 导出 / 无", markdown_text)
+        self.assertIn("- 目录：资料 / 导出", markdown_text)
         self.assertIn("- 标签：#alpha #中文", markdown_text)
         self.assertIn("**粗体**", markdown_text)
         self.assertIn("- 项目", markdown_text)
@@ -291,6 +293,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         self.assertEqual(payload["note_count"], 1)
         self.assertEqual(payload["notes"][0]["tags"], ["alpha", "中文"])
         self.assertEqual(payload["notes"][0]["content_text"], "粗体\n项目")
+        self.assertNotIn("sub_sub_category", payload["notes"][0])
 
         backup = self.exports.backup_database()
         connection = sqlite3.connect(backup.path)
@@ -300,20 +303,20 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
             connection.close()
 
     def test_export_scope_directory_and_selected_ids_are_deduplicated(self) -> None:
-        first = self.create_note("范围甲", "<p>甲</p>", NoteLocation("范围", "一", "无"))
-        second = self.create_note("范围乙", "<p>乙</p>", NoteLocation("范围", "二", "无"))
+        first = self.create_note("范围甲", "<p>甲</p>", NoteLocation("范围", "一"))
+        second = self.create_note("范围乙", "<p>乙</p>", NoteLocation("范围", "二"))
         self.create_note("范围外", "<p>外</p>")
         selected = self.exports.export_note_ids([first.id, second.id, first.id], "selected_notes", "json")
         self.assertEqual(selected.note_count, 2)
         directories = self.exports.export_directories(
-            [NoteLocation("范围", "无", "无"), NoteLocation("范围", "一", "无")],
+            [NoteLocation("范围", "无"), NoteLocation("范围", "一")],
             "json",
         )
         self.assertEqual(directories.note_count, 2)
         directory_payload = json.loads(Path(directories.path).read_text(encoding="utf-8"))
         application_ids = {
             note.id
-            for note in self.notes.notes_for_directory(NoteLocation("范围", "无", "无"))
+            for note in self.notes.notes_for_directory(NoteLocation("范围", "无"))
         }
         self.assertEqual(
             {row["id"] for row in directory_payload["notes"]},

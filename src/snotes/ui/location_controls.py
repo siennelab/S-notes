@@ -35,7 +35,6 @@ def selected_location(shell) -> NoteLocation:
     return NoteLocation(
         shell.main_combo.currentText(),
         shell.sub_combo.currentText(),
-        "无",
     )
 
 
@@ -43,7 +42,6 @@ def location_from_path(path: tuple[str, ...]) -> NoteLocation:
     return NoteLocation(
         path[0],
         path[1] if len(path) >= 2 else "无",
-        "无",
     )
 
 

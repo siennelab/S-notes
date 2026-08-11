@@ -36,7 +36,7 @@ class Package8HumanResidualTests(unittest.TestCase):
     def test_single_and_multi_soft_delete_skip_confirmation(self) -> None:
         notes = [
             self.window.note_service.create_note(
-                NoteLocation("临时", "Package 8", "soft delete")
+                NoteLocation("临时", "Package 8")
             )
             for _index in range(3)
         ]
@@ -59,7 +59,7 @@ class Package8HumanResidualTests(unittest.TestCase):
 
     def test_permanent_delete_and_empty_trash_still_confirm(self) -> None:
         note = self.window.note_service.create_note(
-            NoteLocation("临时", "Package 8", "destructive confirm")
+            NoteLocation("临时", "Package 8")
         )
         self.window.note_service.soft_delete_note(note.id)
         with patch.object(self.window, "confirm", return_value=False) as confirm:
@@ -96,7 +96,7 @@ class Package8HumanResidualTests(unittest.TestCase):
                     idempotency_key=f"fictional-p8-key-{number}",
                     title=f"Fictional Package 8 receipt {number}",
                     body="Fictional body",
-                    location=NoteLocation("临时", "Package 8", "待确认"),
+                    location=NoteLocation("临时", "Package 8"),
                     tags=("package8",),
                 )
             )

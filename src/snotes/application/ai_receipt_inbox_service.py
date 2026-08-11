@@ -50,7 +50,6 @@ class AiReceiptAcceptFields:
     body: str
     main_category: str
     sub_category: str
-    sub_sub_category: str
     tags: str
     visibility: object
     target_ids: tuple[str, ...]
@@ -209,7 +208,6 @@ class AiReceiptInboxService:
         location = NoteLocation(
             fields.main_category.strip() or "临时",
             fields.sub_category.strip() or "无",
-            fields.sub_sub_category.strip() or "无",
         )
         allow_directory_creation = True
         if receipt.request_id:

@@ -51,7 +51,7 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
 
     def test_deleted_note_click_previews_full_content_without_writes(self) -> None:
         note = self.window.note_service.create_note(
-            NoteLocation("项目", "Package 8", "只读预览")
+            NoteLocation("项目", "Package 8")
         )
         note = self.window.note_service.save_note(
             note.id,

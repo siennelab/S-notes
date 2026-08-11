@@ -94,7 +94,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             tags=self.tags,
             ai_metadata=self.metadata,
         )
-        created = self.notes.create_note(NoteLocation("项目", "虚构", "无"))
+        created = self.notes.create_note(NoteLocation("项目", "虚构"))
         self.note = self.notes.save_note(
             created.id,
             title="Fictional audit note",
@@ -234,7 +234,6 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             body="Line one\n<script>fictional</script>",
             main_category="项目",
             sub_category="验收",
-            sub_sub_category="无",
             tags="One, #two，one",
             visibility="AI脱敏后可见",
             target_ids=("common", "claude-code", "codex"),
@@ -255,7 +254,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             note.content_html,
             "<p>Line one<br>&lt;script&gt;fictional&lt;/script&gt;</p>",
         )
-        self.assertEqual(note.location, NoteLocation("项目", "验收", "无"))
+        self.assertEqual(note.location, NoteLocation("项目", "验收"))
         self.assertEqual(self.tags.get_note_tags(note.id), ["one", "two"])
         metadata = self.metadata.get_note_metadata(note.id)
         self.assertEqual(metadata.visibility, "redacted")
@@ -290,7 +289,6 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
                     body="FICTIONAL_ROLLBACK_BODY",
                     main_category="Rollback main",
                     sub_category="Rollback sub",
-                    sub_sub_category="无",
                     tags="rollback-tag",
                     visibility="full",
                     target_ids=("gale",),
@@ -342,7 +340,6 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
                         body="Request-id body",
                         main_category="项目",
                         sub_category="虚构",
-                        sub_sub_category="无",
                         tags="request-id",
                         visibility=visibility,
                         target_ids=targets,
@@ -385,7 +382,6 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             body="Request-id body",
             main_category="项目",
             sub_category="虚构",
-            sub_sub_category="无",
             tags="request-id",
             visibility="redacted",
             target_ids=("ke-den",),
@@ -425,7 +421,6 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
                     body="Ignored",
                     main_category="项目",
                     sub_category="虚构",
-                    sub_sub_category="无",
                     tags="",
                     visibility="full",
                     target_ids=("gale",),
@@ -455,14 +450,14 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
                 """
                 INSERT INTO ai_receipt_inbox (
                     id, raw_text, parse_status, status, source, action, title,
-                    main_category, sub_category, sub_sub_category, tags,
+                    main_category, sub_category, tags,
                     ai_visibility, ai_targets, body, note_id, created_at,
                     updated_at, parse_error, request_id,
                     actor_target_id, operation_type,
                     external_submission_id, idempotency_key
                 ) VALUES (
                     ?, 'FICTIONAL_RAW_RECEIPT', 'parsed', ?, 'Fictional AI',
-                    '新增', ?, '项目', '虚构', '无', 'fictional-tag', 'full',
+                    '新增', ?, '项目', '虚构', 'fictional-tag', 'full',
                     'gale', ?, ?, '2026-08-10T07:00:00', ?, NULL, ?, ?, ?, ?, ?
                 )
                 """,

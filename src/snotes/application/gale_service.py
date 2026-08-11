@@ -381,7 +381,6 @@ def _location(value: str) -> NoteLocation:
     return NoteLocation(
         parts[0] if parts else "临时",
         parts[1] if len(parts) > 1 else "Gale 投稿",
-        parts[2] if len(parts) > 2 else "待确认",
     )
 
 

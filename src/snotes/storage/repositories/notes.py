@@ -21,7 +21,7 @@ from src.snotes.storage.support import Clock, next_note_updated_at, now_shanghai
 
 NOTE_SELECT = """
 SELECT id, note_uuid, revision, directory_id, title, content_html,
-       main_category, sub_category, sub_sub_category, tags, ai_visibility,
+       main_category, sub_category, tags, ai_visibility,
        is_pinned, is_deleted, created_at, updated_at, deleted_at, trash_group_id
 FROM notes
 """
@@ -45,16 +45,16 @@ class SQLiteNotesRepository(NotesRepository):
         timestamp = timestamp_seconds(self.clock)
         note_uuid = str(self.uuid_factory())
         title = f"未命名笔记 {self.clock().strftime('%Y-%m-%d %H:%M')}"
-        main, sub, sub_sub = location.values()
+        main, sub = location.values()
         with self.connections.write() as connection:
             directory_id = self.directories.ensure_location(connection, location)
             cursor = connection.execute(
                 """
                 INSERT INTO notes (
                     note_uuid, revision, directory_id, title, body_rich_text,
-                    content_html, main_category, sub_category, sub_sub_category,
+                    content_html, main_category, sub_category,
                     tags, ai_visibility, is_pinned, is_deleted, created_at, updated_at
-                ) VALUES (?, 1, ?, ?, '', '', ?, ?, ?, '', ?, 0, 0, ?, ?)
+                ) VALUES (?, 1, ?, ?, '', '', ?, ?, '', ?, 0, 0, ?, ?)
                 """,
                 (
                     note_uuid,
@@ -62,7 +62,6 @@ class SQLiteNotesRepository(NotesRepository):
                     title,
                     main,
                     sub,
-                    sub_sub,
                     DEFAULT_AI_VISIBILITY,
                     timestamp,
                     timestamp,
@@ -208,14 +207,14 @@ class SQLiteNotesRepository(NotesRepository):
             if current is None:
                 raise NoteNotFoundError(note_id)
             timestamp = next_note_updated_at(current["updated_at"], self.clock)
-            main, sub, sub_sub = location.values()
+            main, sub = location.values()
             directory_id = self.directories.ensure_location(connection, location)
             cursor = connection.execute(
                 """
                 UPDATE notes
                 SET title = ?, body_rich_text = ?, content_html = ?,
                     directory_id = ?, main_category = ?, sub_category = ?,
-                    sub_sub_category = ?, revision = revision + 1, updated_at = ?
+                    revision = revision + 1, updated_at = ?
                 WHERE id = ? AND is_deleted = 0 AND revision = ?
                 """,
                 (
@@ -225,7 +224,6 @@ class SQLiteNotesRepository(NotesRepository):
                     directory_id,
                     main,
                     sub,
-                    sub_sub,
                     timestamp,
                     note_id,
                     int(expected_revision),
@@ -316,16 +314,14 @@ class SQLiteNotesRepository(NotesRepository):
         with self.connections.write() as connection:
             row = connection.execute(
                 """
-                SELECT main_category, sub_category, sub_sub_category, updated_at
+                SELECT main_category, sub_category, updated_at
                 FROM notes WHERE id = ? AND is_deleted = 1
                 """,
                 (note_id,),
             ).fetchone()
             if row is None:
                 raise ValueError(f"回收站中找不到笔记: {note_id}")
-            location = NoteLocation(
-                row["main_category"], row["sub_category"], row["sub_sub_category"]
-            )
+            location = NoteLocation(row["main_category"], row["sub_category"])
             directory_id = self.directories.ensure_location(connection, location)
             timestamp = next_note_updated_at(row["updated_at"], self.clock)
             connection.execute(
@@ -355,16 +351,16 @@ class SQLiteNotesRepository(NotesRepository):
         if current is None:
             raise NoteNotFoundError(note_id)
         directory_id = self.directories.ensure_location(connection, location)
-        main, sub, sub_sub = location.values()
+        main, sub = location.values()
         timestamp = next_note_updated_at(current["updated_at"], self.clock)
         connection.execute(
             """
             UPDATE notes
             SET directory_id = ?, main_category = ?, sub_category = ?,
-                sub_sub_category = ?, revision = revision + 1, updated_at = ?
+                revision = revision + 1, updated_at = ?
             WHERE id = ? AND is_deleted = 0
             """,
-            (directory_id, main, sub, sub_sub, timestamp, note_id),
+            (directory_id, main, sub, timestamp, note_id),
         )
 
     def read_from_connection(

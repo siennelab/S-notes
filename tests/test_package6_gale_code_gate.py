@@ -166,7 +166,7 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         *,
         body: str | None = None,
     ) -> int:
-        location = NoteLocation("P6", title, "无")
+        location = NoteLocation("P6", title)
         note = self.notes.create_note(location)
         note = self.notes.save_note(
             note.id,
@@ -309,7 +309,10 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         second = pull.pull_once()
         self.assertEqual((first.imported_count, first.duplicate_count), (1, 0))
         self.assertEqual((second.imported_count, second.duplicate_count), (0, 1))
-        self.assertEqual(len(self.receipts.list_pending_receipts()), 1)
+        pending = self.receipts.list_pending_receipts()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual((pending[0].main_category, pending[0].sub_category), ("临时", "Gale 投稿"))
+        self.assertFalse(hasattr(pending[0], "sub_sub_category"))
         self.assertEqual(len(transport.acks), 2)
         self.assertEqual(len(self.notes.list_active_notes()), 6)
 

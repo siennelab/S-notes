@@ -18,7 +18,6 @@ def note_from_row(row: Mapping[str, Any]) -> Note:
         content_html=str(row["content_html"]),
         main_category=str(row["main_category"]),
         sub_category=str(row["sub_category"]),
-        sub_sub_category=str(row["sub_sub_category"]),
         tags=str(row["tags"]),
         ai_visibility=str(row["ai_visibility"]),
         is_pinned=bool(row["is_pinned"]),

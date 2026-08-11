@@ -102,7 +102,6 @@ def note_to_json(note: Note) -> dict:
         "content_text": html_to_text(note.content_html),
         "main_category": note.main_category,
         "sub_category": note.sub_category,
-        "sub_sub_category": note.sub_sub_category,
         "tags": parse_tags(note.tags),
         "ai_visibility": note.ai_visibility,
         "is_pinned": note.is_pinned,

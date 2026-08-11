@@ -301,7 +301,6 @@ class ReceiptCard(QFrame):
             body=self.body_edit.toPlainText(),
             main_category=self.main_input.text(),
             sub_category=self.sub_input.text(),
-            sub_sub_category=self.receipt.sub_sub_category,
             tags=self.tags_input.text(),
             visibility=self.visibility_combo.currentData(),
             target_ids=active_ids + self.legacy_target_ids,

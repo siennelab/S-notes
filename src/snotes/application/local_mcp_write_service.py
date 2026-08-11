@@ -92,7 +92,6 @@ class LocalMcpWriteService:
                     "tags": clean_tags,
                     "main_category": location.main,
                     "sub_category": location.sub,
-                    "sub_sub_category": location.sub_sub,
                 },
                 location=location,
                 tags=clean_tags,

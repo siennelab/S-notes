@@ -46,7 +46,7 @@ class Package7FullParityTests(unittest.TestCase):
                 idempotency_key="fictional-package7-idempotency",
                 title="Fictional Package 7 pending",
                 body="Fictional Package 7 body",
-                location=NoteLocation("临时", "Package 7", "待确认"),
+                location=NoteLocation("临时", "Package 7"),
                 tags=("package7",),
             )
         )

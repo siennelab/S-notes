@@ -336,7 +336,6 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
                 body="FICTIONAL ACCEPTED MATERIAL",
                 main_category="项目",
                 sub_category="Smart View",
-                sub_sub_category="无",
                 tags="accepted, smart-view",
                 visibility="full",
                 target_ids=("gale",),
@@ -352,12 +351,12 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
                 """
                 INSERT INTO ai_receipt_inbox (
                     id, raw_text, parse_status, status, source, action, title,
-                    main_category, sub_category, sub_sub_category, tags,
+                    main_category, sub_category, tags,
                     ai_visibility, ai_targets, body, created_at, updated_at
                 ) VALUES (
                     ?, 'FICTIONAL_SMART_VIEW_RAW', 'parsed', 'pending',
                     'Fictional Smart View', '新增', 'Pending Gale smart view',
-                    '项目', 'Smart View', '无', 'candidate', 'full', 'gale',
+                    '项目', 'Smart View', 'candidate', 'full', 'gale',
                     'FICTIONAL_SMART_VIEW_BODY', '2026-08-10T09:00:00',
                     '2026-08-10T09:00:00'
                 )

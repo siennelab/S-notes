@@ -1,4 +1,4 @@
-"""Frozen R1 schema used only for explicitly supplied R2 database paths."""
+"""Current R2 schema and targeted migrations for explicit database paths."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from src.snotes.storage.support import timestamp_seconds
 
 
 INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "备忘", "终端指令")
+CATEGORY_SCHEMA_VERSION_KEY = "category_schema_version"
+CATEGORY_SCHEMA_VERSION = "2"
 
 FROZEN_SCHEMA_STATEMENTS = (
     """
@@ -35,7 +37,6 @@ FROZEN_SCHEMA_STATEMENTS = (
         content_html TEXT NOT NULL DEFAULT '',
         main_category TEXT NOT NULL DEFAULT '临时',
         sub_category TEXT NOT NULL DEFAULT '无',
-        sub_sub_category TEXT NOT NULL DEFAULT '无',
         tags TEXT NOT NULL DEFAULT '',
         ai_visibility TEXT NOT NULL DEFAULT 'hidden',
         is_pinned INTEGER NOT NULL DEFAULT 0,
@@ -99,7 +100,6 @@ FROZEN_SCHEMA_STATEMENTS = (
         title TEXT NOT NULL DEFAULT '',
         main_category TEXT NOT NULL DEFAULT '临时',
         sub_category TEXT NOT NULL DEFAULT '无',
-        sub_sub_category TEXT NOT NULL DEFAULT '无',
         tags TEXT NOT NULL DEFAULT '',
         ai_visibility TEXT NOT NULL DEFAULT 'hidden',
         ai_targets TEXT NOT NULL DEFAULT '',
@@ -223,13 +223,14 @@ FROZEN_SCHEMA_STATEMENTS = (
 
 
 def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
-    """Create the frozen schema at an explicit path; never performs migration."""
+    """Create or migrate the R2 schema at an explicitly supplied path."""
     path = Path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     connections = SQLiteConnectionFactory(path)
     with connections.write() as connection:
         for statement in FROZEN_SCHEMA_STATEMENTS:
             connection.execute(statement)
+        _migrate_two_level_category_schema(connection)
         count = int(connection.execute("SELECT COUNT(*) FROM directories").fetchone()[0])
         if count == 0:
             timestamp = timestamp_seconds()
@@ -245,3 +246,77 @@ def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
                 ],
             )
     return connections
+
+
+def _migrate_two_level_category_schema(connection) -> None:
+    """Drop the retired third category column without preserving its values."""
+    version_row = connection.execute(
+        "SELECT meta_value FROM schema_meta WHERE meta_key = ?",
+        (CATEGORY_SCHEMA_VERSION_KEY,),
+    ).fetchone()
+    current_version = str(version_row["meta_value"]) if version_row is not None else None
+    old_columns_present = False
+    for table in ("notes", "ai_receipt_inbox"):
+        columns = {
+            str(row["name"])
+            for row in connection.execute(f'PRAGMA table_info("{table}")')
+        }
+        if "sub_sub_category" in columns:
+            old_columns_present = True
+
+    if old_columns_present or current_version != CATEGORY_SCHEMA_VERSION:
+        _remove_empty_third_level_directories(connection)
+
+    for table in ("notes", "ai_receipt_inbox"):
+        columns = {
+            str(row["name"])
+            for row in connection.execute(f'PRAGMA table_info("{table}")')
+        }
+        if "sub_sub_category" in columns:
+            connection.execute(
+                f'ALTER TABLE "{table}" DROP COLUMN sub_sub_category'
+            )
+    connection.execute(
+        """
+        INSERT INTO schema_meta (meta_key, meta_value)
+        VALUES (?, ?)
+        ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value
+        """,
+        (CATEGORY_SCHEMA_VERSION_KEY, CATEGORY_SCHEMA_VERSION),
+    )
+
+
+def _remove_empty_third_level_directories(connection) -> None:
+    """Delete only empty directories below the supported two-level hierarchy."""
+    rows = connection.execute(
+        """
+        WITH RECURSIVE directory_depth(id, depth) AS (
+            SELECT id, 1
+            FROM directories
+            WHERE parent_id IS NULL
+            UNION ALL
+            SELECT directories.id, directory_depth.depth + 1
+            FROM directories
+            JOIN directory_depth ON directories.parent_id = directory_depth.id
+        )
+        SELECT directory_depth.id,
+               EXISTS(
+                   SELECT 1 FROM notes
+                   WHERE notes.directory_id = directory_depth.id
+               ) AS has_notes,
+               EXISTS(
+                   SELECT 1 FROM directories AS children
+                   WHERE children.parent_id = directory_depth.id
+               ) AS has_children
+        FROM directory_depth
+        WHERE directory_depth.depth > 2
+        """
+    ).fetchall()
+    if any(bool(row["has_notes"]) or bool(row["has_children"]) for row in rows):
+        raise RuntimeError(
+            "存在有关联笔记或子目录的第三级目录，无法自动删除。"
+        )
+    connection.executemany(
+        "DELETE FROM directories WHERE id = ?",
+        [(int(row["id"]),) for row in rows],
+    )

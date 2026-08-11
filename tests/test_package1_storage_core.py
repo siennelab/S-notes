@@ -77,7 +77,7 @@ class Package1StorageCoreTests(unittest.TestCase):
             note.id,
             title="虚构保存标题",
             content_html="<p>虚构保存正文</p>",
-            location=NoteLocation("虚构项目", "子目录", "末级"),
+            location=NoteLocation("虚构项目", "子目录"),
             expected_revision=before.revision,
         )
         self.assertEqual(saved.revision, before.revision + 1)
@@ -106,7 +106,7 @@ class Package1StorageCoreTests(unittest.TestCase):
                 note.id,
                 title="虚构过期标题",
                 content_html="<p>虚构过期正文</p>",
-                location=NoteLocation("不应创建的冲突目录", "无", "无"),
+                location=NoteLocation("不应创建的冲突目录", "无"),
                 expected_revision=note.revision,
             )
         stored = self.notes.get_note(note.id)
@@ -119,14 +119,11 @@ class Package1StorageCoreTests(unittest.TestCase):
     def test_directory_create_and_note_move(self) -> None:
         root = self.directories.create_directory("虚构目录甲")
         child = self.directories.create_directory("虚构目录乙", root.id)
-        leaf = self.directories.create_directory("虚构目录丙", child.id)
-        with self.assertRaisesRegex(ValueError, "最多支持三层"):
-            self.directories.create_directory("第四层", leaf.id)
+        with self.assertRaisesRegex(ValueError, "最多支持两层"):
+            self.directories.create_directory("第三层", child.id)
         note = self.notes.create_note()
-        moved = self.notes.move_note(
-            note.id, NoteLocation("虚构目录甲", "虚构目录乙", "虚构目录丙")
-        )
-        self.assertEqual(moved.location.values(), self.directories.get_directory_path(leaf.id))
+        moved = self.notes.move_note(note.id, NoteLocation("虚构目录甲", "虚构目录乙"))
+        self.assertEqual(moved.location.values(), self.directories.get_directory_path(child.id))
         self.assertEqual(moved.revision, note.revision + 1)
 
     def test_tags_normalize_deduplicate_and_advance_revision(self) -> None:
@@ -161,11 +158,10 @@ class Package1StorageCoreTests(unittest.TestCase):
     def test_directory_tree_trash_group_and_restore(self) -> None:
         root = self.directories.create_directory("虚构树甲")
         child = self.directories.create_directory("虚构树乙", root.id)
-        self.directories.create_directory("虚构树丙", child.id)
-        note = self.notes.create_note(NoteLocation("虚构树甲", "虚构树乙", "虚构树丙"))
+        note = self.notes.create_note(NoteLocation("虚构树甲", "虚构树乙"))
         group = self.directories.soft_delete_directory(root.id)
         trash = self.directories.list_trash()
-        self.assertEqual(len(trash.directories), 3)
+        self.assertEqual(len(trash.directories), 2)
         self.assertEqual(len(trash.notes), 1)
         self.assertEqual({item.trash_group_id for item in trash.directories}, {group})
         self.assertEqual(trash.notes[0].trash_group_id, group)
@@ -182,7 +178,7 @@ class Package1StorageCoreTests(unittest.TestCase):
         independent = self.notes.create_note()
         self.notes.soft_delete_note(independent.id)
         root = self.directories.create_directory("虚构待清空目录")
-        nested = self.notes.create_note(NoteLocation("虚构待清空目录", "无", "无"))
+        nested = self.notes.create_note(NoteLocation("虚构待清空目录", "无"))
         self.directories.soft_delete_directory(root.id)
         result = self.directories.empty_trash()
         self.assertEqual(result.note_count, 2)

@@ -91,7 +91,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             visibility="full",
             targets=("common",),
             tags=("common-tag",),
-            location=NoteLocation("项目", "CommonVisible", "无"),
+            location=NoteLocation("项目", "CommonVisible"),
         )
         self._seed_note(
             "clawbot",
@@ -100,7 +100,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             visibility="full",
             targets=("clawbot",),
             tags=("clawbot-tag",),
-            location=NoteLocation("项目", "ClawbotVisible", "无"),
+            location=NoteLocation("项目", "ClawbotVisible"),
         )
         self._seed_note(
             "gale",
@@ -109,7 +109,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             visibility="full",
             targets=("gale",),
             tags=("gale-tag",),
-            location=NoteLocation("项目", "GaleVisible", "无"),
+            location=NoteLocation("项目", "GaleVisible"),
         )
         self._seed_note(
             "hidden",
@@ -118,7 +118,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             visibility="hidden",
             targets=("clawbot",),
             tags=("hidden-tag",),
-            location=NoteLocation("项目", "HiddenVisible", "无"),
+            location=NoteLocation("项目", "HiddenVisible"),
         )
         self._seed_note(
             "redacted",
@@ -127,7 +127,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             visibility="redacted",
             targets=("clawbot",),
             tags=("FictionalSecret-tag",),
-            location=NoteLocation("项目", "FictionalSecretDirectory", "无"),
+            location=NoteLocation("项目", "FictionalSecretDirectory"),
         )
 
     def _env(self, *, read_only: bool, actor: str = "gale") -> dict[str, str]:

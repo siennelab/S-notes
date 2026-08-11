@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 DEFAULT_MAIN_CATEGORY = "临时"
 DEFAULT_SUB_CATEGORY = "无"
-DEFAULT_SUB_SUB_CATEGORY = "无"
 DEFAULT_AI_VISIBILITY = "hidden"
 
 
@@ -15,13 +14,11 @@ DEFAULT_AI_VISIBILITY = "hidden"
 class NoteLocation:
     main: str = DEFAULT_MAIN_CATEGORY
     sub: str = DEFAULT_SUB_CATEGORY
-    sub_sub: str = DEFAULT_SUB_SUB_CATEGORY
 
-    def values(self) -> tuple[str, str, str]:
+    def values(self) -> tuple[str, str]:
         return (
             self.main or DEFAULT_MAIN_CATEGORY,
             self.sub or DEFAULT_SUB_CATEGORY,
-            self.sub_sub or DEFAULT_SUB_SUB_CATEGORY,
         )
 
 
@@ -46,7 +43,6 @@ class Note:
     content_html: str
     main_category: str
     sub_category: str
-    sub_sub_category: str
     tags: str
     ai_visibility: str
     is_pinned: bool
@@ -61,7 +57,6 @@ class Note:
         return NoteLocation(
             self.main_category,
             self.sub_category,
-            self.sub_sub_category,
         )
 
 

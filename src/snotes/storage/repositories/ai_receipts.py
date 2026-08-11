@@ -21,7 +21,7 @@ from src.snotes.domain.ai_receipts import (
     AiReceiptInboxItem,
     GaleReceiptImport,
 )
-from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, DEFAULT_SUB_SUB_CATEGORY
+from src.snotes.domain.models import DEFAULT_SUB_CATEGORY
 from src.snotes.storage.ai_metadata import (
     replace_note_ai_targets,
     sync_ai_target_catalog,
@@ -34,7 +34,7 @@ from src.snotes.storage.support import Clock, now_shanghai, timestamp_seconds
 
 RECEIPT_SELECT = """
 SELECT id, parse_status, status, source, action, title,
-       main_category, sub_category, sub_sub_category, tags,
+       main_category, sub_category, tags,
        ai_visibility, ai_targets, body, note_id, created_at,
        updated_at, parse_error, request_id, actor_target_id,
        operation_type, external_submission_id, idempotency_key
@@ -55,9 +55,9 @@ ORDER BY
 """
 GALE_IMPORT_SQL = """INSERT INTO ai_receipt_inbox (
     raw_text, parse_status, status, source, action, title, main_category,
-    sub_category, sub_sub_category, tags, ai_visibility, ai_targets, body,
+    sub_category, tags, ai_visibility, ai_targets, body,
     created_at, updated_at, external_submission_id, idempotency_key
-) VALUES ('', 'parsed', 'pending', 'Gale', '新增', ?, ?, ?, ?, ?,
+) VALUES ('', 'parsed', 'pending', 'Gale', '新增', ?, ?, ?, ?,
           'hidden', '', ?, ?, ?, ?, ?)"""
 
 
@@ -103,12 +103,11 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
             ).fetchone()
             if existing is not None:
                 return _receipt_from_row(existing), False
-            main, sub, sub_sub = submission.location.values()
+            main, sub = submission.location.values()
             values = (
                 submission.title,
                 main,
                 sub,
-                sub_sub,
                 ", ".join(submission.tags),
                 submission.body,
                 timestamp,
@@ -174,15 +173,15 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                     raise ValueError("目标目录不存在，AI 不能创建目录。")
 
             note_uuid = str(self.uuid_factory())
-            main, sub, sub_sub = command.location.values()
+            main, sub = command.location.values()
             cursor = connection.execute(
                 """
                 INSERT INTO notes (
                     note_uuid, revision, directory_id, title, body_rich_text,
-                    content_html, main_category, sub_category, sub_sub_category,
+                    content_html, main_category, sub_category,
                     tags, ai_visibility, is_pinned, is_deleted, created_at,
                     updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
                 """,
                 (
                     note_uuid,
@@ -192,7 +191,6 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                     command.content_html,
                     main,
                     sub,
-                    sub_sub,
                     command.visibility,
                     timestamp,
                     timestamp,
@@ -326,13 +324,13 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
         *,
         result_status: str,
     ) -> AiReceiptInboxItem:
-        main, sub, sub_sub = command.location.values()
+        main, sub = command.location.values()
         cursor = connection.execute(
             """
             UPDATE ai_receipt_inbox
             SET status = ?, title = ?, main_category = ?, sub_category = ?,
-                sub_sub_category = ?, tags = ?, ai_visibility = ?,
-                ai_targets = ?, body = ?, note_id = ?, accepted_note_uuid = ?,
+                tags = ?, ai_visibility = ?, ai_targets = ?, body = ?,
+                note_id = ?, accepted_note_uuid = ?,
                 result_status = ?, updated_at = ?, decided_at = ?
             WHERE id = ? AND status = ?
             """,
@@ -341,7 +339,6 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 command.title,
                 main,
                 sub,
-                sub_sub,
                 ", ".join(command.tags),
                 command.visibility,
                 ", ".join(command.target_ids),
@@ -360,18 +357,16 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
         return self._read_from_connection(connection, receipt.id)
 
     def _existing_location_id(self, connection, location) -> int | None:
-        main, sub, sub_sub = location.values()
+        main, sub = location.values()
         main_id = self.directories.find_active(connection, main, None)
         if main_id is None:
             return None
-        if sub == DEFAULT_SUB_CATEGORY and sub_sub == DEFAULT_SUB_SUB_CATEGORY:
+        if sub == DEFAULT_SUB_CATEGORY:
             return main_id
         sub_id = self.directories.find_active(connection, sub, main_id)
         if sub_id is None:
             return None
-        if sub_sub == DEFAULT_SUB_SUB_CATEGORY:
-            return sub_id
-        return self.directories.find_active(connection, sub_sub, sub_id)
+        return sub_id
 
     @staticmethod
     def _completed_operation_note_id(connection, request_id: str | None) -> int | None:
@@ -477,7 +472,6 @@ def _receipt_from_row(row) -> AiReceiptInboxItem:
         title=str(row["title"]),
         main_category=str(row["main_category"]),
         sub_category=str(row["sub_category"]),
-        sub_sub_category=str(row["sub_sub_category"]),
         tags=str(row["tags"]),
         ai_visibility=str(row["ai_visibility"]),
         ai_targets=str(row["ai_targets"]),

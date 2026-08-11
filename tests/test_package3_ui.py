@@ -109,7 +109,7 @@ class Package3UiTests(unittest.TestCase):
         sidebar.category_manager_button.notesDropped.emit([note.id], child.id)
         self.app.processEvents()
         moved = self.window.note_service.get_note(note.id)
-        self.assertEqual(moved.location, NoteLocation("客户", "项目甲", "无"))
+        self.assertEqual(moved.location, NoteLocation("客户", "项目甲"))
 
         self.create_note("范围外", "<p>虚构</p>")
         self.window.show_directory_filter(("客户", "项目甲"))
@@ -118,7 +118,7 @@ class Package3UiTests(unittest.TestCase):
             [
                 row.id
                 for row in self.window.note_service.notes_for_directory(
-                    NoteLocation("客户", "项目甲", "无")
+                    NoteLocation("客户", "项目甲")
                 )
             ],
         )
@@ -134,7 +134,7 @@ class Package3UiTests(unittest.TestCase):
     def test_trash_tree_preserves_deleted_directory_note_child_and_restore(self) -> None:
         root = self.window.directory_service.create_directory("删除树")
         child = self.window.directory_service.create_directory("子层", root.id)
-        note = self.create_note("树内笔记", "<p>虚构</p>", NoteLocation("删除树", "子层", "无"))
+        note = self.create_note("树内笔记", "<p>虚构</p>", NoteLocation("删除树", "子层"))
         self.window.directory_service.soft_delete_directory(root.id)
         self.window.show_trash()
         payloads = [item.data(0, PAYLOAD_ROLE) or {} for item in self.all_trash_items()]

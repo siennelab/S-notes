@@ -129,16 +129,16 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 )
                 self._store_operation(connection, actor_target_id, "create", result)
                 return result
-            main, sub, sub_sub = location.values()
+            main, sub = location.values()
             note_uuid = str(uuid.uuid4())
             cursor = connection.execute(
                 """
                 INSERT INTO notes (
                     note_uuid, revision, directory_id, title, body_rich_text,
-                    content_html, main_category, sub_category, sub_sub_category,
+                    content_html, main_category, sub_category,
                     tags, ai_visibility, is_pinned, is_deleted, created_at,
                     updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
                 """,
                 (
                     note_uuid,
@@ -148,7 +148,6 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     content_html,
                     main,
                     sub,
-                    sub_sub,
                     visibility,
                     timestamp,
                     timestamp,
@@ -250,15 +249,13 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 new_location = location or NoteLocation(
                     str(note["main_category"]),
                     str(note["sub_category"]),
-                    str(note["sub_sub_category"]),
                 )
-                main, sub, sub_sub = new_location.values()
+                main, sub = new_location.values()
                 connection.execute(
                     """
                     UPDATE notes
                     SET title = ?, directory_id = ?, main_category = ?,
-                        sub_category = ?, sub_sub_category = ?,
-                        revision = revision + 1, updated_at = ?
+                        sub_category = ?, revision = revision + 1, updated_at = ?
                     WHERE id = ? AND revision = ?
                     """,
                     (
@@ -266,7 +263,6 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                         new_directory_id,
                         main,
                         sub,
-                        sub_sub,
                         timestamp,
                         note_id,
                         expected_revision,
@@ -323,18 +319,18 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             existing = self._operation_from_connection(connection, request_id)
             if existing is not None:
                 return _already_processed(existing)
-            main, sub, sub_sub = location.values()
+            main, sub = location.values()
             cursor = connection.execute(
                 """
                 INSERT INTO ai_receipt_inbox (
                     raw_text, parse_status, status, source, action, title,
-                    main_category, sub_category, sub_sub_category, tags,
+                    main_category, sub_category, tags,
                     ai_visibility, ai_targets, body, note_id, created_at,
                     updated_at, parse_error, request_id, actor_target_id,
                     operation_type, target_note_id, expected_updated_at,
                     operation_payload, result_status
                 ) VALUES (
-                    '', 'parsed', 'pending', ?, ?, ?, ?, ?, ?, ?, 'full', ?, ?,
+                    '', 'parsed', 'pending', ?, ?, ?, ?, ?, ?, 'full', ?, ?,
                     NULL, ?, ?, '', ?, ?, ?, ?, ?, ?, 'pending_confirmation'
                 )
                 """,
@@ -344,7 +340,6 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     title,
                     main,
                     sub,
-                    sub_sub,
                     ", ".join(tags),
                     actor_display,
                     body,
@@ -436,7 +431,6 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             "body_rich_text": note["body_rich_text"],
             "main_category": note["main_category"],
             "sub_category": note["sub_category"],
-            "sub_sub_category": note["sub_sub_category"],
             "tags": note["tags"],
             "ai_visibility": note["ai_visibility"],
         }

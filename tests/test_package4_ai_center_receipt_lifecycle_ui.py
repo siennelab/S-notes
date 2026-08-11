@@ -167,7 +167,7 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.assertEqual(set(self.window.ai_center_dialog.receipt_view.cards), {5})
 
     def test_request_id_receipt_defaults_and_final_ui_metadata_are_persisted(self) -> None:
-        self.window.note_service.create_note(NoteLocation("项目", "虚构", "无"))
+        self.window.note_service.create_note(NoteLocation("项目", "虚构"))
         self._insert_receipt(
             6,
             "pending",
@@ -237,7 +237,6 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
             body="FICTIONAL_LINKED_BODY",
             main_category="项目",
             sub_category="虚构",
-            sub_sub_category="无",
             tags="linked",
             visibility="full",
             target_ids=("gale",),
@@ -260,12 +259,12 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
                 """
                 INSERT INTO ai_receipt_inbox (
                     id, raw_text, parse_status, status, source, action, title,
-                    main_category, sub_category, sub_sub_category, tags,
+                    main_category, sub_category, tags,
                     ai_visibility, ai_targets, body, created_at, updated_at,
                     request_id, actor_target_id, operation_type
                 ) VALUES (
                     ?, 'FICTIONAL_UI_RAW', 'parsed', ?, 'Fictional UI', '新增',
-                    ?, '项目', '虚构', '无', 'fixture', ?, ?,
+                    ?, '项目', '虚构', 'fixture', ?, ?,
                     'FICTIONAL_UI_BODY', '2026-08-10T07:00:00',
                     '2026-08-10T08:00:00', ?, ?, ?
                 )

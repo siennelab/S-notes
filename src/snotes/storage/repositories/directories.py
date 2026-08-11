@@ -9,7 +9,6 @@ from src.snotes.application.ports import DirectoriesRepository
 from src.snotes.domain.errors import DirectoryNotFoundError
 from src.snotes.domain.models import (
     DEFAULT_SUB_CATEGORY,
-    DEFAULT_SUB_SUB_CATEGORY,
     Directory,
     NoteLocation,
     TrashResult,
@@ -27,7 +26,7 @@ FROM directories
 """
 TRASH_NOTE_SELECT = """
 SELECT id, note_uuid, revision, directory_id, title, content_html,
-       main_category, sub_category, sub_sub_category, tags, ai_visibility,
+       main_category, sub_category, tags, ai_visibility,
        is_pinned, is_deleted, created_at, updated_at, deleted_at, trash_group_id
 FROM notes
 """
@@ -48,8 +47,8 @@ class SQLiteDirectoriesRepository(DirectoriesRepository):
         if not clean_name:
             raise ValueError("目录名称不能为空")
         with self.connections.write() as connection:
-            if parent_id is not None and self.depth(connection, parent_id) >= 3:
-                raise ValueError("目录最多支持三层")
+            if parent_id is not None and self.depth(connection, parent_id) >= 2:
+                raise ValueError("目录最多支持两层")
             if self.find_active(connection, clean_name, parent_id) is not None:
                 raise ValueError("同级目录已存在")
             directory_id = self.create_in_connection(connection, clean_name, parent_id)
@@ -249,14 +248,11 @@ class SQLiteDirectoriesRepository(DirectoriesRepository):
     def ensure_location(
         self, connection: sqlite3.Connection, location: NoteLocation
     ) -> int:
-        main, sub, sub_sub = location.values()
+        main, sub = location.values()
         main_id = self.ensure_directory(connection, main, None)
-        if sub == DEFAULT_SUB_CATEGORY and sub_sub == DEFAULT_SUB_SUB_CATEGORY:
+        if sub == DEFAULT_SUB_CATEGORY:
             return main_id
-        sub_id = self.ensure_directory(connection, sub, main_id)
-        if sub_sub == DEFAULT_SUB_SUB_CATEGORY:
-            return sub_id
-        return self.ensure_directory(connection, sub_sub, sub_id)
+        return self.ensure_directory(connection, sub, main_id)
 
     def find_active(
         self, connection: sqlite3.Connection, name: str, parent_id: int | None
@@ -511,12 +507,6 @@ class SQLiteDirectoriesRepository(DirectoriesRepository):
                 "main_category = ? AND sub_category = ?",
                 (path[0], path[1]),
             )
-        if len(path) == 3:
-            return (
-                "sub_sub_category",
-                "main_category = ? AND sub_category = ? AND sub_sub_category = ?",
-                (path[0], path[1], path[2]),
-            )
         raise ValueError("目录路径无效")
 
     @staticmethod
@@ -524,5 +514,4 @@ class SQLiteDirectoriesRepository(DirectoriesRepository):
         return NoteLocation(
             path[0],
             path[1] if len(path) >= 2 else DEFAULT_SUB_CATEGORY,
-            path[2] if len(path) >= 3 else DEFAULT_SUB_SUB_CATEGORY,
         )

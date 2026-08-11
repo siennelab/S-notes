@@ -32,7 +32,6 @@ class AiReceiptInboxItem:
     title: str
     main_category: str
     sub_category: str
-    sub_sub_category: str
     tags: str
     ai_visibility: str
     ai_targets: str

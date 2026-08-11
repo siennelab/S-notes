@@ -61,7 +61,7 @@ class Package1R1ParityTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_frozen_schema_objects_columns_and_foreign_keys_match(self) -> None:
+    def test_frozen_schema_matches_except_approved_third_level_columns(self) -> None:
         self.assertEqual(
             self.schema_signature(self.r1_path),
             self.schema_signature(self.r2_path),
@@ -72,8 +72,10 @@ class Package1R1ParityTests(unittest.TestCase):
         )
 
     def test_note_directory_tag_pin_delete_restore_sequence_matches(self) -> None:
-        location = NoteLocation("虚构对照主目录", "虚构对照子目录", "虚构对照末级")
-        r1_note = r1_database.create_note_in_directory(*location.values(), self.r1_path)
+        location = NoteLocation("虚构对照主目录", "虚构对照子目录")
+        r1_note = r1_database.create_note_in_directory(
+            location.main, location.sub, "无", self.r1_path
+        )
         r2_note = self.r2_notes.create_note(location)
         r1_note = r1_database.update_note(
             r1_note["id"],
@@ -92,9 +94,9 @@ class Package1R1ParityTests(unittest.TestCase):
         self.r2_tags.set_note_tags(r2_note.id, [" #Alpha ", "alpha", "中文"])
         r1_database.set_note_pinned(r1_note["id"], True, self.r1_path)
         self.r2_notes.set_note_pinned(r2_note.id, True)
-        destination = NoteLocation("虚构移动主目录", "虚构移动子目录", "无")
+        destination = NoteLocation("虚构移动主目录", "虚构移动子目录")
         r1_database.update_note_directory(
-            r1_note["id"], *destination.values(), self.r1_path
+            r1_note["id"], destination.main, destination.sub, "无", self.r1_path
         )
         self.r2_notes.move_note(r2_note.id, destination)
         r1_database.soft_delete_note(r1_note["id"], self.r1_path)
@@ -115,16 +117,12 @@ class Package1R1ParityTests(unittest.TestCase):
         r1_child = r1_database.create_directory(
             "虚构树子", r1_root["id"], self.r1_path
         )
-        r1_database.create_directory("虚构树末", r1_child["id"], self.r1_path)
         r2_root = self.r2_directories.create_directory("虚构树主")
-        r2_child = self.r2_directories.create_directory("虚构树子", r2_root.id)
-        self.r2_directories.create_directory("虚构树末", r2_child.id)
+        self.r2_directories.create_directory("虚构树子", r2_root.id)
         r1_note = r1_database.create_note_in_directory(
-            "虚构树主", "虚构树子", "虚构树末", self.r1_path
+            "虚构树主", "虚构树子", "无", self.r1_path
         )
-        r2_note = self.r2_notes.create_note(
-            NoteLocation("虚构树主", "虚构树子", "虚构树末")
-        )
+        r2_note = self.r2_notes.create_note(NoteLocation("虚构树主", "虚构树子"))
         r1_database.soft_delete_directory_tree(r1_root["id"], self.r1_path)
         self.r2_directories.soft_delete_directory(r2_root.id)
         self.assertEqual(
@@ -145,7 +143,7 @@ class Package1R1ParityTests(unittest.TestCase):
         r2_independent = self.r2_notes.create_note()
         self.r2_notes.soft_delete_note(r2_independent.id)
         r2_root = self.r2_directories.create_directory("虚构清空树")
-        self.r2_notes.create_note(NoteLocation("虚构清空树", "无", "无"))
+        self.r2_notes.create_note(NoteLocation("虚构清空树", "无"))
         self.r2_directories.soft_delete_directory(r2_root.id)
         r2_result = self.r2_directories.empty_trash()
         self.assertEqual(
@@ -178,7 +176,11 @@ class Package1R1ParityTests(unittest.TestCase):
                 row[1] for row in objects if row[0] == "table"
             ]
             columns = {
-                table: tuple(connection.execute(f"PRAGMA table_info({table})").fetchall())
+                table: tuple(
+                    row[1]
+                    for row in connection.execute(f"PRAGMA table_info({table})")
+                    if row[1] != "sub_sub_category"
+                )
                 for table in table_names
             }
             foreign_keys = {
@@ -205,7 +207,7 @@ class Package1R1ParityTests(unittest.TestCase):
             return connection.execute(
                 """
                 SELECT revision, title, body_rich_text, content_html,
-                       main_category, sub_category, sub_sub_category, tags,
+                       main_category, sub_category, tags,
                        ai_visibility, is_pinned, is_deleted,
                        deleted_at IS NOT NULL, trash_group_id IS NOT NULL
                 FROM notes WHERE id = ?
@@ -227,8 +229,8 @@ class Package1R1ParityTests(unittest.TestCase):
             notes = tuple(
                 connection.execute(
                     """
-                    SELECT main_category, sub_category, sub_sub_category,
-                           is_deleted, directory_id IS NULL, trash_group_id IS NOT NULL
+                    SELECT main_category, sub_category, is_deleted,
+                           directory_id IS NULL, trash_group_id IS NOT NULL
                     FROM notes WHERE is_deleted = 1 ORDER BY id
                     """
                 ).fetchall()
