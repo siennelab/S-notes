@@ -14,16 +14,21 @@ from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_export_service import AiSafeExportService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.tag_service import TagService
 from src.snotes.exporting.ordinary import OrdinaryExportWriter
 from src.snotes.exporting.ordinary import html_to_markdown
+from src.snotes.exporting.ordinary import html_to_text
 from src.snotes.exporting.ai_safe import AiSafePackageWriter
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
 from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
+from src.snotes.storage.repositories.ai_mcp_operations import (
+    SQLiteAiMcpOperationRepository,
+)
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
@@ -98,6 +103,50 @@ def build_application(
         ai_audit_service=ai_audit_service,
     )
     return application, window
+
+
+def build_local_mcp_service(
+    *,
+    actor_target_id: str,
+    data_root: Path | None = None,
+) -> LocalMcpService:
+    """Compose the local stdio MCP against the same R2 owners as the GUI."""
+    root = resolve_rebuild_data_root(data_root)
+    connections = initialize_database(root / "s_notes.db")
+    directories_repository = SQLiteDirectoriesRepository(connections)
+    notes_repository = SQLiteNotesRepository(
+        connections, directories_repository
+    )
+    tags_repository = SQLiteTagsRepository(connections)
+    notes = NoteService(notes_repository)
+    directories = DirectoryService(directories_repository, notes_repository)
+    tags = TagService(tags_repository)
+    ai_metadata = AiAccessMetadataService(notes_repository)
+    audit = AiAuditService(SQLiteAiAuditRepository(connections))
+    receipt_inbox = AiReceiptInboxService(
+        SQLiteAiReceiptInboxRepository(
+            connections, directories_repository, tags_repository
+        ),
+        notes=notes,
+        tags=tags,
+        ai_metadata=ai_metadata,
+        mcp_operations=SQLiteAiMcpOperationRepository(
+            connections, tags_repository
+        ),
+    )
+    return LocalMcpService(
+        actor_target_id=actor_target_id,
+        notes=notes,
+        directories=directories,
+        tags=tags,
+        ai_metadata=ai_metadata,
+        safe_reads=AiSafeReadService(
+            root / "config" / "local_redaction_rules.json",
+            body_renderer=html_to_text,
+        ),
+        audit=audit,
+        receipt_inbox=receipt_inbox,
+    )
 
 
 def main(argv: Sequence[str] | None = None, *, data_root: Path | None = None) -> int:

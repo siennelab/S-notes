@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from src.snotes.application.ports import TagsRepository
+from src.snotes.application.ports import TagRecord, TagsRepository
 from src.snotes.domain.errors import NoteNotFoundError
 from src.snotes.storage.connection import SQLiteConnectionFactory
 from src.snotes.storage.support import Clock, normalize_tags, now_shanghai, timestamp_seconds
@@ -106,3 +106,17 @@ class SQLiteTagsRepository(TagsRepository):
                 "SELECT name FROM tags ORDER BY name COLLATE NOCASE ASC, id ASC"
             ).fetchall()
         return [str(row["name"]) for row in rows]
+
+    def get_records_for_note(self, note_id: int) -> list[TagRecord]:
+        with self.connections.read() as connection:
+            rows = connection.execute(
+                """
+                SELECT tags.id, tags.name
+                FROM tags
+                JOIN note_tags ON note_tags.tag_id = tags.id
+                WHERE note_tags.note_id = ?
+                ORDER BY tags.name COLLATE NOCASE ASC, tags.id ASC
+                """,
+                (note_id,),
+            ).fetchall()
+        return [(int(row["id"]), str(row["name"])) for row in rows]

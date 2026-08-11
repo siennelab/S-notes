@@ -1,0 +1,451 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.note_service import NoteService
+from src.snotes.application.tag_service import TagService
+from src.snotes.domain.models import NoteLocation
+from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
+from src.snotes.storage.repositories.notes import SQLiteNotesRepository
+from src.snotes.storage.repositories.tags import SQLiteTagsRepository
+from src.snotes.storage.schema import initialize_database
+
+
+ROOT = Path(__file__).resolve().parents[1]
+NORMAL_TOOLS = {
+    "search_notes",
+    "get_note",
+    "list_directories",
+    "list_tags",
+    "create_note",
+    "prepend_note",
+    "append_note",
+    "update_note_metadata",
+    "get_operation_status",
+}
+READ_ONLY_TOOLS = {"search_notes", "get_note"}
+
+
+class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        config = self.root / "config"
+        config.mkdir()
+        self.rules_path = config / "local_redaction_rules.json"
+        self.rules_path.write_text(
+            json.dumps({"FictionalSecret": "[MASKED]"}),
+            encoding="utf-8",
+        )
+        self.connections = initialize_database(self.root / "s_notes.db")
+        directories = SQLiteDirectoriesRepository(self.connections)
+        notes_repository = SQLiteNotesRepository(self.connections, directories)
+        tags_repository = SQLiteTagsRepository(self.connections)
+        self.notes = NoteService(notes_repository)
+        self.tags = TagService(tags_repository)
+        self.metadata = AiAccessMetadataService(notes_repository)
+        self.ids: dict[str, int] = {}
+        self._seed_fixture()
+
+    def _seed_note(
+        self,
+        key: str,
+        *,
+        title: str,
+        body: str,
+        visibility: str,
+        targets: tuple[str, ...],
+        tags: tuple[str, ...],
+        location: NoteLocation,
+    ) -> int:
+        note = self.notes.create_note(location)
+        note = self.notes.save_note(
+            note.id,
+            title=title,
+            content_html=f"<p>{body}</p>",
+            location=location,
+            expected_revision=note.revision,
+        )
+        self.tags.set_note_tags(note.id, tags)
+        self.metadata.set_note_visibility(note.id, visibility)
+        self.metadata.set_note_targets(note.id, targets)
+        self.ids[key] = note.id
+        return note.id
+
+    def _seed_fixture(self) -> None:
+        self._seed_note(
+            "common",
+            title="Common visible",
+            body="common body needle",
+            visibility="full",
+            targets=("common",),
+            tags=("common-tag",),
+            location=NoteLocation("项目", "CommonVisible", "无"),
+        )
+        self._seed_note(
+            "clawbot",
+            title="Clawbot visible",
+            body="clawbot body needle",
+            visibility="full",
+            targets=("clawbot",),
+            tags=("clawbot-tag",),
+            location=NoteLocation("项目", "ClawbotVisible", "无"),
+        )
+        self._seed_note(
+            "gale",
+            title="Gale visible",
+            body="gale body needle",
+            visibility="full",
+            targets=("gale",),
+            tags=("gale-tag",),
+            location=NoteLocation("项目", "GaleVisible", "无"),
+        )
+        self._seed_note(
+            "hidden",
+            title="Clawbot hidden",
+            body="hidden body needle",
+            visibility="hidden",
+            targets=("clawbot",),
+            tags=("hidden-tag",),
+            location=NoteLocation("项目", "HiddenVisible", "无"),
+        )
+        self._seed_note(
+            "redacted",
+            title="FictionalSecret clawbot",
+            body="FictionalSecret redacted body",
+            visibility="redacted",
+            targets=("clawbot",),
+            tags=("FictionalSecret-tag",),
+            location=NoteLocation("项目", "FictionalSecretDirectory", "无"),
+        )
+
+    def _env(self, *, read_only: bool, actor: str = "gale") -> dict[str, str]:
+        values = {
+            "HOME": str(self.home),
+            "PYTHONPYCACHEPREFIX": str(self.root / "pycache"),
+            "S_NOTES_DATA_ROOT": str(self.root),
+            "SNOTES_MCP_READ_ONLY": "1" if read_only else "0",
+            "SNOTES_MCP_ACTOR_TARGET_ID": actor,
+        }
+        return values
+
+    @asynccontextmanager
+    async def session(self, *, read_only: bool, actor: str = "gale"):
+        parameters = StdioServerParameters(
+            command=str(ROOT / "scripts" / "run_snotes_mcp_stdio.sh"),
+            args=[],
+            cwd=str(ROOT),
+            env=self._env(read_only=read_only, actor=actor),
+        )
+        async with stdio_client(parameters) as streams:
+            async with ClientSession(*streams) as session:
+                await session.initialize()
+                yield session
+
+    async def call(self, session: ClientSession, name: str, arguments: dict) -> dict:
+        response = await session.call_tool(name, arguments)
+        self.assertFalse(response.isError, [item.model_dump() for item in response.content])
+        self.assertIsNotNone(response.structuredContent)
+        return response.structuredContent
+
+    async def test_normal_catalog_and_frozen_strict_schemas(self) -> None:
+        async with self.session(read_only=False) as session:
+            tools = (await session.list_tools()).tools
+            self.assertEqual({tool.name for tool in tools}, NORMAL_TOOLS)
+            self.assertEqual(len(tools), 9)
+            self.assertEqual((await session.list_resources()).resources, [])
+            self.assertEqual((await session.list_prompts()).prompts, [])
+            by_name = {tool.name: tool for tool in tools}
+            for tool in tools:
+                self.assertFalse(tool.inputSchema.get("additionalProperties", True))
+                self.assertNotIn("actor_target_id", tool.inputSchema.get("properties", {}))
+            self.assertEqual(
+                by_name["search_notes"].inputSchema["properties"]["page_size"]["maximum"],
+                20,
+            )
+            self.assertEqual(
+                by_name["get_note"].inputSchema["properties"]["max_chars"]["maximum"],
+                12_000,
+            )
+            for name in ("prepend_note", "append_note", "update_note_metadata"):
+                self.assertEqual(
+                    by_name[name].inputSchema["anyOf"],
+                    [
+                        {"required": ["expected_version"]},
+                        {"required": ["expected_updated_at"]},
+                    ],
+                )
+            directories = await self.call(session, "list_directories", {})
+            tags = await self.call(session, "list_tags", {})
+            navigation = json.dumps([directories, tags], ensure_ascii=False)
+            self.assertIn("CommonVisible", navigation)
+            self.assertIn("GaleVisible", navigation)
+            self.assertNotIn("ClawbotVisible", navigation)
+            self.assertNotIn("HiddenVisible", navigation)
+            self.assertNotIn("clawbot-tag", navigation)
+            self.assertNotIn("hidden-tag", navigation)
+
+    async def test_read_only_catalog_is_only_two_and_write_is_unknown(self) -> None:
+        async with self.session(read_only=True) as session:
+            tools = (await session.list_tools()).tools
+            self.assertEqual({tool.name for tool in tools}, READ_ONLY_TOOLS)
+            self.assertEqual(len(tools), 2)
+            blocked = await session.call_tool(
+                "create_note",
+                {"request_id": "blocked", "title": "No", "content": "No"},
+            )
+            self.assertTrue(blocked.isError)
+            self.assertIn(
+                "unknown tool: create_note",
+                json.dumps(
+                    [item.model_dump() for item in blocked.content],
+                    ensure_ascii=False,
+                ).lower(),
+            )
+
+    async def test_clawbot_permissions_redaction_and_unified_search(self) -> None:
+        async with self.session(read_only=True) as session:
+            common = await self.call(
+                session, "search_notes", {"query": "common body"}
+            )
+            clawbot = await self.call(
+                session, "search_notes", {"query": "clawbot visible"}
+            )
+            gale = await self.call(
+                session, "search_notes", {"query": "gale body"}
+            )
+            hidden = await self.call(
+                session, "search_notes", {"query": "hidden body"}
+            )
+            raw = await self.call(
+                session, "search_notes", {"query": "FictionalSecret"}
+            )
+            safe = await self.call(
+                session, "search_notes", {"query": "MASKED clawbot"}
+            )
+            self.assertEqual(common["total_visible_matches"], 1)
+            self.assertEqual(clawbot["total_visible_matches"], 1)
+            self.assertEqual(gale["total_visible_matches"], 0)
+            self.assertEqual(hidden["total_visible_matches"], 0)
+            self.assertEqual(raw["total_visible_matches"], 0)
+            self.assertEqual(safe["total_visible_matches"], 1)
+
+            common_note = await self.call(
+                session, "get_note", {"note_id": self.ids["common"]}
+            )
+            clawbot_note = await self.call(
+                session, "get_note", {"note_id": self.ids["clawbot"]}
+            )
+            gale_note = await self.call(
+                session, "get_note", {"note_id": self.ids["gale"]}
+            )
+            hidden_note = await self.call(
+                session, "get_note", {"note_id": self.ids["hidden"]}
+            )
+            redacted = await self.call(
+                session, "get_note", {"note_id": self.ids["redacted"]}
+            )
+            self.assertEqual(common_note["status"], "ok")
+            self.assertEqual(clawbot_note["status"], "ok")
+            self.assertEqual(gale_note["status"], "not_found")
+            self.assertEqual(hidden_note["status"], "not_found")
+            text = json.dumps(redacted, ensure_ascii=False)
+            self.assertNotIn("FictionalSecret", text)
+            self.assertIn("[MASKED]", text)
+
+    async def test_missing_rules_skip_only_redacted_and_audit_is_metadata_only(self) -> None:
+        self.rules_path.unlink()
+        async with self.session(read_only=True) as session:
+            full = await self.call(
+                session, "search_notes", {"query": "common body"}
+            )
+            redacted = await self.call(
+                session, "search_notes", {"query": "MASKED"}
+            )
+            failed_get = await self.call(
+                session, "get_note", {"note_id": self.ids["redacted"]}
+            )
+        self.assertEqual(full["total_visible_matches"], 1)
+        self.assertIn("脱敏规则不可用", full["reason"])
+        self.assertEqual(redacted["total_visible_matches"], 0)
+        self.assertEqual(failed_get["status"], "failed")
+        with self.connections.read() as connection:
+            rows = connection.execute(
+                """
+                SELECT summary, operation_type, actor_target_id, request_id,
+                       note_id, result_count, status, failure_reason
+                FROM ai_call_logs
+                """
+            ).fetchall()
+        self.assertGreaterEqual(len(rows), 3)
+        self.assertEqual({row["actor_target_id"] for row in rows}, {"clawbot"})
+        self.assertEqual({row["summary"] for row in rows}, {""})
+        self.assertNotIn(
+            "common body",
+            json.dumps([dict(row) for row in rows], ensure_ascii=False),
+        )
+
+    async def test_normal_create_get_append_and_operation_status_smoke(self) -> None:
+        with self.connections.write() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_settings(setting_key, setting_value, updated_at)
+                VALUES ('ai_modify_requires_confirmation', '0', '2026-01-01T00:00:00+08:00')
+                """
+            )
+        async with self.session(read_only=False, actor="gale") as session:
+            created = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "package5-create",
+                    "title": "Package5 fictional",
+                    "content": "base",
+                },
+            )
+            self.assertEqual(created["status"], "created")
+            note = await self.call(
+                session, "get_note", {"note_id": created["note_id"]}
+            )
+            appended = await self.call(
+                session,
+                "append_note",
+                {
+                    "request_id": "package5-append",
+                    "note_id": created["note_id"],
+                    "content": "-end",
+                    "expected_version": note["version"],
+                },
+            )
+            self.assertEqual(appended["status"], "updated")
+            after = await self.call(
+                session, "get_note", {"note_id": created["note_id"]}
+            )
+            self.assertEqual(after["content"], "base\n-end")
+            prepended = await self.call(
+                session,
+                "prepend_note",
+                {
+                    "request_id": "package5-prepend",
+                    "note_id": created["note_id"],
+                    "content": "start-",
+                    "expected_version": after["version"],
+                },
+            )
+            self.assertEqual(prepended["status"], "updated")
+            after_prepend = await self.call(
+                session, "get_note", {"note_id": created["note_id"]}
+            )
+            self.assertEqual(after_prepend["content"], "start-\nbase\n-end")
+            conflict = await self.call(
+                session,
+                "append_note",
+                {
+                    "request_id": "package5-conflict",
+                    "note_id": created["note_id"],
+                    "content": "must not appear",
+                    "expected_version": after["version"],
+                },
+            )
+            self.assertEqual(conflict["status"], "conflict")
+            metadata = await self.call(
+                session,
+                "update_note_metadata",
+                {
+                    "request_id": "package5-metadata",
+                    "note_id": created["note_id"],
+                    "expected_version": after_prepend["version"],
+                    "add_tags": ["two"],
+                },
+            )
+            self.assertEqual(metadata["status"], "updated")
+            final_note = await self.call(
+                session, "get_note", {"note_id": created["note_id"]}
+            )
+            self.assertEqual(final_note["tags"], ["two"])
+            self.assertNotIn("must not appear", final_note["content"])
+            duplicate = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "package5-create",
+                    "title": "Must not duplicate",
+                    "content": "ignored",
+                },
+            )
+            self.assertEqual(duplicate["status"], "already_processed")
+            status = await self.call(
+                session,
+                "get_operation_status",
+                {"request_id": "package5-create"},
+            )
+            self.assertEqual(status["status"], "created")
+            self.assertEqual(status["operation_type"], "create")
+
+    async def test_pending_confirmation_and_duplicate_receipt_semantics(self) -> None:
+        with self.connections.write() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_settings(setting_key, setting_value, updated_at)
+                VALUES ('ai_create_requires_confirmation', '1', '2026-01-01T00:00:00+08:00')
+                """
+            )
+        async with self.session(read_only=False, actor="gale") as session:
+            pending_create = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "package5-pending-create",
+                    "title": "Pending fictional",
+                    "content": "pending body",
+                },
+            )
+            self.assertEqual(pending_create["status"], "pending_confirmation")
+            self.assertFalse(pending_create["changed_formal_note"])
+            self.assertTrue(pending_create["pending_confirmation"])
+            self.assertIsNotNone(pending_create["proposal_id"])
+            duplicate = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "package5-pending-create",
+                    "title": "Ignored",
+                    "content": "ignored",
+                },
+            )
+            self.assertEqual(duplicate["status"], "already_processed")
+            self.assertEqual(duplicate["previous_status"], "pending_confirmation")
+
+            target = await self.call(
+                session, "get_note", {"note_id": self.ids["gale"]}
+            )
+            pending_append = await self.call(
+                session,
+                "append_note",
+                {
+                    "request_id": "package5-pending-append",
+                    "note_id": self.ids["gale"],
+                    "content": "not formal yet",
+                    "expected_version": target["version"],
+                },
+            )
+            self.assertEqual(pending_append["status"], "pending_confirmation")
+            unchanged = await self.call(
+                session, "get_note", {"note_id": self.ids["gale"]}
+            )
+            self.assertNotIn("not formal yet", unchanged["content"])
+
+
+if __name__ == "__main__":
+    unittest.main()

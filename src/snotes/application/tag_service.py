@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from src.snotes.application.ports import TagsRepository
+from src.snotes.application.ports import TagRecord, TagsRepository
 from src.snotes.domain.tags import parse_tags
 
 
@@ -20,6 +20,9 @@ class TagService:
 
     def list_tags(self) -> list[str]:
         return self._tags.list_all()
+
+    def get_note_tag_records(self, note_id: int) -> list[TagRecord]:
+        return self._tags.get_records_for_note(note_id)
 
     @staticmethod
     def normalize_tags_text(value: str) -> tuple[str, ...]:

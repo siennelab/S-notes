@@ -23,6 +23,7 @@ from src.snotes.domain.models import (
 
 
 AiTargetCatalogEntry = tuple[str, str, str, bool, bool]
+TagRecord = tuple[int, str]
 
 
 class AiReceiptInboxRepository(Protocol):
@@ -133,6 +134,74 @@ class TagsRepository(Protocol):
     def get_for_note(self, note_id: int) -> list[str]: ...
 
     def list_all(self) -> list[str]: ...
+
+    def get_records_for_note(self, note_id: int) -> list[TagRecord]: ...
+
+
+class AiMcpOperationRepository(Protocol):
+    """Atomic persistence used by the local-MCP application orchestration."""
+
+    def confirmation_required(self, operation_type: str) -> bool: ...
+
+    def get_operation(
+        self,
+        request_id: str,
+        actor_target_id: str | None = None,
+    ) -> dict | None: ...
+
+    def store_terminal(
+        self,
+        actor_target_id: str,
+        operation_type: str,
+        result: dict,
+    ) -> dict: ...
+
+    def create_direct(
+        self,
+        *,
+        actor_target_id: str,
+        request_id: str,
+        title: str,
+        content_html: str,
+        directory_id: int,
+        location: NoteLocation,
+        tags: Sequence[str],
+        visibility: str,
+        target_ids: Sequence[str],
+        target_catalog: Sequence[AiTargetCatalogEntry],
+    ) -> dict: ...
+
+    def modify_direct(
+        self,
+        *,
+        actor_target_id: str,
+        request_id: str,
+        note_id: int,
+        operation_type: str,
+        expected_revision: int,
+        expected_updated_at: str,
+        addition_html: str = "",
+        title: str | None = None,
+        directory_id: int | None = None,
+        location: NoteLocation | None = None,
+        tags: Sequence[str] | None = None,
+    ) -> dict: ...
+
+    def create_pending(
+        self,
+        *,
+        actor_target_id: str,
+        actor_display: str,
+        request_id: str,
+        operation_type: str,
+        title: str,
+        note_id: int | None,
+        expected_updated_at: str | None,
+        payload: dict,
+        location: NoteLocation,
+        tags: Sequence[str],
+        body: str,
+    ) -> dict: ...
 
 
 class OrdinaryExportWriter(Protocol):

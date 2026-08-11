@@ -18,6 +18,7 @@ AUDIT_OPERATION_TYPES = (
     "export",
     "search",
     "get_note",
+    "operation_status",
     "list_directories",
     "list_tags",
     "create",

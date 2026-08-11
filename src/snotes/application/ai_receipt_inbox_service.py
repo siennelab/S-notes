@@ -13,7 +13,10 @@ from src.snotes.application.ai_actor_registry import (
     target_definition,
 )
 from src.snotes.application.note_service import NoteService
-from src.snotes.application.ports import AiReceiptInboxRepository
+from src.snotes.application.ports import (
+    AiMcpOperationRepository,
+    AiReceiptInboxRepository,
+)
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.ai_receipts import (
     RECEIPT_STATUS_ACCEPTED,
@@ -90,11 +93,13 @@ class AiReceiptInboxService:
         notes: NoteService | None = None,
         tags: TagService | None = None,
         ai_metadata: AiAccessMetadataService | None = None,
+        mcp_operations: AiMcpOperationRepository | None = None,
     ) -> None:
         self._receipts = receipts
         self._notes = notes
         self._tags = tags
         self._ai_metadata = ai_metadata
+        self._mcp_operations = mcp_operations
 
     def list_pending_receipts(self) -> list[AiReceiptInboxItem]:
         return self._receipts.list_pending()
@@ -104,6 +109,38 @@ class AiReceiptInboxService:
 
     def get_receipt(self, receipt_id: int) -> AiReceiptInboxItem | None:
         return self._receipts.get(receipt_id)
+
+    def mcp_confirmation_required(self, operation_type: str) -> bool:
+        """Keep local-MCP confirmation policy behind the receipt owner."""
+        return self._require_mcp_operations().confirmation_required(operation_type)
+
+    def mcp_get_operation(
+        self,
+        request_id: str,
+        actor_target_id: str | None = None,
+    ) -> dict | None:
+        return self._require_mcp_operations().get_operation(
+            request_id, actor_target_id
+        )
+
+    def mcp_store_terminal(
+        self,
+        actor_target_id: str,
+        operation_type: str,
+        result: dict,
+    ) -> dict:
+        return self._require_mcp_operations().store_terminal(
+            actor_target_id, operation_type, result
+        )
+
+    def mcp_create_direct(self, **values) -> dict:
+        return self._require_mcp_operations().create_direct(**values)
+
+    def mcp_modify_direct(self, **values) -> dict:
+        return self._require_mcp_operations().modify_direct(**values)
+
+    def mcp_create_pending(self, **values) -> dict:
+        return self._require_mcp_operations().create_pending(**values)
 
     def receipt_target_state(
         self,
@@ -273,6 +310,11 @@ class AiReceiptInboxService:
         if self._notes is None or self._tags is None or self._ai_metadata is None:
             raise RuntimeError("Receipt lifecycle application dependencies are unavailable")
         return self._notes, self._tags, self._ai_metadata
+
+    def _require_mcp_operations(self) -> AiMcpOperationRepository:
+        if self._mcp_operations is None:
+            raise RuntimeError("MCP operation persistence is unavailable")
+        return self._mcp_operations
 
     @staticmethod
     def _parse_target_ids(value: str) -> list[str]:
