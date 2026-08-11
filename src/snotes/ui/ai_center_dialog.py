@@ -308,6 +308,7 @@ class ReceiptCard(QFrame):
 
 class ReceiptInboxView(QWidget):
     receiptAccepted = Signal(int)
+    pendingCountChanged = Signal(int)
 
     def __init__(
         self,
@@ -358,6 +359,7 @@ class ReceiptInboxView(QWidget):
     def refresh_receipts(self) -> None:
         pending = self.service.list_pending_receipts()
         self.pending_button.setText(f"待确认（{len(pending)}）")
+        self.pendingCountChanged.emit(len(pending))
         self._set_active(self.pending_button, self.list_filter == "pending")
         self._set_active(self.processed_button, self.list_filter == "processed")
         receipts = (
@@ -550,6 +552,7 @@ class _GaleWorker(QObject):
 class AiCenterDialog(QWidget):
     finished = Signal(int)
     receiptAccepted = Signal(int)
+    pendingCountChanged = Signal(int)
 
     def __init__(
         self,
@@ -581,6 +584,7 @@ class AiCenterDialog(QWidget):
         self.tabs.setObjectName("aiCenterTabs")
         self.receipt_view = ReceiptInboxView(service, metadata, self)
         self.receipt_view.receiptAccepted.connect(self.receiptAccepted)
+        self.receipt_view.pendingCountChanged.connect(self.pendingCountChanged)
         self.tabs.addTab(self.receipt_view, "待确认 / 已处理")
         self.log_page = self._build_log_page()
         self.tabs.addTab(self.log_page, "调用记录")

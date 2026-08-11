@@ -150,6 +150,12 @@ class NoteSidebar(QWidget):
             "打开 AI 中心" if available else "AI 中心当前不可用"
         )
 
+    def set_ai_center_pending_count(self, pending_count: int) -> None:
+        count = int(pending_count)
+        self.ai_center_button.setText(
+            f"AI中心 ({count})" if count else "AI中心"
+        )
+
     def configure_ai_actor_filters(
         self,
         targets: Sequence[tuple[str, str]],

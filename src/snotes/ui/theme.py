@@ -301,6 +301,28 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #actionBarButton:hover, #deleteNoteButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #actionBarButton:pressed, #deleteNoteButton:pressed,
 #actionBarButton[active='true'] {{ background: {t.surface_selected}; color: {t.text}; }}
+#linkDrawer {{
+    border-left: 1px solid {t.sidebar_separator};
+    background: {t.sidebar};
+    color: {t.sidebar_text};
+}}
+#linkDrawerCloseButton {{
+    background: transparent; color: {t.sidebar_text_muted}; text-align: left;
+}}
+#linkDrawerCloseButton:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#linkDrawerCloseButton:pressed {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
+#linkDrawerSummary {{ color: {t.sidebar_text_muted}; font-size: 12.5px; }}
+#linkResults {{
+    border: 0; outline: 0; background: {t.sidebar}; color: {t.sidebar_text};
+    selection-background-color: {t.sidebar_selected};
+    selection-color: {t.sidebar_text};
+}}
+#linkResults::item {{
+    min-height: 42px; border: 0; border-radius: 6px; padding: 6px 8px;
+    background: transparent; color: {t.sidebar_text_muted};
+}}
+#linkResults::item:hover {{ background: {t.sidebar_hover}; color: {t.sidebar_text}; }}
+#linkResults::item:selected {{ background: {t.sidebar_selected}; color: {t.sidebar_text}; }}
 #editorToolbar {{ background: transparent; border: 0; border-radius: 0; }}
 #findPanel {{ background: transparent; border: 0; border-radius: 0; }}
 #toolbarRow, #toolbarGroup {{ background: transparent; }}

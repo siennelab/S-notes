@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
         self.shell.sidebar.set_ai_center_available(
             self.receipt_inbox_service is not None
         )
+        self.refresh_ai_center_badge()
         if self.ai_access_metadata_service is not None:
             target_options = tuple(
                 (item.target_id, item.display_name)
@@ -175,6 +176,7 @@ class MainWindow(QMainWindow):
         ):
             return
         if self.ai_center_dialog is not None:
+            self.ai_center_dialog.receipt_view.refresh_receipts()
             self.ai_center_dialog.show()
             self.ai_center_dialog.raise_()
             self.ai_center_dialog.activateWindow()
@@ -188,13 +190,25 @@ class MainWindow(QMainWindow):
         )
         self.ai_center_dialog = dialog
         dialog.receiptAccepted.connect(self._receipt_note_created)
+        dialog.pendingCountChanged.connect(
+            self.shell.sidebar.set_ai_center_pending_count
+        )
         dialog.destroyed.connect(lambda: setattr(self, "ai_center_dialog", None))
+        self.refresh_ai_center_badge()
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
 
     def _receipt_note_created(self, note_id: int) -> None:
         self.refresh_note_list(note_id)
+
+    def refresh_ai_center_badge(self) -> None:
+        pending_count = (
+            len(self.receipt_inbox_service.list_pending_receipts())
+            if self.receipt_inbox_service is not None
+            else 0
+        )
+        self.shell.sidebar.set_ai_center_pending_count(pending_count)
 
     def refresh_note_list(self, selected_note_id: int | None = None) -> None:
         if selected_note_id is None and self.current_note is not None:

@@ -122,6 +122,7 @@ class NotesEditor(QTextEdit):
         scroll_bar.setProperty("scrollable", False)
         scroll_bar.rangeChanged.connect(self._sync_vertical_scrollbar_visual_state)
         self._document_reset_in_progress = False
+        self._find_highlight_cursor: QTextCursor | None = None
         self.document().setDocumentMargin(2.0)
         self.document().setDefaultFont(editor_document_font())
         self.document().setDefaultStyleSheet(editor_document_style())
@@ -390,6 +391,7 @@ class NotesEditor(QTextEdit):
         return QApplication.clipboard().text()
 
     def set_note_content(self, content: str) -> None:
+        self._find_highlight_cursor = None
         self._document_reset_in_progress = True
         try:
             if contains_html_markup(content):
@@ -1089,6 +1091,15 @@ class NotesEditor(QTextEdit):
                     )
                 iterator += 1
             block = block.next()
+        if (
+            self._find_highlight_cursor is not None
+            and self._find_highlight_cursor.hasSelection()
+        ):
+            find_selection = QTextEdit.ExtraSelection()
+            find_selection.cursor = QTextCursor(self._find_highlight_cursor)
+            find_selection.format.setBackground(QColor(tokens.accent))
+            find_selection.format.setForeground(QColor(tokens.accent_text))
+            selections.append(find_selection)
         self.setExtraSelections(selections)
 
     def _restore_code_block_properties(self) -> None:
@@ -1175,24 +1186,65 @@ class NotesEditor(QTextEdit):
 
     def find_next(self, query: str) -> bool:
         if not query:
+            self.clear_find_highlight()
             return False
         if self.find(query):
+            self._show_find_highlight()
             return True
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.Start)
         self.setTextCursor(cursor)
-        return self.find(query)
+        if self.find(query):
+            self._show_find_highlight()
+            return True
+        self.clear_find_highlight()
+        return False
+
+    def find_first(self, query: str) -> bool:
+        self.clear_find_highlight()
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        self.setTextCursor(cursor)
+        return self.find_next(query)
+
+    def _show_find_highlight(self) -> None:
+        match_cursor = self.textCursor()
+        self._find_highlight_cursor = (
+            QTextCursor(match_cursor) if match_cursor.hasSelection() else None
+        )
+        if self._find_highlight_cursor is not None:
+            edit_cursor = QTextCursor(self._find_highlight_cursor)
+            edit_cursor.clearSelection()
+            self.setTextCursor(edit_cursor)
+        self._refresh_document_theme_overlays()
+        self.ensureCursorVisible()
+
+    def clear_find_highlight(self) -> None:
+        if self._find_highlight_cursor is None:
+            return
+        self._find_highlight_cursor = None
+        self._refresh_document_theme_overlays()
 
     def replace_current(self, query: str, replacement: str) -> bool:
-        cursor = self.textCursor()
+        cursor = (
+            QTextCursor(self._find_highlight_cursor)
+            if self._find_highlight_cursor is not None
+            else QTextCursor()
+        )
         if not cursor.hasSelection() or cursor.selectedText() != query:
             if not self.find_next(query):
                 return False
-            cursor = self.textCursor()
+            if self._find_highlight_cursor is None:
+                return False
+            cursor = QTextCursor(self._find_highlight_cursor)
         cursor.insertText(replacement)
+        self.setTextCursor(cursor)
+        self._find_highlight_cursor = None
+        self.find_next(query)
         return True
 
     def replace_all(self, query: str, replacement: str) -> int:
+        self.clear_find_highlight()
         if not query:
             return 0
         cursor = self.textCursor()
@@ -1204,6 +1256,7 @@ class NotesEditor(QTextEdit):
             self.textCursor().insertText(replacement)
             count += 1
         cursor.endEditBlock()
+        self.clear_find_highlight()
         return count
 
     @staticmethod

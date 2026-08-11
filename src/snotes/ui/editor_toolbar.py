@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QInputDialog,
     QLineEdit,
     QMenu,
     QPushButton,
@@ -123,12 +122,13 @@ class EditorToolbar(QWidget):
         structure_layout.addWidget(self.heading_button)
         self.format_button = self.heading_button
 
-        for text, tooltip, callback, icon in (
-            ("", "代码块", editor.apply_code_block, "code.svg"),
-            ("", "链接", self.insert_link, "link.svg"),
-        ):
-            self._button(structure_layout, text, tooltip, callback, icon)
-
+        self._button(
+            structure_layout,
+            "",
+            "代码块",
+            editor.apply_code_block,
+            "code.svg",
+        )
         tools_group, tools_layout = self._group("tools")
         self.find_toggle_button = self._button(
             tools_layout,
@@ -174,19 +174,37 @@ class EditorToolbar(QWidget):
         self.find_input.setObjectName("toolbarInput")
         self.find_input.setPlaceholderText("关键词")
         find_row.addWidget(self.find_input)
-        self._button(find_row, "下一个", "查找下一个", self.find_next)
+        self.find_next_button = self._button(
+            find_row,
+            "下一个",
+            "查找下一个",
+            self.find_next,
+        )
 
         self.replace_input = QLineEdit()
         self.replace_input.setObjectName("toolbarInput")
         self.replace_input.setPlaceholderText("替换为")
         find_row.addWidget(self.replace_input)
-        self._button(find_row, "替换", "替换当前匹配", self.replace_current)
-        self._button(find_row, "全部", "全部替换", self.replace_all)
+        self.replace_button = self._button(
+            find_row,
+            "替换",
+            "替换当前匹配",
+            self.replace_current,
+        )
+        self.replace_all_button = self._button(
+            find_row,
+            "替换全部",
+            "替换全部",
+            self.replace_all,
+        )
 
         self.find_status = QLabel("")
         self.find_status.setObjectName("metadataLabel")
         find_row.addWidget(self.find_status)
         find_row.addStretch(1)
+        self.find_input.textChanged.connect(self._find_query_changed)
+        self.replace_input.textChanged.connect(self._clear_find_status)
+        self.editor.textChanged.connect(self._editor_text_changed)
         layout.addWidget(self.find_panel)
         self.find_panel.setVisible(False)
         self.refresh_theme()
@@ -312,29 +330,42 @@ class EditorToolbar(QWidget):
             button.setIcon(themed_icon(str(button.property("iconFile"))))
         self.editor.apply_theme()
 
-    def insert_link(self) -> None:
-        if not self.editor.textCursor().hasSelection():
-            self.find_status.setText("请先选择链接文字")
-            return
-        href, accepted = QInputDialog.getText(self, "添加链接", "链接地址")
-        if accepted and not self.editor.apply_link(href):
-            self.find_status.setText("请输入 http、https 或 mailto 链接")
-
     def toggle_find_panel(self) -> None:
         self.find_panel.setVisible(self.find_panel.isHidden())
         if not self.find_panel.isHidden():
             self.find_input.setFocus()
+            self._find_query_changed(self.find_input.text())
+        else:
+            self.editor.clear_find_highlight()
+            self.find_status.clear()
+
+    def _find_query_changed(self, query: str) -> None:
+        self.find_status.clear()
+        found = self.editor.find_first(query)
+        if query and not found:
+            self.find_status.setText("未找到")
+
+    def _clear_find_status(self, *_args) -> None:
+        self.find_status.clear()
+
+    def _editor_text_changed(self) -> None:
+        self.find_status.clear()
+        self.editor.clear_find_highlight()
 
     def find_next(self) -> None:
+        self.find_status.clear()
         found = self.editor.find_next(self.find_input.text())
         self.find_status.setText("" if found else "未找到")
+        self.find_input.setFocus()
 
     def replace_current(self) -> None:
+        self.find_status.clear()
         replaced = self.editor.replace_current(
             self.find_input.text(), self.replace_input.text()
         )
         self.find_status.setText("" if replaced else "未找到")
 
     def replace_all(self) -> None:
+        self.find_status.clear()
         count = self.editor.replace_all(self.find_input.text(), self.replace_input.text())
         self.find_status.setText(f"已替换 {count} 处" if count else "未找到")

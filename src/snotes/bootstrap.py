@@ -37,6 +37,7 @@ from src.snotes.ui.main_window import MainWindow
 
 
 DATA_ROOT_ENV = "S_NOTES_DATA_ROOT"
+CANDIDATE_LABEL_ENV = "S_NOTES_CANDIDATE_LABEL"
 FORMAL_DATA_ROOT = Path("/Users/s/Library/Application Support/S-notes")
 
 
@@ -49,7 +50,12 @@ def resolve_rebuild_data_root(data_root: Path | None = None) -> Path:
     resolved = Path(supplied).expanduser().resolve()
     if resolved == FORMAL_DATA_ROOT.resolve():
         raise RuntimeError("S-lumen rebuild refuses the formal S-notes data root")
-    resolved.mkdir(parents=True, exist_ok=True)
+    try:
+        resolved.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(
+            f"{DATA_ROOT_ENV} is not creatable and writable"
+        ) from error
     return resolved
 
 
@@ -110,6 +116,9 @@ def build_application(
         ai_audit_service=ai_audit_service,
         gale_control_service=gale_control_service,
     )
+    candidate_label = os.environ.get(CANDIDATE_LABEL_ENV, "").strip()
+    if candidate_label:
+        window.setWindowTitle(f"S-notes — {candidate_label}")
     return application, window
 
 
