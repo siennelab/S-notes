@@ -170,7 +170,8 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             )
 
         for label in widgets[1::2]:
-            self.assertTrue(label.alignment() & Qt.AlignRight)
+            self.assertTrue(label.alignment() & Qt.AlignLeft)
+            self.assertFalse(label.alignment() & Qt.AlignRight)
             self.assertTrue(label.alignment() & Qt.AlignVCenter)
             self.assertTrue(label.wordWrap())
         self.assertEqual(grid.columnStretch(0), 0)
@@ -186,13 +187,12 @@ class Package6GaleUiWiringTests(unittest.TestCase):
                     widget.mapTo(self.dialog.gale_page, widget.rect().topLeft()).x()
                     for widget in widgets[::2]
                 }
-                right_edges = {
+                right_x = {
                     widget.mapTo(self.dialog.gale_page, widget.rect().topLeft()).x()
-                    + widget.width()
                     for widget in widgets[1::2]
                 }
                 self.assertEqual(len(left_x), 1)
-                self.assertEqual(len(right_edges), 1)
+                self.assertEqual(len(right_x), 1)
                 for left, right in zip(widgets[::2], widgets[1::2]):
                     left_center = left.mapTo(
                         self.dialog.gale_page, left.rect().center()
@@ -201,6 +201,15 @@ class Package6GaleUiWiringTests(unittest.TestCase):
                         self.dialog.gale_page, right.rect().center()
                     ).y()
                     self.assertLessEqual(abs(left_center - right_center), 1)
+                    text_height = right.fontMetrics().boundingRect(
+                        right.rect(),
+                        Qt.TextWordWrap | Qt.AlignLeft,
+                        right.text(),
+                    ).height()
+                    one_line_height = right.fontMetrics().boundingRect(
+                        right.text()
+                    ).height()
+                    self.assertLessEqual(text_height, one_line_height + 1)
 
         self.dialog.resize(720, 520)
         self.application.processEvents()

@@ -655,20 +655,19 @@ class AiCenterDialog(QWidget):
             auto_publish_help,
             auto_pull_help,
         ):
-            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             label.setWordWrap(True)
             label.setMinimumWidth(0)
             label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         left_alignment = Qt.AlignLeft | Qt.AlignVCenter
-        right_alignment = Qt.AlignRight | Qt.AlignVCenter
         controls.addWidget(self.gale_publish_button, 0, 0, left_alignment)
-        controls.addWidget(self.gale_last_publish, 0, 1, right_alignment)
+        controls.addWidget(self.gale_last_publish, 0, 1)
         controls.addWidget(self.gale_pull_button, 1, 0, left_alignment)
-        controls.addWidget(self.gale_last_pull, 1, 1, right_alignment)
+        controls.addWidget(self.gale_last_pull, 1, 1)
         controls.addWidget(self.gale_auto_publish, 2, 0, left_alignment)
-        controls.addWidget(auto_publish_help, 2, 1, right_alignment)
+        controls.addWidget(auto_publish_help, 2, 1)
         controls.addWidget(self.gale_auto_pull, 3, 0, left_alignment)
-        controls.addWidget(auto_pull_help, 3, 1, right_alignment)
+        controls.addWidget(auto_pull_help, 3, 1)
         layout.addLayout(controls)
         layout.addStretch(1)
         enabled = self.gale is not None

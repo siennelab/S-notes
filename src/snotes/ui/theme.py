@@ -403,8 +403,8 @@ QMenu::item {{ background-color: transparent; color: {t.sidebar_text}; border-ra
 QMenu::item:disabled {{ color: {t.sidebar_text_subtle}; }}
 QMenu::item:selected:enabled {{ background-color: {t.sidebar_selected}; color: {t.sidebar_text}; }}
 QMenu::separator {{ height: 1px; background-color: {t.sidebar_separator}; margin: 4px 8px; }}
-QScrollBar:vertical {{ width: 10px; background: transparent; }}
-QScrollBar::handle:vertical {{ min-height: 24px; border-radius: 5px; background: {t.scrollbar}; }}
+QScrollBar:vertical {{ width: 8px; background: transparent; }}
+QScrollBar::handle:vertical {{ min-height: 24px; margin: 0 1px; border-radius: 3px; background: {t.scrollbar}; }}
 QScrollBar::handle:vertical:disabled {{ background: transparent; }}
 QScrollBar[scrollable='false']::handle:vertical {{ background: transparent; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
