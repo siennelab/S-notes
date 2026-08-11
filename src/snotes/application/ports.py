@@ -81,6 +81,8 @@ class NotesRepository(Protocol):
     def get_ai_access_metadata(
         self,
         note_id: int,
+        *,
+        include_deleted: bool = False,
     ) -> tuple[Note, tuple[str, ...]]: ...
 
     def set_ai_visibility(

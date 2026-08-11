@@ -7,6 +7,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -20,6 +21,7 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.ai_center_dialog import AiCenterDialog
+from src.snotes.ui.theme import THEMES, apply_theme
 
 
 class FakeGaleControl:
@@ -136,6 +138,80 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             r"^上次检查：\d{4}-\d{2}-\d{2} \d{2}:\d{2}$",
         )
         self.assertEqual(self.dialog.gale_status.text(), "操作完成")
+
+    def test_controls_form_four_row_two_column_responsive_grid(self) -> None:
+        grid = self.dialog.gale_controls_layout
+        widgets = (
+            self.dialog.gale_publish_button,
+            self.dialog.gale_last_publish,
+            self.dialog.gale_pull_button,
+            self.dialog.gale_last_pull,
+            self.dialog.gale_auto_publish,
+            self.dialog.findChild(
+                type(self.dialog.gale_status), "galeAutoPublishHelp"
+            ),
+            self.dialog.gale_auto_pull,
+            self.dialog.findChild(
+                type(self.dialog.gale_status), "galeAutoPullHelp"
+            ),
+        )
+        expected = (
+            (0, 0), (0, 1),
+            (1, 0), (1, 1),
+            (2, 0), (2, 1),
+            (3, 0), (3, 1),
+        )
+        for widget, position in zip(widgets, expected):
+            index = grid.indexOf(widget)
+            row, column, row_span, column_span = grid.getItemPosition(index)
+            self.assertEqual(
+                (row, column, row_span, column_span),
+                (*position, 1, 1),
+            )
+
+        for label in widgets[1::2]:
+            self.assertTrue(label.alignment() & Qt.AlignRight)
+            self.assertTrue(label.alignment() & Qt.AlignVCenter)
+            self.assertTrue(label.wordWrap())
+        self.assertEqual(grid.columnStretch(0), 0)
+        self.assertEqual(grid.columnStretch(1), 1)
+
+        self.dialog.show()
+        for theme_name in THEMES:
+            with self.subTest(theme=theme_name):
+                apply_theme(self.application, theme_name)
+                self.dialog.resize(900, 700)
+                self.application.processEvents()
+                left_x = {
+                    widget.mapTo(self.dialog.gale_page, widget.rect().topLeft()).x()
+                    for widget in widgets[::2]
+                }
+                right_edges = {
+                    widget.mapTo(self.dialog.gale_page, widget.rect().topLeft()).x()
+                    + widget.width()
+                    for widget in widgets[1::2]
+                }
+                self.assertEqual(len(left_x), 1)
+                self.assertEqual(len(right_edges), 1)
+                for left, right in zip(widgets[::2], widgets[1::2]):
+                    left_center = left.mapTo(
+                        self.dialog.gale_page, left.rect().center()
+                    ).y()
+                    right_center = right.mapTo(
+                        self.dialog.gale_page, right.rect().center()
+                    ).y()
+                    self.assertLessEqual(abs(left_center - right_center), 1)
+
+        self.dialog.resize(720, 520)
+        self.application.processEvents()
+        for left, right in zip(widgets[::2], widgets[1::2]):
+            left_right = left.mapTo(
+                self.dialog.gale_page, left.rect().topRight()
+            ).x()
+            right_left = right.mapTo(
+                self.dialog.gale_page, right.rect().topLeft()
+            ).x()
+            self.assertLess(left_right, right_left)
 
 
 if __name__ == "__main__":

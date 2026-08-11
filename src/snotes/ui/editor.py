@@ -275,6 +275,9 @@ class NotesEditor(QTextEdit):
         return self.textCursor(), preserved_inline_intent
 
     def keyPressEvent(self, event) -> None:
+        if self.isReadOnly() or not self.isEnabled():
+            super().keyPressEvent(event)
+            return
         modifiers = event.modifiers()
         command_modifiers = Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier
         cursor = self.textCursor()
@@ -347,12 +350,17 @@ class NotesEditor(QTextEdit):
         menu.deleteLater()
 
     def inputMethodEvent(self, event) -> None:
+        if self.isReadOnly() or not self.isEnabled():
+            super().inputMethodEvent(event)
+            return
         if event.commitString() and not self.textCursor().hasSelection():
             self._normalize_current_input_format()
         super().inputMethodEvent(event)
         self._normalize_current_input_format()
 
     def insertFromMimeData(self, source: QMimeData) -> None:
+        if self.isReadOnly() or not self.isEnabled():
+            return
         try:
             if source.hasHtml():
                 safe_html = self.sanitize_html(source.html())
@@ -382,6 +390,8 @@ class NotesEditor(QTextEdit):
                 self.insertPlainText(self.sanitize_pasted_text(source.text()))
 
     def paste_plain_text(self) -> None:
+        if self.isReadOnly() or not self.isEnabled():
+            return
         clipboard = self.clipboard_text()
         self.insertPlainText(self.sanitize_pasted_text(clipboard))
 

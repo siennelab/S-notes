@@ -78,6 +78,16 @@ class AiAccessMetadataService:
         note, target_ids = self._notes.get_ai_access_metadata(note_id)
         return self._materialize(note, target_ids)
 
+    def get_deleted_note_metadata(self, note_id: int) -> AiAccessMetadata:
+        """Read metadata for a trash preview without enabling deleted writes."""
+        note, target_ids = self._notes.get_ai_access_metadata(
+            note_id,
+            include_deleted=True,
+        )
+        if not note.is_deleted:
+            raise ValueError(f"笔记不在回收站中: {note_id}")
+        return self._materialize(note, target_ids)
+
     def set_note_visibility(
         self,
         note_id: int,

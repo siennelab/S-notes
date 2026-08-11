@@ -153,6 +153,7 @@ class MainWindow(QMainWindow):
         sidebar.manageDirectoriesRequested.connect(self.directory_workflow.open)
         sidebar.trashRequested.connect(self.show_trash)
         sidebar.exitTrashRequested.connect(self.show_directory)
+        sidebar.trashNoteSelected.connect(self.load_deleted_note)
         sidebar.restoreTrashRequested.connect(self.restore_trash_items)
         sidebar.permanentDeleteTrashRequested.connect(self.permanently_delete_trash_items)
         sidebar.emptyTrashRequested.connect(self.empty_trash)
@@ -335,10 +336,54 @@ class MainWindow(QMainWindow):
             self.autosave_retry_count = 0
             self.save_timer.stop()
             self.shell.set_editor_available(True)
+            self.shell.set_editor_read_only(False)
             self.shell.set_normal_status("已保存")
             self.shell.sidebar.select_note(note.id)
             self._refresh_links()
             self._refresh_action_states()
+        finally:
+            self.is_loading_note = False
+        return True
+
+    def load_deleted_note(self, note_id: int) -> bool:
+        if not self.force_save_current_note():
+            return False
+        note = self.note_service.get_note(note_id, include_deleted=True)
+        if note is None or not note.is_deleted:
+            self.show_trash()
+            return False
+        metadata = None
+        if self.ai_access_metadata_service is not None:
+            try:
+                metadata = self.ai_access_metadata_service.get_deleted_note_metadata(
+                    note_id
+                )
+            except Exception as error:
+                self.shell.set_normal_status(f"AI 元数据加载失败：{error}")
+                return False
+        self.is_loading_note = True
+        try:
+            self.current_note = None
+            self.title_input.setText(note.title)
+            self.body_edit.set_note_content(note.content_html)
+            self.body_edit.document().setModified(False)
+            self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
+            populate_location_controls(self.shell, note, self.directory_service)
+            if metadata is not None:
+                self.shell.set_ai_metadata_values(
+                    metadata.visibility,
+                    metadata.target_ids,
+                    metadata.legacy_target_names,
+                )
+            self.shell.update_metadata_summary()
+            self.has_unsaved_changes = False
+            self.conflict_active = False
+            self.autosave_retry_count = 0
+            self.save_timer.stop()
+            self.shell.set_editor_available(True)
+            self.shell.set_editor_read_only(True)
+            self.shell.set_normal_status("回收站中 · 只读")
+            self.shell.link_drawer.set_results([])
         finally:
             self.is_loading_note = False
         return True
@@ -697,6 +742,7 @@ class MainWindow(QMainWindow):
         self.shell.update_metadata_summary()
         self.has_unsaved_changes = False
         self.save_timer.stop()
+        self.shell.set_editor_read_only(False)
         self.shell.set_editor_available(False)
         self.shell.set_normal_status("未选择笔记")
         self.shell.link_drawer.set_results([])

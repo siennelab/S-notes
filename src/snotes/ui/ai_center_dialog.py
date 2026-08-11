@@ -11,6 +11,7 @@ from PySide6.QtGui import QCloseEvent, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
+    QGridLayout,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -625,36 +626,50 @@ class AiCenterDialog(QWidget):
         self.gale_status = QLabel("Gale 后台接线未启用" if self.gale is None else "就绪")
         self.gale_status.setObjectName("galeStatusLabel")
         layout.addWidget(self.gale_status)
-        publish_row = QHBoxLayout()
+        controls = QGridLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setHorizontalSpacing(16)
+        controls.setVerticalSpacing(10)
+        controls.setColumnStretch(0, 0)
+        controls.setColumnStretch(1, 1)
+        self.gale_controls_layout = controls
         self.gale_publish_button = QPushButton("立即更新镜像")
         self.gale_last_publish = QLabel("上次发布：尚未发布")
         self.gale_last_publish.setObjectName("galeLastPublishLabel")
-        publish_row.addWidget(self.gale_publish_button)
-        publish_row.addWidget(self.gale_last_publish)
-        publish_row.addStretch(1)
-        layout.addLayout(publish_row)
-        pull_row = QHBoxLayout()
         self.gale_pull_button = QPushButton("立即检查投稿")
         self.gale_last_pull = QLabel("上次检查：尚未检查")
         self.gale_last_pull.setObjectName("galeLastPullLabel")
-        pull_row.addWidget(self.gale_pull_button)
-        pull_row.addWidget(self.gale_last_pull)
-        pull_row.addStretch(1)
-        layout.addLayout(pull_row)
         self.gale_auto_publish = QCheckBox("自动更新 Gale 安全镜像")
         self.gale_auto_pull = QCheckBox("自动接收 Gale 投稿")
-        layout.addWidget(self.gale_auto_publish)
         auto_publish_help = QLabel(
             "内容停止变化约 15 分钟后发布；持续变化时最长约 30 分钟"
         )
         auto_publish_help.setObjectName("galeAutoPublishHelp")
-        layout.addWidget(auto_publish_help)
-        layout.addWidget(self.gale_auto_pull)
         auto_pull_help = QLabel(
             "后台每 5 分钟检查；登录时启动，睡眠期间暂停并在唤醒后按系统计划继续"
         )
         auto_pull_help.setObjectName("galeAutoPullHelp")
-        layout.addWidget(auto_pull_help)
+        for label in (
+            self.gale_last_publish,
+            self.gale_last_pull,
+            auto_publish_help,
+            auto_pull_help,
+        ):
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setWordWrap(True)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        left_alignment = Qt.AlignLeft | Qt.AlignVCenter
+        right_alignment = Qt.AlignRight | Qt.AlignVCenter
+        controls.addWidget(self.gale_publish_button, 0, 0, left_alignment)
+        controls.addWidget(self.gale_last_publish, 0, 1, right_alignment)
+        controls.addWidget(self.gale_pull_button, 1, 0, left_alignment)
+        controls.addWidget(self.gale_last_pull, 1, 1, right_alignment)
+        controls.addWidget(self.gale_auto_publish, 2, 0, left_alignment)
+        controls.addWidget(auto_publish_help, 2, 1, right_alignment)
+        controls.addWidget(self.gale_auto_pull, 3, 0, left_alignment)
+        controls.addWidget(auto_pull_help, 3, 1, right_alignment)
+        layout.addLayout(controls)
         layout.addStretch(1)
         enabled = self.gale is not None
         for widget in (

@@ -413,6 +413,30 @@ class SnotesShell(QWidget):
         for checkbox in self.ai_target_checks.values():
             checkbox.setEnabled(available and self.ai_metadata_configured)
 
+    def set_editor_read_only(self, read_only: bool) -> None:
+        """Keep a loaded note visible while disabling every mutation control."""
+        editable = not read_only
+        self.title_input.setReadOnly(read_only)
+        self.body_editor.setReadOnly(read_only)
+        self.tags_input.setReadOnly(read_only)
+        for combo in (self.main_combo, self.sub_combo):
+            combo.setEnabled(editable)
+        self.ai_visibility_combo.setEnabled(
+            editable and self.ai_metadata_configured
+        )
+        for checkbox in self.ai_target_checks.values():
+            checkbox.setEnabled(editable and self.ai_metadata_configured)
+        for widget in (
+            self.editor_toolbar,
+            self.metadata_summary_button,
+            self.metadata_panel,
+            self.pin_button,
+            self.links_button,
+            self.export_button,
+            self.delete_button,
+        ):
+            widget.setEnabled(editable)
+
     def set_normal_status(self, text: str) -> None:
         self.status_label.setProperty("conflict", False)
         self.status_label.setText(text)

@@ -130,9 +130,15 @@ class SQLiteNotesRepository(NotesRepository):
     def get_ai_access_metadata(
         self,
         note_id: int,
+        *,
+        include_deleted: bool = False,
     ) -> tuple[Note, tuple[str, ...]]:
         with self.connections.read() as connection:
-            note = self.read_from_connection(connection, note_id, False)
+            note = self.read_from_connection(
+                connection,
+                note_id,
+                include_deleted,
+            )
             target_ids = self._read_ai_target_ids(connection, note_id)
         return note, target_ids
 

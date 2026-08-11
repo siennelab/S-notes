@@ -58,6 +58,7 @@ class NoteSidebar(QWidget):
     manageDirectoriesRequested = Signal()
     trashRequested = Signal()
     exitTrashRequested = Signal()
+    trashNoteSelected = Signal(int)
     restoreTrashRequested = Signal(object, object)
     permanentDeleteTrashRequested = Signal(object, object)
     emptyTrashRequested = Signal()
@@ -233,6 +234,7 @@ class NoteSidebar(QWidget):
         self.trash_tree.setHeaderHidden(True)
         self.trash_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.trash_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.trash_tree.itemClicked.connect(self._trash_item_clicked)
         self.trash_tree.customContextMenuRequested.connect(self._open_trash_context_menu)
         self.sidebar_stack = QStackedWidget()
         self.sidebar_stack.addWidget(self.note_list)
@@ -555,6 +557,13 @@ class NoteSidebar(QWidget):
             elif payload.get("type") == "deleted_directory":
                 directories.append(int(payload["id"]))
         return notes, directories
+
+    def _trash_item_clicked(self, item: QTreeWidgetItem, _column: int = 0) -> None:
+        payload = item.data(0, PAYLOAD_ROLE) or {}
+        if payload.get("type") == "deleted_note":
+            self.trashNoteSelected.emit(int(payload["id"]))
+        elif payload.get("type") == "deleted_directory":
+            item.setExpanded(not item.isExpanded())
 
     def _open_trash_context_menu(self, position) -> None:
         item = self.trash_tree.itemAt(position)
