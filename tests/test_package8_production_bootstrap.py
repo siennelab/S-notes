@@ -11,6 +11,7 @@ from unittest.mock import patch
 from src.app_paths import APP_NAME, DATA_ROOT_ENV_NAME, default_data_root
 from src.snotes.bootstrap import resolve_rebuild_data_root
 from src.snotes.gale_bootstrap import resolve_gale_data_root
+from src.snotes.transport.mcp.server import build_server
 from src.snotes.transport.mcp.runtime import (
     RuntimeConfigurationError,
     load_runtime_config,
@@ -63,6 +64,29 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
             )
             self.assertEqual(config.actor_target_id, "clawbot")
             self.assertTrue(config.read_only)
+            server = build_server(config)
+            self.assertEqual(
+                [tool.name for tool in server._tool_manager.list_tools()],
+                ["search_notes", "get_note"],
+            )
+
+    def test_mcp_explicit_isolated_override_builds_server(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            home = Path(temporary_directory) / "home"
+            isolated = Path(temporary_directory) / "candidate"
+            environment = {
+                "HOME": str(home),
+                DATA_ROOT_ENV_NAME: str(isolated),
+                "SNOTES_MCP_READ_ONLY": "1",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                config = load_runtime_config()
+                server = build_server(config)
+            self.assertEqual(config.data_root, isolated)
+            self.assertEqual(
+                [tool.name for tool in server._tool_manager.list_tools()],
+                ["search_notes", "get_note"],
+            )
 
     def test_mcp_explicit_formal_override_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

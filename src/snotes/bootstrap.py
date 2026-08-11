@@ -114,10 +114,10 @@ def build_application(
 def build_local_mcp_service(
     *,
     actor_target_id: str,
-    data_root: Path | None = None,
+    resolved_data_root: Path,
 ) -> LocalMcpService:
-    """Compose the local stdio MCP against the same R2 owners as the GUI."""
-    root = resolve_rebuild_data_root(data_root)
+    """Compose MCP after its runtime owner has resolved the data root."""
+    root = Path(resolved_data_root)
     connections = initialize_database(root / "s_notes.db")
     directories_repository = SQLiteDirectoriesRepository(connections)
     notes_repository = SQLiteNotesRepository(

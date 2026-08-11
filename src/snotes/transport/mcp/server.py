@@ -22,7 +22,7 @@ def build_server(config: RuntimeConfig) -> FastMCP:
     Settings.model_config["env_file"] = None
     service = build_local_mcp_service(
         actor_target_id=config.actor_target_id,
-        data_root=config.data_root,
+        resolved_data_root=config.data_root,
     )
     mcp = FastMCP(
         name="S-notes Local MCP",
