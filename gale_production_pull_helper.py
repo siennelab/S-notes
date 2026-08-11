@@ -1,43 +1,35 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-from src.gale_production_background import (
+from src.snotes.background.gale import (
     HELPER_FILENAME,
     HELPER_VERSION,
-    BackgroundPullError,
-    ensure_background_installation,
-    run_production_pull_once,
-    start_installed_helper,
-    uninstall_background,
+    run_one_shot,
+)
+from src.snotes.gale_bootstrap import (
+    build_gale_control_service,
 )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=HELPER_FILENAME)
     parser.add_argument("--version", action="store_true")
-    parser.add_argument("--install", action="store_true")
-    parser.add_argument("--uninstall", action="store_true")
+    parser.add_argument("--scheduled", action="store_true")
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument(
+        "--mode", choices=("production", "staging"), default="production"
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(f"{HELPER_FILENAME} {HELPER_VERSION}")
         return 0
-    if args.install and args.uninstall:
-        return 2
     try:
-        if args.install:
-            ensure_background_installation(source=Path(sys.executable))
-            start_installed_helper()
-            return 0
-        if args.uninstall:
-            uninstall_background()
-            return 0
-        outcome = run_production_pull_once()
-        return 0 if outcome.status in {"success", "disabled", "locked"} else 2
-    except BackgroundPullError:
-        return 2
+        control = build_gale_control_service(
+            data_root=args.data_root, outbox_mode=args.mode
+        )
+        return run_one_shot(control, scheduled=args.scheduled)
     except Exception:
         return 2
 

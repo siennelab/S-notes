@@ -26,6 +26,9 @@ AUDIT_OPERATION_TYPES = (
     "append",
     "metadata",
     "restore",
+    "gale_mirror",
+    "gale_publish",
+    "gale_pull",
 )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol, Sequence
 
 from src.snotes.domain.ai_receipts import (
@@ -9,6 +10,14 @@ from src.snotes.domain.ai_receipts import (
     AiReceiptAcceptPersistence,
     AiReceiptDiscardPersistence,
     AiReceiptInboxItem,
+    GaleReceiptImport,
+)
+from src.snotes.domain.gale import (
+    GaleActivationResult,
+    GaleMirrorRecord,
+    GaleMirrorResult,
+    GaleMirrorVerification,
+    GaleSubmission,
 )
 from src.snotes.domain.ai_audit import AiAuditEvent, AiCallLog
 from src.snotes.domain.ai_safe_export import AiSafeExportPlan, AiSafeExportResult
@@ -49,6 +58,10 @@ class AiReceiptInboxRepository(Protocol):
     ) -> AiReceiptAcceptPersistence: ...
 
     def discard_pending(self, receipt_id: int) -> AiReceiptDiscardPersistence: ...
+
+    def import_gale_pending(
+        self, submission: GaleReceiptImport
+    ) -> tuple[AiReceiptInboxItem, bool]: ...
 
 
 class NotesRepository(Protocol):
@@ -220,3 +233,57 @@ class AiAuditRepository(Protocol):
     def record(self, event: AiAuditEvent) -> None: ...
 
     def list(self, operation_type: str | None = None) -> list[AiCallLog]: ...
+
+
+class GaleMirrorWriter(Protocol):
+    def write(
+        self,
+        records: Sequence[GaleMirrorRecord],
+        output_path: Path,
+        *,
+        actor_target_id: str,
+    ) -> GaleMirrorResult: ...
+
+    def verify(
+        self,
+        mirror_path: Path,
+        *,
+        expected_note_count: int | None = None,
+        expected_actor: str,
+    ) -> GaleMirrorVerification: ...
+
+
+class GalePublishTransport(Protocol):
+    """The existing Oracle incoming/current/previous activation boundary."""
+
+    def upload_candidate(self, mirror_path: Path, sha256: str) -> None: ...
+
+    def activate_candidate(
+        self, sha256: str, note_count: int
+    ) -> GaleActivationResult: ...
+
+    def health(self, sha256: str) -> bool: ...
+
+    def rollback(
+        self,
+        expected_current_sha256: str,
+        expected_previous_sha256: str,
+    ) -> GaleActivationResult: ...
+
+
+class GaleOutboxTransport(Protocol):
+    def export_unacknowledged(self) -> Sequence[GaleSubmission]: ...
+
+    def acknowledge(self, submission_uuid: str, local_receipt_id: str) -> None: ...
+
+    def status(self) -> dict[str, int]: ...
+
+
+class GaleRuntimeSettings(Protocol):
+    def get_bool(self, key: str, default: bool) -> bool: ...
+
+    def set_bool(self, key: str, value: bool) -> None: ...
+
+    def get_text(self, key: str, default: str = "") -> str: ...
+
+    def set_text(self, key: str, value: str) -> None: ...

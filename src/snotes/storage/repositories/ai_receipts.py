@@ -19,6 +19,7 @@ from src.snotes.domain.ai_receipts import (
     AiReceiptAcceptPersistence,
     AiReceiptDiscardPersistence,
     AiReceiptInboxItem,
+    GaleReceiptImport,
 )
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, DEFAULT_SUB_SUB_CATEGORY
 from src.snotes.storage.ai_metadata import (
@@ -52,6 +53,12 @@ ORDER BY
     updated_at DESC,
     id DESC
 """
+GALE_IMPORT_SQL = """INSERT INTO ai_receipt_inbox (
+    raw_text, parse_status, status, source, action, title, main_category,
+    sub_category, sub_sub_category, tags, ai_visibility, ai_targets, body,
+    created_at, updated_at, external_submission_id, idempotency_key
+) VALUES ('', 'parsed', 'pending', 'Gale', '新增', ?, ?, ?, ?, ?,
+          'hidden', '', ?, ?, ?, ?, ?)"""
 
 
 class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
@@ -83,6 +90,39 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 (receipt_id,),
             ).fetchone()
         return _receipt_from_row(row) if row is not None else None
+
+    def import_gale_pending(
+        self, submission: GaleReceiptImport
+    ) -> tuple[AiReceiptInboxItem, bool]:
+        timestamp = timestamp_seconds(self.clock)
+        with self.connections.write() as connection:
+            existing = connection.execute(
+                RECEIPT_SELECT
+                + " WHERE source = ? AND (external_submission_id = ? OR idempotency_key = ?)",
+                ("Gale", submission.external_submission_id, submission.idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                return _receipt_from_row(existing), False
+            main, sub, sub_sub = submission.location.values()
+            values = (
+                submission.title,
+                main,
+                sub,
+                sub_sub,
+                ", ".join(submission.tags),
+                submission.body,
+                timestamp,
+                timestamp,
+                submission.external_submission_id,
+                submission.idempotency_key,
+            )
+            cursor = connection.execute(GALE_IMPORT_SQL, values)
+            row = connection.execute(
+                RECEIPT_SELECT + " WHERE id = ?", (int(cursor.lastrowid),)
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("Gale 投稿写入后读取失败。")
+            return _receipt_from_row(row), True
 
     def accept_pending(
         self,

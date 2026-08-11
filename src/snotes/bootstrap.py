@@ -32,6 +32,7 @@ from src.snotes.storage.repositories.ai_mcp_operations import (
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.gale_bootstrap import compose_gale_control
 from src.snotes.ui.main_window import MainWindow
 
 
@@ -91,6 +92,12 @@ def build_application(
         AiSafePackageWriter(root / "exports" / "ai_readbox"),
         ai_audit_service,
     )
+    gale_control_service = compose_gale_control(
+        root,
+        notes,
+        receipt_inbox_service,
+        ai_audit_service,
+    )
     window = MainWindow(
         note_service,
         theme_settings_path=root / "config" / "ui_settings.ini",
@@ -101,6 +108,7 @@ def build_application(
         receipt_inbox_service=receipt_inbox_service,
         ai_safe_export_service=ai_safe_export_service,
         ai_audit_service=ai_audit_service,
+        gale_control_service=gale_control_service,
     )
     return application, window
 

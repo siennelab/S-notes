@@ -82,3 +82,13 @@ class AiReceiptAcceptPersistence:
 class AiReceiptDiscardPersistence:
     receipt: AiReceiptInboxItem
     changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GaleReceiptImport:
+    external_submission_id: str
+    idempotency_key: str
+    title: str
+    body: str
+    location: NoteLocation
+    tags: tuple[str, ...]

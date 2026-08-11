@@ -23,6 +23,7 @@ from src.snotes.domain.ai_receipts import (
     RECEIPT_STATUS_DISCARDED,
     AiReceiptAcceptCommand,
     AiReceiptInboxItem,
+    GaleReceiptImport,
 )
 from src.snotes.domain.models import Note, NoteLocation
 
@@ -109,6 +110,12 @@ class AiReceiptInboxService:
 
     def get_receipt(self, receipt_id: int) -> AiReceiptInboxItem | None:
         return self._receipts.get(receipt_id)
+
+    def import_gale_submission(
+        self, submission: GaleReceiptImport
+    ) -> tuple[AiReceiptInboxItem, bool]:
+        """Idempotently create a pending receipt; never a formal note."""
+        return self._receipts.import_gale_pending(submission)
 
     def mcp_confirmation_required(self, operation_type: str) -> bool:
         """Keep local-MCP confirmation policy behind the receipt owner."""

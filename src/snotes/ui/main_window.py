@@ -14,6 +14,7 @@ from src.snotes.application.ai_access_metadata_service import (
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_safe_export_service import AiSafeExportService
+from src.snotes.application.gale_service import GaleControlService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.note_service import NoteService
@@ -58,6 +59,7 @@ class MainWindow(QMainWindow):
         receipt_inbox_service: AiReceiptInboxService | None = None,
         ai_safe_export_service: AiSafeExportService | None = None,
         ai_audit_service: AiAuditService | None = None,
+        gale_control_service: GaleControlService | None = None,
     ) -> None:
         super().__init__()
         self.note_service = note_service
@@ -68,6 +70,7 @@ class MainWindow(QMainWindow):
         self.receipt_inbox_service = receipt_inbox_service
         self.ai_safe_export_service = ai_safe_export_service
         self.ai_audit_service = ai_audit_service
+        self.gale_control_service = gale_control_service
         self.ai_center_dialog: AiCenterDialog | None = None
         self.theme_settings_path = Path(theme_settings_path)
         self.current_note: Note | None = None
@@ -181,6 +184,7 @@ class MainWindow(QMainWindow):
             self.ai_access_metadata_service,
             self.ai_audit_service,
             self,
+            gale=self.gale_control_service,
         )
         self.ai_center_dialog = dialog
         dialog.receiptAccepted.connect(self._receipt_note_created)

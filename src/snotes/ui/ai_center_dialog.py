@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -33,6 +33,7 @@ from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
     AiReceiptInboxService,
 )
+from src.snotes.application.gale_service import GaleControlService
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.floating_combo import FloatingComboBox
@@ -527,6 +528,25 @@ class ReceiptInboxView(QWidget):
             host.activateWindow()
 
 
+class _GaleWorker(QObject):
+    finished = Signal(object, object)
+
+    def __init__(self, action) -> None:
+        super().__init__()
+        self.action = action
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.action()
+        except Exception as error:
+            self.finished.emit(
+                None, str(getattr(error, "code", "unexpected_failure"))
+            )
+            return
+        self.finished.emit(result, None)
+
+
 class AiCenterDialog(QWidget):
     finished = Signal(int)
     receiptAccepted = Signal(int)
@@ -537,6 +557,8 @@ class AiCenterDialog(QWidget):
         metadata: AiAccessMetadataService,
         audit: AiAuditService | None = None,
         parent: QWidget | None = None,
+        *,
+        gale: GaleControlService | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
         self.setObjectName("aiCenterDialog")
@@ -549,6 +571,9 @@ class AiCenterDialog(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         self.audit = audit
+        self.gale = gale
+        self._gale_threads: list[QThread] = []
+        self._gale_workers: list[_GaleWorker] = []
         title = QLabel("AI中心")
         title.setObjectName("receiptInboxTitle")
         layout.addWidget(title)
@@ -559,8 +584,12 @@ class AiCenterDialog(QWidget):
         self.tabs.addTab(self.receipt_view, "待确认 / 已处理")
         self.log_page = self._build_log_page()
         self.tabs.addTab(self.log_page, "调用记录")
+        self.gale_page = None
         self.tabs.currentChanged.connect(self._tab_changed)
         layout.addWidget(self.tabs, stretch=1)
+        if self.gale is not None:
+            self.gale_page = self._build_gale_page()
+            layout.addWidget(self.gale_page)
         footer = QHBoxLayout()
         footer.addStretch(1)
         self.close_button = QPushButton("关闭")
@@ -568,6 +597,97 @@ class AiCenterDialog(QWidget):
         self.close_button.clicked.connect(self.close)
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
+
+    def _build_gale_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("galeSettingsPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(12)
+        self.gale_status = QLabel("Gale 后台接线未启用" if self.gale is None else "就绪")
+        self.gale_status.setObjectName("galeStatusLabel")
+        layout.addWidget(self.gale_status)
+        actions = QHBoxLayout()
+        self.gale_publish_button = QPushButton("立即更新")
+        self.gale_pull_button = QPushButton("立即检查投稿")
+        actions.addWidget(self.gale_publish_button)
+        actions.addWidget(self.gale_pull_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        self.gale_auto_publish = QCheckBox("自动更新 Gale 安全镜像")
+        self.gale_auto_pull = QCheckBox("自动接收 Gale 投稿")
+        layout.addWidget(self.gale_auto_publish)
+        layout.addWidget(self.gale_auto_pull)
+        layout.addStretch(1)
+        enabled = self.gale is not None
+        for widget in (
+            self.gale_publish_button,
+            self.gale_pull_button,
+            self.gale_auto_publish,
+            self.gale_auto_pull,
+        ):
+            widget.setEnabled(enabled)
+        if self.gale is not None:
+            self.gale_auto_publish.setChecked(self.gale.auto_publish_enabled())
+            self.gale_auto_pull.setChecked(self.gale.auto_pull_enabled())
+            self.gale_publish_button.clicked.connect(
+                lambda: self._start_gale_action(
+                    self.gale.manual_update, "正在更新 Gale 安全镜像…"
+                )
+            )
+            self.gale_pull_button.clicked.connect(
+                lambda: self._start_gale_action(
+                    self.gale.check_submissions_now, "正在检查 Gale 投稿…",
+                    refresh_receipts=True,
+                )
+            )
+            self.gale_auto_publish.toggled.connect(
+                self.gale.set_auto_publish_enabled
+            )
+            self.gale_auto_pull.toggled.connect(
+                self.gale.set_auto_pull_enabled
+            )
+        return page
+
+    def _start_gale_action(
+        self,
+        action,
+        pending_text: str,
+        *,
+        refresh_receipts: bool = False,
+    ) -> None:
+        self.gale_status.setText(pending_text)
+        self.gale_publish_button.setEnabled(False)
+        self.gale_pull_button.setEnabled(False)
+        thread = QThread(self)
+        worker = _GaleWorker(action)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+
+        def finished(result, error) -> None:
+            self.gale_status.setText(
+                "操作完成" if error is None else f"操作失败：{error}"
+            )
+            self.gale_publish_button.setEnabled(True)
+            self.gale_pull_button.setEnabled(True)
+            if error is None and refresh_receipts:
+                self.receipt_view.refresh_receipts()
+
+        worker.finished.connect(finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        def release() -> None:
+            if thread in self._gale_threads:
+                self._gale_threads.remove(thread)
+            if worker in self._gale_workers:
+                self._gale_workers.remove(worker)
+
+        thread.finished.connect(release)
+        self._gale_threads.append(thread)
+        self._gale_workers.append(worker)
+        thread.start()
 
     def _build_log_page(self) -> QWidget:
         page = QWidget()
