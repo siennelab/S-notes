@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src import database as r1_database
-from src import batch_note_operations as r1_batch_operations
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
@@ -44,13 +43,8 @@ class Package1R1ParityTests(unittest.TestCase):
         self.database_connect_patch = patch.object(
             r1_database, "_connect", open_closing_r1_connection
         )
-        self.batch_connect_patch = patch.object(
-            r1_batch_operations, "_connect", open_closing_r1_connection
-        )
         self.database_connect_patch.start()
-        self.batch_connect_patch.start()
         self.addCleanup(self.database_connect_patch.stop)
-        self.addCleanup(self.batch_connect_patch.stop)
         self.temporary = tempfile.TemporaryDirectory(prefix="snotes-package1-parity-")
         root = Path(self.temporary.name)
         self.r1_path = root / "r1.db"
@@ -147,28 +141,25 @@ class Package1R1ParityTests(unittest.TestCase):
             self.active_directory_projection(self.r2_path),
         )
 
-    def test_empty_trash_data_result_matches(self) -> None:
-        r1_independent = r1_database.create_note(self.r1_path)
+    def test_empty_trash_matches_frozen_r1_result_and_clears_data(self) -> None:
         r2_independent = self.r2_notes.create_note()
-        r1_database.soft_delete_note(r1_independent["id"], self.r1_path)
         self.r2_notes.soft_delete_note(r2_independent.id)
-        r1_root = r1_database.create_directory("虚构清空树", database_path=self.r1_path)
         r2_root = self.r2_directories.create_directory("虚构清空树")
-        r1_database.create_note_in_directory("虚构清空树", database_path=self.r1_path)
         self.r2_notes.create_note(NoteLocation("虚构清空树", "无", "无"))
-        r1_database.soft_delete_directory_tree(r1_root["id"], self.r1_path)
         self.r2_directories.soft_delete_directory(r2_root.id)
-        r1_result = r1_batch_operations.empty_trash(self.r1_path)
         r2_result = self.r2_directories.empty_trash()
         self.assertEqual(
-            r1_result,
             {
                 "note_count": r2_result.note_count,
                 "directory_count": r2_result.directory_count,
                 "root_count": r2_result.root_count,
             },
+            {
+                "note_count": 2,
+                "directory_count": 1,
+                "root_count": 2,
+            },
         )
-        self.assertEqual(self.trash_projection(self.r1_path), ((), ()))
         self.assertEqual(self.trash_projection(self.r2_path), ((), ()))
 
     @staticmethod

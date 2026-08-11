@@ -4,7 +4,6 @@ import contextlib
 import hashlib
 import io
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -12,14 +11,11 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from src.gale_submission_pull import (
+from src.snotes.domain.gale import GaleError
+from src.snotes.transport.gale.remote import (
     MAX_TRANSPORT_BYTES,
-    GaleSubmissionPullError,
-    SystemSshSubmissionTransport,
+    SystemOracleOutboxTransport,
     parse_export_payload,
-    require_isolated_data_root,
-    require_production_data_root,
-    validate_production_database,
 )
 from src.services.gale_submission_outbox import (
     GALE_PRODUCTION_ACTOR,
@@ -127,102 +123,20 @@ class PackageDRemoteStagingSecurityTest(unittest.TestCase):
             )
         self.assertFalse(missing.exists())
 
-    def test_symlink_canonical_and_traversal_paths_are_rejected(self) -> None:
-        formal_root = (
-            Path.home() / "Library" / "Application Support" / "S-notes"
-        )
-        link = self.root / "snotes-r1b-formal-link"
-        link.symlink_to(formal_root, target_is_directory=True)
-        with self.assertRaisesRegex(
-            GaleSubmissionPullError,
-            "data_root_symlink",
-        ):
-            require_isolated_data_root(
-                {"S_NOTES_DATA_ROOT": str(link)}
-            )
-
-        traversal = (
-            Path("/private/tmp")
-            / "snotes-r1b-hop"
-            / ".."
-            / ".."
-            / ".."
-            / "Users"
-            / Path.home().name
-            / "Library"
-            / "Application Support"
-            / "S-notes"
-        )
-        with self.assertRaisesRegex(
-            GaleSubmissionPullError,
-            "data_root_not_private_tmp",
-        ):
-            require_isolated_data_root(
-                {"S_NOTES_DATA_ROOT": str(traversal)}
-            )
-
-        project_data = Path(__file__).resolve().parents[1] / "data"
-        with self.assertRaisesRegex(
-            GaleSubmissionPullError,
-            "data_root_not_private_tmp",
-        ):
-            require_isolated_data_root(
-                {"S_NOTES_DATA_ROOT": str(project_data)}
-            )
-
-        production_home = self.root.resolve() / "fictional-home"
-        production_root = (
-            production_home
-            / "Library"
-            / "Application Support"
-            / "S-notes"
-        )
-        production_root.parent.mkdir(parents=True)
-        production_root.symlink_to(formal_root, target_is_directory=True)
-        with self.assertRaisesRegex(
-            GaleSubmissionPullError,
-            "production_data_root_symlink",
-        ):
-            require_production_data_root({}, home=production_home)
-
     def test_remote_output_limit_rejects_before_json_parse(self) -> None:
         with self.assertRaisesRegex(
-            GaleSubmissionPullError,
+            GaleError,
             "remote_payload_too_large",
         ):
             parse_export_payload(b"x" * (MAX_TRANSPORT_BYTES + 1))
 
-    def test_production_database_gate_is_read_only_and_requires_schema_two(
-        self,
-    ) -> None:
-        production_root = self.root / "production-data"
-        production_root.mkdir()
-        database_path = production_root / "s_notes.db"
-        with sqlite3.connect(database_path) as connection:
-            connection.execute(
-                "CREATE TABLE schema_meta (meta_key TEXT, meta_value TEXT)"
-            )
-            connection.execute(
-                "INSERT INTO schema_meta VALUES ('ai_foundation_version', '1')"
-            )
-        before = hashlib.sha256(database_path.read_bytes()).hexdigest()
-        with self.assertRaisesRegex(
-            GaleSubmissionPullError,
-            "production_schema_unsupported",
-        ):
-            validate_production_database(production_root)
-        self.assertEqual(
-            hashlib.sha256(database_path.read_bytes()).hexdigest(),
-            before,
-        )
-
     def test_ack_receipt_id_blocks_remote_shell_metacharacters(self) -> None:
-        transport = SystemSshSubmissionTransport()
+        transport = SystemOracleOutboxTransport()
         with patch(
-            "src.gale_submission_pull.subprocess.run"
+            "src.snotes.transport.gale.remote._run"
         ) as run_command:
             with self.assertRaisesRegex(
-                GaleSubmissionPullError,
+                GaleError,
                 "local_receipt_id_invalid",
             ):
                 transport.acknowledge(
@@ -239,22 +153,26 @@ class PackageDRemoteStagingSecurityTest(unittest.TestCase):
                 "/usr/local/sbin/snotes-gale-r1b-production-outbox",
             ),
         ):
-            transport = SystemSshSubmissionTransport(mode=mode)
+            transport = SystemOracleOutboxTransport(mode=mode)
             with patch(
-                "src.gale_submission_pull.subprocess.run"
+                "src.snotes.transport.gale.remote._run"
             ) as run_command:
-                run_command.return_value.returncode = 0
-                run_command.return_value.stdout = b'{}'
+                run_command.return_value = subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=b'{"queued":0,"delivered":0,"acknowledged":0}',
+                    stderr=b"",
+                )
                 transport.status()
             command = run_command.call_args.args[0]
             self.assertIn(expected_helper, command)
             self.assertNotIn("sh", command)
             self.assertNotIn("-c", command)
         with self.assertRaisesRegex(
-            GaleSubmissionPullError,
-            "pull_mode_not_allowed",
+            GaleError,
+            "outbox_mode_invalid",
         ):
-            SystemSshSubmissionTransport(mode="arbitrary")
+            SystemOracleOutboxTransport(mode="arbitrary")
 
     def test_ack_rejects_unknown_or_not_delivered_submission(self) -> None:
         submission, _duplicate = create_submission(

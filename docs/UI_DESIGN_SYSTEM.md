@@ -20,7 +20,7 @@ packaged App runs share the last explicit choice.
 
 ## Token Architecture
 
-`src/theme.py` is the single raw-color source:
+`src/snotes/ui/theme.py` is the single raw-color source:
 
 - `ThemeTokens` defines the complete color contract.
 - `THEMES` contains the three token sets.

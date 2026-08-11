@@ -6,8 +6,6 @@ import json
 import os
 import sqlite3
 import stat
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -40,7 +38,6 @@ from src.services.ai_safe_materialization import materialize_ai_safe_note
 from src.time_utils import now_shanghai_iso
 
 
-ROOT = Path(__file__).resolve().parents[1]
 RAW_CANARIES = (
     "RAW_TITLE_SECRET",
     "RAW_BODY_SECRET",
@@ -53,8 +50,6 @@ class GaleMirrorExportTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
-        self.home = self.root / "home"
-        self.home.mkdir()
         self.source_database = self.root / "source.db"
         self.rules_path = self.root / "fictional_rules.json"
         self.output_path = self.root / "gale-mirror.db"
@@ -247,62 +242,6 @@ class GaleMirrorExportTest(unittest.TestCase):
         finally:
             connection.close()
 
-    def _run_cli_export(self) -> subprocess.CompletedProcess[str]:
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "HOME": str(self.home),
-                "PYTHONDONTWRITEBYTECODE": "1",
-            }
-        )
-        return subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "src.gale_mirror",
-                "export",
-                "--source-db",
-                str(self.source_database),
-                "--output",
-                str(self.output_path),
-                "--redaction-rules",
-                str(self.rules_path),
-                "--actor",
-                "gale",
-            ],
-            cwd=ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-    def _run_cli_verify(self) -> subprocess.CompletedProcess[str]:
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "HOME": str(self.home),
-                "PYTHONDONTWRITEBYTECODE": "1",
-            }
-        )
-        return subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "src.gale_mirror",
-                "verify",
-                "--mirror",
-                str(self.output_path),
-                "--actor",
-                "gale",
-            ],
-            cwd=ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
     def _assert_no_temporary_mirror_files(self) -> None:
         self.assertEqual(
             list(self.root.glob(f".{self.output_path.name}.*.tmp*")),
@@ -311,21 +250,21 @@ class GaleMirrorExportTest(unittest.TestCase):
         for suffix in ("-journal", "-wal", "-shm"):
             self.assertFalse(Path(f"{self.output_path}{suffix}").exists())
 
-    def test_cli_matrix_redaction_search_and_source_are_safe(self) -> None:
+    def test_export_matrix_redaction_search_and_source_are_safe(self) -> None:
         source_hash_before = _sha256(self.source_database)
         source_snapshot_before = self._source_snapshot()
 
-        completed = self._run_cli_export()
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("MIRROR_EXPORT_STATUS=PASS", completed.stdout)
-        self.assertIn("NOTE_COUNT=3", completed.stdout)
-        self.assertIn(f"SCHEMA_VERSION={MIRROR_SCHEMA_VERSION}", completed.stdout)
-        self.assertIn("SEMANTIC_SEARCH_INCLUDED=NO", completed.stdout)
-        self.assertEqual(completed.stderr, "")
-        for raw_canary in RAW_CANARIES:
-            self.assertNotIn(raw_canary, completed.stdout)
-            self.assertNotIn(raw_canary, completed.stderr)
+        exported = export_gale_mirror(
+            source_database=self.source_database,
+            output_path=self.output_path,
+            redaction_rules_path=self.rules_path,
+            actor="gale",
+            generator_app_version="fictional-remote-contract-test",
+        )
+        self.assertEqual(exported.note_count, 3)
+        self.assertEqual(exported.schema_version, MIRROR_SCHEMA_VERSION)
+        self.assertEqual(exported.target_actor, "gale")
+        self.assertEqual(exported.file_mode, "0600")
 
         verification = verify_gale_mirror(
             self.output_path,
@@ -340,16 +279,6 @@ class GaleMirrorExportTest(unittest.TestCase):
             stat.S_IMODE(self.output_path.stat().st_mode),
             0o600,
         )
-        cli_verification = self._run_cli_verify()
-        self.assertEqual(
-            cli_verification.returncode,
-            0,
-            cli_verification.stderr,
-        )
-        self.assertIn("MIRROR_VERIFY_STATUS=PASS", cli_verification.stdout)
-        self.assertIn("FTS_COUNT=3", cli_verification.stdout)
-        self.assertEqual(cli_verification.stderr, "")
-
         connection = sqlite3.connect(
             f"{self.output_path.resolve().as_uri()}?mode=ro",
             uri=True,

@@ -19,24 +19,20 @@ an acknowledgement changes `delivered` to `acknowledged`. Both delivered and
 queued records are eligible for another export until acknowledgement. No
 transport operation deletes a row.
 
-## Manual Mac pull
+## Manual R2 Mac pull
 
 The command is intentionally one-shot:
 
 ```bash
-S_NOTES_DATA_ROOT=/private/tmp/snotes-r1b-example \
-NO_PROXY=127.0.0.1,localhost \
-.venv/bin/python -m src.gale_submission_pull status
-
-S_NOTES_DATA_ROOT=/private/tmp/snotes-r1b-example \
-NO_PROXY=127.0.0.1,localhost \
-.venv/bin/python -m src.gale_submission_pull pull
+.venv/bin/python gale_production_pull_helper.py \
+  --mode staging \
+  --data-root /private/tmp/snotes-r1b-example
 ```
 
-The command rejects an absent override, any root outside `/private/tmp`, a
-symlink, and a root whose final component does not start with `snotes-r1b-`.
-It uses a short `ssh oracle-a1` command, captures JSON without printing note
-content, commits the local pending receipt, sends acknowledgement, and exits.
+The command uses the current R2 Gale composition and the fixed staging outbox
+transport. The explicit data root must remain isolated from the formal S-notes
+root. It captures the remote payload without printing note content, commits the
+local pending receipt, sends acknowledgement, and exits.
 
 ## Backup boundary for a later production task
 
