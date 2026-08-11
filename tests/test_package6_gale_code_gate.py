@@ -474,16 +474,21 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             clock=lambda: now[0],
         )
         control = GaleControlService(
-            publish, GalePullService(outbox, self.receipts, self.audit), settings
+            publish,
+            GalePullService(outbox, self.receipts, self.audit),
+            settings,
+            clock=lambda: now[0],
         )
         self.assertFalse(control.auto_publish_enabled())
         self.assertTrue(control.auto_pull_enabled())
         control.set_auto_publish_enabled(True)
         self.assertEqual(run_one_shot(control, scheduled=True), 0)
+        self.assertTrue(control.last_completed_pull_at())
         self.assertNotIn("upload", [call[0] for call in publish_transport.calls])
         now[0] += 15 * 60
         self.assertEqual(run_one_shot(control, scheduled=True), 0)
         self.assertIn("upload", [call[0] for call in publish_transport.calls])
+        self.assertTrue(control.last_successful_publish_at())
         plist = desired_launch_agent(self.root / "bin" / "snotes-gale-production-pull")
         self.assertTrue(plist["RunAtLoad"])
         self.assertEqual(plist["StartInterval"], LAUNCH_AGENT_INTERVAL_SECONDS)
@@ -493,6 +498,29 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             destination, self.root / "bin" / "snotes-gale-production-pull"
         )
         self.assertTrue(destination.is_file())
+
+    def test_continuous_changes_keep_thirty_minute_publish_bound(self) -> None:
+        settings = JsonGaleRuntimeSettings(
+            self.root / "config" / "continuous-runtime.json"
+        )
+        now = [1_000.0]
+        service = GalePublishService(
+            self.mirror,
+            FakePublishTransport(),
+            self.audit,
+            mirror_path=self.root / "continuous" / "gale-mirror.db",
+            settings=settings,
+            clock=lambda: now[0],
+        )
+        self.assertFalse(service._automatic_due("1" * 64))
+        for digest in ("2" * 64, "3" * 64):
+            now[0] += 10 * 60
+            self.assertFalse(service._automatic_due(digest))
+        now[0] += 10 * 60
+        self.assertTrue(service._automatic_due("4" * 64))
+        self.assertEqual(
+            settings.get_text("gale/pending_first_at"), "1000.0"
+        )
 
     def test_headless_composition_runs_without_gui_or_live_transport(self) -> None:
         outbox = FakeOutboxTransport(())

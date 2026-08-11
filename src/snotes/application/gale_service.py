@@ -8,6 +8,7 @@ import hashlib
 import json
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.snotes.application.ai_audit_service import AiAuditService
@@ -238,6 +239,11 @@ class GalePublishService:
                 "gale/pending_last_at", "gale/retry_not_before",
             ):
                 self._settings.set_text(key, "")
+            if result.status == "success":
+                self._settings.set_text(
+                    "gale/last_successful_publish_at",
+                    _utc_timestamp(self._clock()),
+                )
         elif result.status == "failed" and mode == "automatic" and self._settings:
             self._settings.set_text(
                 "gale/retry_not_before", str(self._clock() + 5 * 60)
@@ -280,9 +286,9 @@ class GalePublishService:
         pending = self._settings.get_text("gale/pending_hash")
         if pending != sha256:
             self._settings.set_text("gale/pending_hash", sha256)
-            self._settings.set_text("gale/pending_first_at", str(now))
+            if not pending:
+                self._settings.set_text("gale/pending_first_at", str(now))
             self._settings.set_text("gale/pending_last_at", str(now))
-            return False
         try:
             first = float(self._settings.get_text("gale/pending_first_at"))
             last = float(self._settings.get_text("gale/pending_last_at"))
@@ -425,22 +431,37 @@ class GaleControlService:
 
     AUTO_PUBLISH_KEY = "gale/auto_publish_enabled"
     AUTO_PULL_KEY = "gale/auto_pull_enabled"
+    LAST_PUBLISH_AT_KEY = "gale/last_successful_publish_at"
+    LAST_PULL_AT_KEY = "gale/last_completed_pull_at"
 
     def __init__(
         self,
         publish: GalePublishService,
         pull: GalePullService,
         settings: GaleRuntimeSettings,
+        *,
+        clock=time.time,
     ) -> None:
         self._publish = publish
         self._pull = pull
         self._settings = settings
+        self._clock = clock
 
     def manual_update(self) -> GalePublishResult:
         return self._publish.publish_manual()
 
     def check_submissions_now(self) -> GalePullResult:
-        return self._pull.pull_once()
+        result = self._pull.pull_once()
+        self._settings.set_text(
+            self.LAST_PULL_AT_KEY, _utc_timestamp(self._clock())
+        )
+        return result
+
+    def last_successful_publish_at(self) -> str:
+        return self._settings.get_text(self.LAST_PUBLISH_AT_KEY)
+
+    def last_completed_pull_at(self) -> str:
+        return self._settings.get_text(self.LAST_PULL_AT_KEY)
 
     def auto_publish_enabled(self) -> bool:
         return self._settings.get_bool(self.AUTO_PUBLISH_KEY, False)
@@ -455,10 +476,18 @@ class GaleControlService:
         self._settings.set_bool(self.AUTO_PULL_KEY, bool(enabled))
 
     def scheduled_once(self) -> tuple[GalePullResult | None, GalePublishResult | None]:
-        pull_result = self._pull.pull_once() if self.auto_pull_enabled() else None
+        pull_result = (
+            self.check_submissions_now() if self.auto_pull_enabled() else None
+        )
         publish_result = (
             self._publish.publish_automatic()
             if self.auto_publish_enabled()
             else None
         )
         return pull_result, publish_result
+
+
+def _utc_timestamp(value: float) -> str:
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat(
+        timespec="seconds"
+    )

@@ -46,6 +46,7 @@ CONFLICT_MESSAGE = "这篇笔记已被其他来源修改，请重新加载后处
 class MainWindow(QMainWindow):
     AUTOSAVE_DELAY_MS = 1000
     AUTOSAVE_RETRY_DELAYS_MS = (3000, 10000, 30000)
+    EXTERNAL_RECEIPT_REFRESH_INTERVAL_MS = 5_000
 
     def __init__(
         self,
@@ -108,6 +109,13 @@ class MainWindow(QMainWindow):
         self.save_timer.setSingleShot(True)
         self.save_timer.setInterval(self.AUTOSAVE_DELAY_MS)
         self.save_timer.timeout.connect(self.save_current_note)
+        self.receipt_refresh_timer = QTimer(self)
+        self.receipt_refresh_timer.setInterval(
+            self.EXTERNAL_RECEIPT_REFRESH_INTERVAL_MS
+        )
+        self.receipt_refresh_timer.timeout.connect(
+            self.refresh_external_receipts
+        )
         self._connect_ui()
 
         self.current_theme_name = load_saved_theme(self.theme_settings_path)
@@ -209,6 +217,18 @@ class MainWindow(QMainWindow):
             else 0
         )
         self.shell.sidebar.set_ai_center_pending_count(pending_count)
+
+    def refresh_external_receipts(self) -> None:
+        """Refresh receipt UI after a headless helper writes the shared inbox."""
+        self.refresh_ai_center_badge()
+        dialog = self.ai_center_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.receipt_view.refresh_receipts()
+            dialog.refresh_gale_runtime_status()
+        except RuntimeError:
+            self.ai_center_dialog = None
 
     def refresh_note_list(self, selected_note_id: int | None = None) -> None:
         if selected_note_id is None and self.current_note is not None:
@@ -532,7 +552,7 @@ class MainWindow(QMainWindow):
 
     def delete_notes(self, note_ids) -> None:
         ids = list(dict.fromkeys(int(value) for value in note_ids))
-        if not ids or not self.confirm("移入回收站", f"确定将 {len(ids)} 篇笔记移入回收站吗？"):
+        if not ids:
             return
         if not self.force_save_current_note():
             return
@@ -696,5 +716,14 @@ class MainWindow(QMainWindow):
     def confirm(self, title: str, text: str) -> bool:
         return QMessageBox.question(self, title, text, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self.receipt_inbox_service is not None:
+            self.receipt_refresh_timer.start()
+
     def closeEvent(self, event) -> None:
-        event.accept() if self.force_save_current_note() else event.ignore()
+        if self.force_save_current_note():
+            self.receipt_refresh_timer.stop()
+            event.accept()
+        else:
+            event.ignore()

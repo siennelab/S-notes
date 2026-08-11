@@ -28,14 +28,24 @@ class FakeGaleControl:
         self.pull_calls = 0
         self.auto_publish = False
         self.auto_pull = True
+        self.publish_at = ""
+        self.pull_at = ""
 
     def manual_update(self):
         self.manual_calls += 1
+        self.publish_at = "2026-08-10T12:34:00+00:00"
         return object()
 
     def check_submissions_now(self):
         self.pull_calls += 1
+        self.pull_at = "2026-08-10T12:35:00+00:00"
         return object()
+
+    def last_successful_publish_at(self):
+        return self.publish_at
+
+    def last_completed_pull_at(self):
+        return self.pull_at
 
     def auto_publish_enabled(self):
         return self.auto_publish
@@ -92,6 +102,18 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.fail("Gale UI worker did not finish")
 
     def test_controls_only_call_application_owner(self) -> None:
+        self.assertEqual(self.dialog.gale_publish_button.text(), "立即更新镜像")
+        self.assertEqual(self.dialog.gale_last_publish.text(), "上次发布：尚未发布")
+        self.assertEqual(self.dialog.gale_last_pull.text(), "上次检查：尚未检查")
+        self.assertIn("15 分钟", self.dialog.findChild(
+            type(self.dialog.gale_status), "galeAutoPublishHelp"
+        ).text())
+        self.assertIn("30 分钟", self.dialog.findChild(
+            type(self.dialog.gale_status), "galeAutoPublishHelp"
+        ).text())
+        self.assertIn("每 5 分钟", self.dialog.findChild(
+            type(self.dialog.gale_status), "galeAutoPullHelp"
+        ).text())
         self.assertFalse(self.dialog.gale_auto_publish.isChecked())
         self.assertTrue(self.dialog.gale_auto_pull.isChecked())
         self.dialog.gale_auto_publish.setChecked(True)
@@ -102,9 +124,17 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.dialog.gale_publish_button.click()
         self._wait_for(lambda: self.gale.manual_calls == 1)
         self._wait_for(lambda: not self.dialog._gale_threads)
+        self.assertRegex(
+            self.dialog.gale_last_publish.text(),
+            r"^上次发布：\d{4}-\d{2}-\d{2} \d{2}:\d{2}$",
+        )
         self.dialog.gale_pull_button.click()
         self._wait_for(lambda: self.gale.pull_calls == 1)
         self._wait_for(lambda: not self.dialog._gale_threads)
+        self.assertRegex(
+            self.dialog.gale_last_pull.text(),
+            r"^上次检查：\d{4}-\d{2}-\d{2} \d{2}:\d{2}$",
+        )
         self.assertEqual(self.dialog.gale_status.text(), "操作完成")
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from collections.abc import Sequence
 from dataclasses import replace
 
@@ -38,6 +39,18 @@ from src.snotes.domain.ai_receipts import AiReceiptInboxItem
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.theme import repolish
+
+
+def _display_timestamp(value: str, empty_text: str) -> str:
+    if not value:
+        return empty_text
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return empty_text
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed.strftime("%Y-%m-%d %H:%M")
 
 
 AUDIT_OPERATION_LABELS = {
@@ -594,6 +607,7 @@ class AiCenterDialog(QWidget):
         if self.gale is not None:
             self.gale_page = self._build_gale_page()
             layout.addWidget(self.gale_page)
+            self.refresh_gale_runtime_status()
         footer = QHBoxLayout()
         footer.addStretch(1)
         self.close_button = QPushButton("关闭")
@@ -611,17 +625,36 @@ class AiCenterDialog(QWidget):
         self.gale_status = QLabel("Gale 后台接线未启用" if self.gale is None else "就绪")
         self.gale_status.setObjectName("galeStatusLabel")
         layout.addWidget(self.gale_status)
-        actions = QHBoxLayout()
-        self.gale_publish_button = QPushButton("立即更新")
+        publish_row = QHBoxLayout()
+        self.gale_publish_button = QPushButton("立即更新镜像")
+        self.gale_last_publish = QLabel("上次发布：尚未发布")
+        self.gale_last_publish.setObjectName("galeLastPublishLabel")
+        publish_row.addWidget(self.gale_publish_button)
+        publish_row.addWidget(self.gale_last_publish)
+        publish_row.addStretch(1)
+        layout.addLayout(publish_row)
+        pull_row = QHBoxLayout()
         self.gale_pull_button = QPushButton("立即检查投稿")
-        actions.addWidget(self.gale_publish_button)
-        actions.addWidget(self.gale_pull_button)
-        actions.addStretch(1)
-        layout.addLayout(actions)
+        self.gale_last_pull = QLabel("上次检查：尚未检查")
+        self.gale_last_pull.setObjectName("galeLastPullLabel")
+        pull_row.addWidget(self.gale_pull_button)
+        pull_row.addWidget(self.gale_last_pull)
+        pull_row.addStretch(1)
+        layout.addLayout(pull_row)
         self.gale_auto_publish = QCheckBox("自动更新 Gale 安全镜像")
         self.gale_auto_pull = QCheckBox("自动接收 Gale 投稿")
         layout.addWidget(self.gale_auto_publish)
+        auto_publish_help = QLabel(
+            "内容停止变化约 15 分钟后发布；持续变化时最长约 30 分钟"
+        )
+        auto_publish_help.setObjectName("galeAutoPublishHelp")
+        layout.addWidget(auto_publish_help)
         layout.addWidget(self.gale_auto_pull)
+        auto_pull_help = QLabel(
+            "后台每 5 分钟检查；登录时启动，睡眠期间暂停并在唤醒后按系统计划继续"
+        )
+        auto_pull_help.setObjectName("galeAutoPullHelp")
+        layout.addWidget(auto_pull_help)
         layout.addStretch(1)
         enabled = self.gale is not None
         for widget in (
@@ -653,6 +686,22 @@ class AiCenterDialog(QWidget):
             )
         return page
 
+    def refresh_gale_runtime_status(self) -> None:
+        if self.gale is None or self.gale_page is None:
+            return
+        self.gale_last_publish.setText(
+            "上次发布："
+            + _display_timestamp(
+                self.gale.last_successful_publish_at(), "尚未发布"
+            )
+        )
+        self.gale_last_pull.setText(
+            "上次检查："
+            + _display_timestamp(
+                self.gale.last_completed_pull_at(), "尚未检查"
+            )
+        )
+
     def _start_gale_action(
         self,
         action,
@@ -676,6 +725,7 @@ class AiCenterDialog(QWidget):
             self.gale_pull_button.setEnabled(True)
             if error is None and refresh_receipts:
                 self.receipt_view.refresh_receipts()
+            self.refresh_gale_runtime_status()
 
         worker.finished.connect(finished)
         worker.finished.connect(thread.quit)
