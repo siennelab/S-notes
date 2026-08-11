@@ -1,11 +1,18 @@
 # S-notes Local MCP Server Runbook
 
-Task 13B provides a headless local MCP Server over `stdio`. It wraps the single
-AI safety service from Task 13A and never exposes SQLite, shell, filesystem,
-deletion, full-body replacement, visibility changes, or target changes as MCP
-tools.
+The current R2 local MCP server is `src/snotes/transport/mcp/server.py` and its
+supported stdio launcher is `scripts/run_snotes_mcp_stdio.sh`. Validate it with
+the isolated Package 5 protocol tests:
 
-## Two Separate Python Environments
+```bash
+.venv/bin/python -m unittest tests.test_package5_local_mcp_protocol -v
+```
+
+The Task 13A/13B material retained below records the historical R1 server. Its
+retired doctor, adapter, and fixture commands are not current operating
+instructions.
+
+## Historical R1: Two Separate Python Environments
 
 - Desktop App: repository `.venv`, Python 3.13.x, PySide6 6.10.3.
 - MCP Server: `/Users/s/.venvs/snotes-mcp`, Python 3.13.x,
@@ -20,7 +27,7 @@ dependency is recorded in `requirements-mcp.txt`; do not add it to the desktop
 Do not use `mcp install`. Claude Desktop is not required and must not be
 installed or configured for this task.
 
-## Fixed Actor Configuration
+## Historical R1: Fixed Actor Configuration
 
 The ChatGPT Business connection identity is Gale's stable target ID: `gale`.
 The display name is not a permission key.
@@ -45,7 +52,7 @@ Do not commit the local config. Although the target ID is not an API secret,
 tools do not return it. Future Tunnel IDs, Runtime API keys, and other secrets
 must not be placed in this file or the repository.
 
-## Database and Redaction Paths
+## Historical R1: Database and Redaction Paths
 
 Normal startup resolves the same user data root as the desktop App:
 
@@ -69,7 +76,10 @@ launches:
 Do not let a model choose these values. Do not point automated tests at the
 real database.
 
-## Doctor
+## Historical R1: Doctor
+
+This retired command is retained only as a Task 13B record. Do not use it for
+the current R2 MCP; run the Package 5 test command above instead.
 
 Run the read-only startup check before the formal server:
 
@@ -92,38 +102,26 @@ human JSON and is separate from server mode, so it cannot pollute MCP stdout.
 ```
 
 The script resolves the repository root from its own location and defaults to
-`/Users/s/.venvs/snotes-mcp/bin/python`. Server stdout is reserved exclusively
+the repository `.venv/bin/python`. Server stdout is reserved exclusively
 for MCP JSON-RPC frames. Human-safe errors and SDK logs go to stderr. Stop the
 server with Ctrl+C or SIGTERM; normal MCP client shutdown also closes it.
 
 The server opens no public listener, creates no fixed localhost port, starts no
 GUI, makes no network request, and does not start a Tunnel.
 
-## Automated Verification with Temporary Data
+## Current R2 Automated Verification with Temporary Data
 
-Desktop and Task 13A/13B service tests use the desktop environment:
-
-```bash
-temp_home="$(mktemp -d /private/tmp/snotes-desktop-tests.XXXXXX)"
-HOME="$temp_home" .venv/bin/python -m unittest discover -s tests -v
-```
-
-Protocol tests use only the dedicated MCP environment. They create temporary
-databases and launch the real server through the official SDK stdio client:
+The Package 5 protocol test creates temporary data and launches the current R2
+server through the supported stdio script:
 
 ```bash
-temp_home="$(mktemp -d /private/tmp/snotes-mcp-tests.XXXXXX)"
-HOME="$temp_home" /Users/s/.venvs/snotes-mcp/bin/python \
-  -m unittest discover -s tests_mcp -p 'test_*.py' -v
+.venv/bin/python -m unittest tests.test_package5_local_mcp_protocol -v
 ```
 
-These cover initialization, exact tool registration, tool schemas, protocol
-calls, safe shutdown, invisible-note attacks, redaction side channels,
-pagination, writes, proposals, idempotency, conflicts, history, call logs,
-version-credential round trips, concurrent duplicates, locked databases,
-rollback, foreign keys, and stdout pollution.
+## Historical R1: MCP Inspector Acceptance
 
-## MCP Inspector Acceptance
+This section records the completed Task 13B acceptance. Its retired fixture
+module and historical checkout path are not current operating commands.
 
 Create a non-private disposable fixture first:
 
