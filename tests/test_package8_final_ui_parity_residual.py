@@ -127,15 +127,13 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
         self.assertEqual(after.updated_at, before.updated_at)
         self.assertEqual(after.content_html, before.content_html)
 
-    def test_restored_note_is_editable_when_reopened_normally(self) -> None:
+    def test_single_restore_returns_preview_to_editable_note(self) -> None:
         note = self.window.note_service.create_note()
         self.window.delete_notes([note.id])
         self.window.show_trash()
         self.assertTrue(self.window.load_deleted_note(note.id))
 
         self.window.restore_trash_items([note.id], [])
-        self.window.show_directory()
-        self.assertTrue(self.window.load_note(note.id))
 
         restored = self.window.note_service.get_note(note.id)
         self.assertIsNotNone(restored)

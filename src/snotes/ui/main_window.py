@@ -636,7 +636,13 @@ class MainWindow(QMainWindow):
         except Exception as error:
             QMessageBox.warning(self, "恢复失败", str(error))
             return
-        self.show_trash()
+        restored_note_ids = tuple(result.note_ids)
+        if len(restored_note_ids) == 1 and not result.directory_ids:
+            self.current_mode = "directory"
+            self.load_note(restored_note_ids[0])
+            self.refresh_note_list(restored_note_ids[0])
+        else:
+            self.show_trash()
         self.status_label.setText(f"已恢复 {result.processed_count} 个项目")
 
     def permanently_delete_trash_items(self, note_ids, directory_ids) -> None:
