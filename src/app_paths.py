@@ -82,17 +82,21 @@ def default_data_root(
     environ: Mapping[str, str] | None = None,
 ) -> Path:
     environment = os.environ if environ is None else environ
-    if DATA_ROOT_ENV_NAME in environment:
-        return _validated_override_root(environment[DATA_ROOT_ENV_NAME])
     user_home = Path.home() if home is None else Path(home)
-    return user_home / "Library" / "Application Support" / APP_NAME
+    formal_root = user_home / "Library" / "Application Support" / APP_NAME
+    if DATA_ROOT_ENV_NAME in environment:
+        return _validated_override_root(
+            environment[DATA_ROOT_ENV_NAME],
+            formal_root=formal_root,
+        )
+    return formal_root
 
 
 def app_paths(data_root: Path | None = None) -> AppPaths:
     return AppPaths(default_data_root() if data_root is None else Path(data_root))
 
 
-def _validated_override_root(raw_value: str) -> Path:
+def _validated_override_root(raw_value: str, *, formal_root: Path) -> Path:
     value = str(raw_value).strip()
     if not value:
         raise DataRootError(f"{DATA_ROOT_ENV_NAME} is set but empty")
@@ -101,6 +105,11 @@ def _validated_override_root(raw_value: str) -> Path:
         raise DataRootError(f"{DATA_ROOT_ENV_NAME} must be an absolute path")
     if root.is_symlink():
         raise DataRootError(f"{DATA_ROOT_ENV_NAME} must not be a symbolic link")
+
+    if root.resolve() == Path(formal_root).resolve():
+        raise DataRootError(
+            f"{DATA_ROOT_ENV_NAME} must not point to the formal S-notes data root"
+        )
 
     existed = root.exists()
     try:

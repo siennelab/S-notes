@@ -42,6 +42,15 @@ class AppPathsTest(unittest.TestCase):
             fake_home / "Library" / "Application Support" / APP_NAME,
         )
 
+    def test_explicit_override_cannot_name_canonical_formal_root(self) -> None:
+        fake_home = Path("/Users/example")
+        formal_root = default_data_root(fake_home, environ={})
+        with self.assertRaisesRegex(DataRootError, "formal S-notes data root"):
+            default_data_root(
+                fake_home,
+                environ={DATA_ROOT_ENV_NAME: str(formal_root)},
+            )
+
     def test_current_working_directory_does_not_change_default_path(self) -> None:
         original_cwd = Path.cwd()
         expected = default_data_root(environ={})

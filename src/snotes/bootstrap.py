@@ -38,25 +38,14 @@ from src.snotes.ui.main_window import MainWindow
 
 DATA_ROOT_ENV = "S_NOTES_DATA_ROOT"
 CANDIDATE_LABEL_ENV = "S_NOTES_CANDIDATE_LABEL"
-FORMAL_DATA_ROOT = Path("/Users/s/Library/Application Support/S-notes")
 
 
 def resolve_rebuild_data_root(data_root: Path | None = None) -> Path:
-    supplied = data_root if data_root is not None else os.environ.get(DATA_ROOT_ENV)
-    if not supplied:
-        raise RuntimeError(
-            "S-lumen rebuild requires an explicit isolated S_NOTES_DATA_ROOT"
-        )
-    resolved = Path(supplied).expanduser().resolve()
-    if resolved == FORMAL_DATA_ROOT.resolve():
-        raise RuntimeError("S-lumen rebuild refuses the formal S-notes data root")
-    try:
-        resolved.mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        raise RuntimeError(
-            f"{DATA_ROOT_ENV} is not creatable and writable"
-        ) from error
-    return resolved
+    from src.app_paths import default_data_root
+
+    if data_root is None:
+        return default_data_root()
+    return default_data_root(environ={DATA_ROOT_ENV: str(data_root)})
 
 
 def build_application(
@@ -64,7 +53,7 @@ def build_application(
     *,
     data_root: Path | None = None,
 ) -> tuple[QApplication, MainWindow]:
-    """Compose the Package 2 runtime against an explicit isolated data root."""
+    """Compose the application against the canonical or isolated data root."""
     application = QApplication.instance()
     if application is None:
         application = QApplication(list(argv) if argv is not None else sys.argv)

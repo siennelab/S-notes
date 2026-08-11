@@ -35,7 +35,6 @@ from src.snotes.transport.gale.settings import JsonGaleRuntimeSettings
 
 
 DATA_ROOT_ENV = "S_NOTES_DATA_ROOT"
-FORMAL_DATA_ROOT = Path("/Users/s/Library/Application Support/S-notes")
 
 
 def build_gale_control_service(
@@ -110,13 +109,13 @@ def compose_gale_control(
 
 
 def resolve_gale_data_root(data_root: Path | None) -> Path:
-    supplied = data_root if data_root is not None else os.environ.get(DATA_ROOT_ENV)
-    if supplied is not None:
-        resolved = Path(supplied).expanduser().resolve()
-        if resolved == FORMAL_DATA_ROOT.resolve():
-            raise RuntimeError("isolated Gale run refuses the formal data root")
-        resolved.mkdir(parents=True, exist_ok=True)
-        return resolved
-    if not (FORMAL_DATA_ROOT / "s_notes.db").is_file():
+    from src.app_paths import default_data_root
+
+    if data_root is not None:
+        return default_data_root(environ={DATA_ROOT_ENV: str(data_root)})
+    if DATA_ROOT_ENV in os.environ:
+        return default_data_root()
+    formal_root = default_data_root(environ={})
+    if not (formal_root / "s_notes.db").is_file():
         raise RuntimeError("formal S-notes database is unavailable")
-    return FORMAL_DATA_ROOT
+    return formal_root

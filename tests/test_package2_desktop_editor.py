@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QFont, QPalette, QTextCursor, QTextFormat
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
 
+from src.app_paths import default_data_root
 from src.snotes.application.note_service import NoteService
 from src.snotes.bootstrap import resolve_rebuild_data_root
 from src.snotes.domain.models import NoteLocation
@@ -414,15 +415,18 @@ class Package2DesktopEditorTests(unittest.TestCase):
                     menu.close()
                     menu.deleteLater()
 
-    def test_rebuild_data_root_must_be_explicit_and_nonformal(self) -> None:
+    def test_rebuild_data_root_defaults_to_formal_and_override_is_nonformal(
+        self,
+    ) -> None:
         previous = os.environ.pop("S_NOTES_DATA_ROOT", None)
         try:
-            with self.assertRaisesRegex(RuntimeError, "explicit isolated"):
-                resolve_rebuild_data_root()
-            with self.assertRaisesRegex(RuntimeError, "refuses the formal"):
-                resolve_rebuild_data_root(
-                    Path("/Users/s/Library/Application Support/S-notes")
-                )
+            formal_root = default_data_root(environ={})
+            self.assertEqual(resolve_rebuild_data_root(), formal_root)
+            with tempfile.TemporaryDirectory() as temporary_directory:
+                isolated = Path(temporary_directory) / "candidate"
+                self.assertEqual(resolve_rebuild_data_root(isolated), isolated)
+            with self.assertRaisesRegex(RuntimeError, "formal S-notes data root"):
+                resolve_rebuild_data_root(formal_root)
         finally:
             if previous is not None:
                 os.environ["S_NOTES_DATA_ROOT"] = previous

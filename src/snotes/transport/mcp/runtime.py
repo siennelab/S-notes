@@ -19,12 +19,24 @@ class RuntimeConfig:
 
 
 def load_runtime_config() -> RuntimeConfig:
-    data_root_text = (
-        os.environ.get("S_NOTES_DATA_ROOT", "").strip()
-        or os.environ.get("SNOTES_MCP_DATA_ROOT", "").strip()
+    from src.app_paths import (
+        DATA_ROOT_ENV_NAME,
+        DataRootError,
+        default_data_root,
     )
-    if not data_root_text:
-        raise RuntimeConfigurationError("data_root_missing")
+
+    legacy_data_root = os.environ.get("SNOTES_MCP_DATA_ROOT", "").strip()
+    try:
+        if DATA_ROOT_ENV_NAME in os.environ:
+            data_root = default_data_root()
+        elif legacy_data_root:
+            data_root = default_data_root(
+                environ={DATA_ROOT_ENV_NAME: legacy_data_root}
+            )
+        else:
+            data_root = default_data_root(environ={})
+    except DataRootError as error:
+        raise RuntimeConfigurationError(str(error)) from error
     read_only_text = os.environ.get("SNOTES_MCP_READ_ONLY", "0").strip().lower()
     if read_only_text not in {"0", "1", "false", "true"}:
         raise RuntimeConfigurationError("invalid_read_only_setting")
@@ -37,7 +49,7 @@ def load_runtime_config() -> RuntimeConfig:
     if not actor_target_id:
         raise RuntimeConfigurationError("actor_target_id_missing")
     return RuntimeConfig(
-        data_root=Path(data_root_text).expanduser(),
+        data_root=data_root,
         actor_target_id=actor_target_id,
         read_only=read_only,
     )
