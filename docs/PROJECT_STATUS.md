@@ -3,6 +3,58 @@
 This is the current repository handoff for S-notes. Frozen R1 information is
 retained below; active R2 package closeouts are recorded first.
 
+## 2026-08-12 S-notes / S-lumen Directory Consolidation
+
+The two-directory period is formally closed. `/Users/s/Documents/项目/S-notes`
+originally held the repository's common Git directory, while
+`/Users/s/Documents/项目/S-lumen` was a linked worktree created for R2
+construction. During that construction, active R2 `main`, the production
+source, and runtime temporarily lived under S-lumen. This produced the
+confusing state in which the product was named S-notes but its active source
+was located in S-lumen.
+
+### Old diagnostic branch audit
+
+The retained branch `task-oauth-token-diagnostic-probe` has one historical
+unique commit, `7a460736af2e384cca1c7ac5f013349ab4835655`. It was a temporary
+OAuth `/token` diagnostic probe whose purpose was superseded by the later
+formal implementation. Its residual uncommitted modification/deletion state
+represented removal of that probe rather than production work worth carrying
+forward.
+
+- `CLASSIFICATION=OBSOLETE`
+- `PRESERVATION_NEEDED=NO`
+- No residual probe change was merged, cherry-picked, committed, or stashed
+  during this consolidation.
+- The branch and Git history remain available; `r1-safety-baseline` and the R1
+  history also remain available without a separate physical R1 worktree.
+
+### Final production layout and acceptance
+
+`/Users/s/Documents/项目/S-notes` is now the only formal R2 source and Git
+worktree. The former S-lumen linked worktree was detached at
+`547a6589b83f12ee37f9cacb61fcd120ba51acc3`, verified clean and unused by the
+production paths, then removed with `git worktree remove` without force.
+
+- Formal App: `/Users/s/Documents/项目/S-notes/dist/S-notes.app`
+- Dock S-notes item: `/Users/s/Documents/项目/S-notes/dist/S-notes.app`
+- OpenClaw S-notes MCP:
+  `/Users/s/Documents/项目/S-notes/scripts/run_snotes_mcp_stdio.sh`
+- Gateway restart: `PASS`
+- Gale background helper: healthy and independent under Application Support
+- GUI Human Gate: `PASS`
+- Gale Human Gate: `PASS`
+- Clawde read Human Gate: `PASS`
+- Final path Human Gate, including Dock relaunch: `PASS`
+- S-lumen linked worktree: Git-native removed
+
+The current Queue remains the three items recorded below: call-log retention
+and archival policy; Gale / G submission metadata support for AI visibility,
+AI targets, real main/subcategory selection, and tags; and the still-unrecalled
+S-notes follow-up, which must remain blank until S remembers it.
+`Reminder=NOT_STARTED`; none of these Queue items is implemented by this
+consolidation.
+
 ## 2026-08-12 Clawde Writes and AI Center UI Hotfix Closeout
 
 ### Clawde S-notes confirmed writes
