@@ -544,11 +544,12 @@ class ReceiptInboxView(QWidget):
 
 
 class _GaleWorker(QObject):
-    finished = Signal(object, object)
+    finished = Signal(object, object, bool)
 
-    def __init__(self, action) -> None:
+    def __init__(self, action, *, refresh_receipts: bool) -> None:
         super().__init__()
         self.action = action
+        self.refresh_receipts = refresh_receipts
 
     @Slot()
     def run(self) -> None:
@@ -556,10 +557,12 @@ class _GaleWorker(QObject):
             result = self.action()
         except Exception as error:
             self.finished.emit(
-                None, str(getattr(error, "code", "unexpected_failure"))
+                None,
+                str(getattr(error, "code", "unexpected_failure")),
+                self.refresh_receipts,
             )
             return
-        self.finished.emit(result, None)
+        self.finished.emit(result, None, self.refresh_receipts)
 
 
 class AiCenterDialog(QWidget):
@@ -726,21 +729,14 @@ class AiCenterDialog(QWidget):
         self.gale_publish_button.setEnabled(False)
         self.gale_pull_button.setEnabled(False)
         thread = QThread(self)
-        worker = _GaleWorker(action)
+        worker = _GaleWorker(
+            action,
+            refresh_receipts=refresh_receipts,
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
 
-        def finished(result, error) -> None:
-            self.gale_status.setText(
-                "操作完成" if error is None else f"操作失败：{error}"
-            )
-            self.gale_publish_button.setEnabled(True)
-            self.gale_pull_button.setEnabled(True)
-            if error is None and refresh_receipts:
-                self.receipt_view.refresh_receipts()
-            self.refresh_gale_runtime_status()
-
-        worker.finished.connect(finished)
+        worker.finished.connect(self._gale_action_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -755,6 +751,22 @@ class AiCenterDialog(QWidget):
         self._gale_threads.append(thread)
         self._gale_workers.append(worker)
         thread.start()
+
+    @Slot(object, object, bool)
+    def _gale_action_finished(
+        self,
+        _result,
+        error,
+        refresh_receipts: bool,
+    ) -> None:
+        self.gale_status.setText(
+            "操作完成" if error is None else f"操作失败：{error}"
+        )
+        self.gale_publish_button.setEnabled(True)
+        self.gale_pull_button.setEnabled(True)
+        if error is None and refresh_receipts:
+            self.receipt_view.refresh_receipts()
+        self.refresh_gale_runtime_status()
 
     def _build_log_page(self) -> QWidget:
         page = QWidget()
@@ -808,7 +820,7 @@ class AiCenterDialog(QWidget):
         self.log_table.verticalHeader().setVisible(False)
         self.log_table.horizontalHeader().setStretchLastSection(True)
         self.log_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeToContents
+            QHeaderView.Interactive
         )
         layout.addWidget(self.log_table, stretch=1)
         self.refresh_logs()
@@ -865,6 +877,7 @@ class AiCenterDialog(QWidget):
                     column,
                     QTableWidgetItem(str(value)),
                 )
+        self.log_table.resizeColumnsToContents()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.finished.emit(0)

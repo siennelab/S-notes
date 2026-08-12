@@ -3,6 +3,93 @@
 This is the current repository handoff for S-notes. Frozen R1 information is
 retained below; active R2 package closeouts are recorded first.
 
+## 2026-08-12 Clawde Writes and AI Center UI Hotfix Closeout
+
+### Clawde S-notes confirmed writes
+
+The Clawde write integration was formally sealed at commit
+`0936fe4d1f2c306025890f8d38650a39260e42a4`. The fixed actor is `clawbot`, and
+the Clawde MCP catalog contains exactly:
+
+- `search_notes`
+- `get_note`
+- `create_note`
+- `append_note`
+
+Both writes remain confirm-first. `create_note` creates an AI Center pending
+proposal and creates a formal note only after S accepts it. `append_note`
+creates an AI Center pending proposal and appends to the formal note only after
+S accepts it. Discarding either proposal does not modify a formal note. A stale
+append is rejected, remains pending, and never overwrites the newer formal
+note.
+
+S completed the formal WeChat Human Gate:
+
+- `CREATE=PASS`
+- `APPEND=PASS`
+- `NO_DIRECT_FORMAL_WRITE_BEFORE_ACCEPT=PASS`
+- `ORIGINAL_CONTENT_PRESERVED=PASS`
+- `NO_DUPLICATE_WRITE=PASS`
+
+### AI Center UI hotfix
+
+Two production UI regressions were repaired and formally accepted by S.
+
+1. The call-log page permanently froze with a large record set. The live
+   `ResizeToContents` header mode repeatedly measured whole columns while rows
+   were inserted on the main thread. The table now performs one column-width
+   calculation after the batch fill. S Human Gate: `PASS`.
+2. “立即检查投稿” first caused AI Center to disappear, and the first repair
+   still produced a visible disappear-and-return flash. The final cause was an
+   unconditional `_activate_host_window()` in the completion callback while
+   the host was already visible and active, triggering macOS parent/child
+   top-level window reordering. The redundant reactivation was removed;
+   worker completion still returns to the UI thread, and receipt/status refresh
+   plus Gale business behavior remain unchanged. S confirmed that the same AI
+   Center window stays visible throughout the check: `PASS`.
+
+### Follow-up Queue (not implemented by this hotfix)
+
+#### TODO 1 | Call-log size, retention, and archival policy
+
+The call log represents calls made through the formal S-notes interfaces/MCP;
+it is not a complete audit of every possible AI access to note data. A local
+tool such as Claude Code with filesystem access may read through other paths
+that this page cannot cover. Large volumes of routine `gale_pull` and
+`gale_publish` events currently have limited diagnostic value.
+
+Design this separately before implementation:
+
+- which events the page displays;
+- whether routine background events should be de-noised;
+- retention by time or count;
+- archive or deletion policy for old records;
+- which diagnostic or idempotency evidence must remain.
+
+No arbitrary limit such as 7 days, 30 days, 100 rows, or 500 rows is selected
+at this stage.
+
+#### TODO 2 | Gale / ChatGPT submission metadata capability
+
+The current Gale Production submission interface cannot fully provide AI
+visibility, AI targets, main category, subcategory, or reliable tag/category
+selection semantics. Gale submissions can therefore arrive in AI Center as AI
+invisible, with no AI target, or with category suggestions that do not exist in
+S-notes, requiring manual correction by S.
+
+A later independent design should bring the Gale/G submission experience at
+least to the current Clawde level: correct source actor, reasonable AI
+visibility and target defaults, selection from real existing main/subcategory
+directories, correct tag transfer, and S retaining final editing authority
+before acceptance. This status entry intentionally does not choose an API
+shape.
+
+#### TODO 3 | Unrecalled S-notes follow-up
+
+S mentioned another S-notes follow-up on 2026-08-12 but has not yet recalled
+the specific item. Add it when S remembers it; do not infer or generate a
+replacement task.
+
 ## R2 Package 3 Formal Closeout
 
 Package 3 ordinary-product parity is formally accepted from base

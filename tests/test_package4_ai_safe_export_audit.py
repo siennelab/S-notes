@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QHeaderView
 
 from src.snotes.bootstrap import build_application
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
@@ -391,6 +393,39 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
                 self.assertIn("#aiCallLogTable", style)
                 self.assertIn("#aiCallLogFilter", style)
                 self.assertIn("#aiCenterTabs QTabBar::tab:selected", style)
+
+    def test_large_call_log_switches_repeatedly_without_blocking_events(self) -> None:
+        for index in range(625):
+            self.window.ai_audit_service.record_event(
+                "clawbot",
+                "search",
+                request_id=f"fictional-call-log-{index:04d}",
+                status="success",
+            )
+        self.window.open_ai_center()
+        self.app.processEvents()
+        center = self.window.ai_center_dialog
+        header = center.log_table.horizontalHeader()
+        self.assertTrue(
+            all(
+                header.sectionResizeMode(column) != QHeaderView.ResizeToContents
+                for column in range(center.log_table.columnCount())
+            )
+        )
+
+        heartbeat = []
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        for _attempt in range(4):
+            center.tabs.setCurrentWidget(center.log_page)
+            self.app.processEvents()
+            self.assertEqual(center.log_table.rowCount(), 625)
+            center.tabs.setCurrentWidget(center.receipt_view)
+            self.app.processEvents()
+        QTest.qWait(20)
+
+        self.assertEqual(heartbeat, [True])
+        self.assertTrue(center.isVisible())
+        self.assertTrue(center.isEnabled())
 
 
 if __name__ == "__main__":

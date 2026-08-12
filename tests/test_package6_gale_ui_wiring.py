@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMainWindow
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
@@ -32,6 +33,9 @@ class FakeGaleControl:
         self.auto_pull = True
         self.publish_at = ""
         self.pull_at = ""
+        self.pull_started = threading.Event()
+        self.pull_release = threading.Event()
+        self.pull_release.set()
 
     def manual_update(self):
         self.manual_calls += 1
@@ -39,6 +43,8 @@ class FakeGaleControl:
         return object()
 
     def check_submissions_now(self):
+        self.pull_started.set()
+        self.pull_release.wait(timeout=2)
         self.pull_calls += 1
         self.pull_at = "2026-08-10T12:35:00+00:00"
         return object()
@@ -60,6 +66,38 @@ class FakeGaleControl:
 
     def set_auto_pull_enabled(self, value):
         self.auto_pull = bool(value)
+
+
+class WindowLifecycleWatch(QObject):
+    def __init__(self, application, host, dialog) -> None:
+        super().__init__()
+        self.application = application
+        self.host = host
+        self.dialog = dialog
+        self.center_hidden = 0
+        self.center_closed = 0
+        self.center_deactivated = 0
+        self.main_activated = 0
+        self.samples = []
+
+    def eventFilter(self, watched, event):
+        if watched is self.dialog:
+            if event.type() == QEvent.Hide:
+                self.center_hidden += 1
+            elif event.type() == QEvent.Close:
+                self.center_closed += 1
+            elif event.type() == QEvent.WindowDeactivate:
+                self.center_deactivated += 1
+        elif watched is self.host and event.type() == QEvent.WindowActivate:
+            self.main_activated += 1
+        return False
+
+    def sample(self) -> None:
+        self.samples.append((
+            self.dialog.isVisible(),
+            self.dialog.isActiveWindow(),
+            self.application.activeWindow() is self.dialog,
+        ))
 
 
 class Package6GaleUiWiringTests(unittest.TestCase):
@@ -84,7 +122,10 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             ai_metadata=metadata,
         )
         self.gale = FakeGaleControl()
-        self.dialog = AiCenterDialog(receipts, metadata, gale=self.gale)
+        self.host = QMainWindow()
+        self.dialog = AiCenterDialog(
+            receipts, metadata, parent=self.host, gale=self.gale
+        )
         self.addCleanup(self._close_dialog)
 
     def _close_dialog(self) -> None:
@@ -93,6 +134,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
                 break
             QTest.qWait(10)
         self.dialog.close()
+        self.host.close()
         self.application.processEvents()
 
     def _wait_for(self, predicate) -> None:
@@ -221,6 +263,69 @@ class Package6GaleUiWiringTests(unittest.TestCase):
                 self.dialog.gale_page, right.rect().topLeft()
             ).x()
             self.assertLess(left_right, right_left)
+
+    def test_pull_keeps_same_host_visible_and_active_continuously(self) -> None:
+        self.host.show()
+        self.dialog.show()
+        self.dialog.raise_()
+        self.dialog.activateWindow()
+        self.application.processEvents()
+        refresh_threads = []
+        activation_threads = []
+        original_refresh = self.dialog.receipt_view.refresh_receipts
+
+        def refresh_receipts() -> None:
+            refresh_threads.append(
+                QThread.currentThread() is self.application.thread()
+            )
+            original_refresh()
+
+        def activate_host() -> None:
+            activation_threads.append(
+                QThread.currentThread() is self.application.thread()
+            )
+
+        self.dialog.receipt_view.refresh_receipts = refresh_receipts
+        self.dialog.receipt_view._activate_host_window = activate_host
+        watch = WindowLifecycleWatch(
+            self.application, self.host, self.dialog
+        )
+        self.host.installEventFilter(watch)
+        self.dialog.installEventFilter(watch)
+        timer = QTimer(self.dialog)
+        timer.setInterval(1)
+        timer.timeout.connect(watch.sample)
+        timer.start()
+
+        for expected_calls in range(1, 4):
+            self.gale.pull_started.clear()
+            self.gale.pull_release.clear()
+            self.dialog.gale_pull_button.click()
+            self._wait_for(self.gale.pull_started.is_set)
+            QTest.qWait(20)
+            self.assertTrue(self.dialog.isVisible())
+            self.assertTrue(self.dialog.isActiveWindow())
+            self.assertIs(self.application.activeWindow(), self.dialog)
+            self.gale.pull_release.set()
+            self._wait_for(lambda: self.gale.pull_calls == expected_calls)
+            self._wait_for(lambda: not self.dialog._gale_threads)
+            self.assertTrue(self.dialog.isVisible())
+            self.assertTrue(self.dialog.isActiveWindow())
+            self.assertIs(self.application.activeWindow(), self.dialog)
+
+        timer.stop()
+        self.assertEqual(refresh_threads, [True, True, True])
+        self.assertEqual(activation_threads, [])
+        self.assertGreater(len(watch.samples), 0)
+        self.assertTrue(all(all(sample) for sample in watch.samples))
+        self.assertEqual(watch.center_hidden, 0)
+        self.assertEqual(watch.center_closed, 0)
+        self.assertEqual(watch.center_deactivated, 0)
+        self.assertEqual(watch.main_activated, 0)
+        self.assertTrue(self.dialog.isVisible())
+        self.assertTrue(self.dialog.isEnabled())
+        self.assertTrue(self.dialog.gale_pull_button.isEnabled())
+        self.assertEqual(self.dialog.gale_status.text(), "操作完成")
 
 
 if __name__ == "__main__":
