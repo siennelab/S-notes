@@ -202,6 +202,14 @@ class AiMcpOperationRepository(Protocol):
         tags: Sequence[str] | None = None,
     ) -> dict: ...
 
+    def accept_pending_append(
+        self,
+        *,
+        receipt_id: int,
+        addition_html: str,
+        accepted_body: str,
+    ) -> dict: ...
+
     def create_pending(
         self,
         *,

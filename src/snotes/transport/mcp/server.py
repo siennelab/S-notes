@@ -23,6 +23,10 @@ def build_server(config: RuntimeConfig) -> FastMCP:
     service = build_local_mcp_service(
         actor_target_id=config.actor_target_id,
         resolved_data_root=config.data_root,
+        create_confirmation_required=(
+            config.tool_allowlist is not None
+            and "create_note" in config.tool_allowlist
+        ),
     )
     mcp = FastMCP(
         name="S-notes Local MCP",
@@ -35,7 +39,12 @@ def build_server(config: RuntimeConfig) -> FastMCP:
         warn_on_duplicate_resources=True,
         warn_on_duplicate_prompts=True,
     )
-    register_tools(mcp, service, read_only=config.read_only)
+    register_tools(
+        mcp,
+        service,
+        read_only=config.read_only,
+        allowed_tools=config.tool_allowlist,
+    )
     return mcp
 
 

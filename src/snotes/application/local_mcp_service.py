@@ -48,6 +48,7 @@ class LocalMcpService:
         safe_reads: AiSafeReadService,
         audit: AiAuditService,
         receipt_inbox: AiReceiptInboxService,
+        create_confirmation_required: bool = False,
     ) -> None:
         if actor_target_id not in AI_ACTOR_IDS:
             raise ValueError("未知或不可用的 AI 身份。")
@@ -66,6 +67,7 @@ class LocalMcpService:
             safe_reads=safe_reads,
             audit=audit,
             receipt_inbox=receipt_inbox,
+            create_confirmation_required=create_confirmation_required,
         )
 
     def search_notes(

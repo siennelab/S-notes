@@ -16,6 +16,7 @@ class RuntimeConfig:
     data_root: Path
     actor_target_id: str
     read_only: bool
+    tool_allowlist: frozenset[str] | None
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -48,8 +49,21 @@ def load_runtime_config() -> RuntimeConfig:
     )
     if not actor_target_id:
         raise RuntimeConfigurationError("actor_target_id_missing")
+    tool_allowlist_text = os.environ.get(
+        "SNOTES_MCP_TOOL_ALLOWLIST", ""
+    ).strip()
+    tool_allowlist = (
+        frozenset(
+            name.strip()
+            for name in tool_allowlist_text.split(",")
+            if name.strip()
+        )
+        if tool_allowlist_text
+        else None
+    )
     return RuntimeConfig(
         data_root=data_root,
         actor_target_id=actor_target_id,
         read_only=read_only,
+        tool_allowlist=tool_allowlist,
     )

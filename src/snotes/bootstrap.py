@@ -70,6 +70,9 @@ def build_application(
         notes=note_service,
         tags=tag_service,
         ai_metadata=ai_access_metadata_service,
+        mcp_operations=SQLiteAiMcpOperationRepository(
+            connections, tags
+        ),
     )
     export_service = ExportService(
         notes,
@@ -110,6 +113,7 @@ def build_local_mcp_service(
     *,
     actor_target_id: str,
     resolved_data_root: Path,
+    create_confirmation_required: bool = False,
 ) -> LocalMcpService:
     """Compose MCP after its runtime owner has resolved the data root."""
     root = Path(resolved_data_root)
@@ -147,6 +151,7 @@ def build_local_mcp_service(
         ),
         audit=audit,
         receipt_inbox=receipt_inbox,
+        create_confirmation_required=create_confirmation_required,
     )
 
 

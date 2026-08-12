@@ -10,9 +10,19 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_receipt_inbox_service import (
+    AiReceiptAcceptFields,
+    AiReceiptInboxService,
+)
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import NoteLocation
+from src.snotes.storage.repositories.ai_mcp_operations import (
+    SQLiteAiMcpOperationRepository,
+)
+from src.snotes.storage.repositories.ai_receipts import (
+    SQLiteAiReceiptInboxRepository,
+)
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
@@ -32,6 +42,13 @@ NORMAL_TOOLS = {
     "get_operation_status",
 }
 READ_ONLY_TOOLS = {"search_notes", "get_note"}
+CLAWDE_TOOLS = {
+    "search_notes",
+    "get_note",
+    "create_note",
+    "append_note",
+}
+CLAWDE_DISALLOWED_TOOLS = NORMAL_TOOLS - CLAWDE_TOOLS
 
 
 class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -49,11 +66,13 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             encoding="utf-8",
         )
         self.connections = initialize_database(self.root / "s_notes.db")
-        directories = SQLiteDirectoriesRepository(self.connections)
-        notes_repository = SQLiteNotesRepository(self.connections, directories)
-        tags_repository = SQLiteTagsRepository(self.connections)
+        self.directories_repository = SQLiteDirectoriesRepository(self.connections)
+        notes_repository = SQLiteNotesRepository(
+            self.connections, self.directories_repository
+        )
+        self.tags_repository = SQLiteTagsRepository(self.connections)
         self.notes = NoteService(notes_repository)
-        self.tags = TagService(tags_repository)
+        self.tags = TagService(self.tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
         self.ids: dict[str, int] = {}
         self._seed_fixture()
@@ -130,7 +149,13 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             location=NoteLocation("项目", "FictionalSecretDirectory"),
         )
 
-    def _env(self, *, read_only: bool, actor: str = "gale") -> dict[str, str]:
+    def _env(
+        self,
+        *,
+        read_only: bool,
+        actor: str = "gale",
+        tool_allowlist: set[str] | None = None,
+    ) -> dict[str, str]:
         values = {
             "HOME": str(self.home),
             "PYTHONPYCACHEPREFIX": str(self.root / "pycache"),
@@ -138,15 +163,27 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             "SNOTES_MCP_READ_ONLY": "1" if read_only else "0",
             "SNOTES_MCP_ACTOR_TARGET_ID": actor,
         }
+        if tool_allowlist is not None:
+            values["SNOTES_MCP_TOOL_ALLOWLIST"] = ",".join(sorted(tool_allowlist))
         return values
 
     @asynccontextmanager
-    async def session(self, *, read_only: bool, actor: str = "gale"):
+    async def session(
+        self,
+        *,
+        read_only: bool,
+        actor: str = "gale",
+        tool_allowlist: set[str] | None = None,
+    ):
         parameters = StdioServerParameters(
             command=str(ROOT / "scripts" / "run_snotes_mcp_stdio.sh"),
             args=[],
             cwd=str(ROOT),
-            env=self._env(read_only=read_only, actor=actor),
+            env=self._env(
+                read_only=read_only,
+                actor=actor,
+                tool_allowlist=tool_allowlist,
+            ),
         )
         async with stdio_client(parameters) as streams:
             async with ClientSession(*streams) as session:
@@ -263,6 +300,295 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             text = json.dumps(redacted, ensure_ascii=False)
             self.assertNotIn("FictionalSecret", text)
             self.assertIn("[MASKED]", text)
+
+    async def test_clawde_create_pending_accept_discard_and_append_pending(self) -> None:
+        with self.connections.write() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_settings(setting_key, setting_value, updated_at)
+                VALUES ('ai_create_requires_confirmation', '0', '2026-01-01T00:00:00+08:00')
+                """
+            )
+        receipt_service = AiReceiptInboxService(
+            SQLiteAiReceiptInboxRepository(
+                self.connections,
+                self.directories_repository,
+                self.tags_repository,
+            ),
+            notes=self.notes,
+            tags=self.tags,
+            ai_metadata=self.metadata,
+            mcp_operations=SQLiteAiMcpOperationRepository(
+                self.connections, self.tags_repository
+            ),
+        )
+        formal_before = len(self.notes.list_active_notes())
+
+        async with self.session(
+            read_only=False,
+            actor="clawbot",
+            tool_allowlist=CLAWDE_TOOLS,
+        ) as session:
+            tools = (await session.list_tools()).tools
+            self.assertEqual({tool.name for tool in tools}, CLAWDE_TOOLS)
+            self.assertEqual(len(tools), 4)
+            for name in CLAWDE_DISALLOWED_TOOLS:
+                blocked = await session.call_tool(name, {})
+                self.assertTrue(blocked.isError)
+                self.assertIn(
+                    f"unknown tool: {name}",
+                    json.dumps(
+                        [item.model_dump() for item in blocked.content],
+                        ensure_ascii=False,
+                    ).lower(),
+                )
+
+            pending_create = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "clawde-create-fictional",
+                    "title": "Clawde fictional pending",
+                    "content": "fictional base body",
+                    "tags": ["fictional-clawde"],
+                },
+            )
+            self.assertEqual(pending_create["status"], "pending_confirmation")
+            self.assertFalse(pending_create["changed_formal_note"])
+            self.assertTrue(pending_create["pending_confirmation"])
+            self.assertIsNotNone(pending_create["proposal_id"])
+            self.assertEqual(len(self.notes.list_active_notes()), formal_before)
+
+            pending = receipt_service.list_pending_receipts()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].id, pending_create["proposal_id"])
+            self.assertEqual(pending[0].source, "Clawbot")
+            self.assertEqual(pending[0].actor_target_id, "clawbot")
+            self.assertEqual(pending[0].title, "Clawde fictional pending")
+            self.assertEqual(pending[0].body, "fictional base body")
+
+            target_state = receipt_service.receipt_target_state(pending[0])
+            accepted = receipt_service.accept_receipt(
+                pending[0].id,
+                AiReceiptAcceptFields(
+                    title=pending[0].title,
+                    body=pending[0].body,
+                    main_category=pending[0].main_category,
+                    sub_category=pending[0].sub_category,
+                    tags=pending[0].tags,
+                    visibility=pending[0].ai_visibility,
+                    target_ids=target_state.target_ids,
+                ),
+            )
+            self.assertTrue(accepted.created)
+            self.assertEqual(len(self.notes.list_active_notes()), formal_before + 1)
+            self.assertEqual(accepted.note.title, "Clawde fictional pending")
+            self.assertEqual(accepted.note.content_html, "<p>fictional base body</p>")
+            self.assertEqual(receipt_service.list_pending_receipts(), [])
+
+            found = await self.call(
+                session,
+                "search_notes",
+                {"query": "Clawde fictional pending"},
+            )
+            self.assertEqual(found["total_visible_matches"], 1)
+            self.assertEqual(found["results"][0]["note_id"], accepted.note.id)
+            initial = await self.call(
+                session, "get_note", {"note_id": accepted.note.id}
+            )
+            self.assertEqual(initial["content"], "fictional base body")
+
+            pending_discard = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "clawde-create-discard-fictional",
+                    "title": "Clawde fictional discard",
+                    "content": "discard body",
+                },
+            )
+            self.assertEqual(pending_discard["status"], "pending_confirmation")
+            self.assertEqual(len(self.notes.list_active_notes()), formal_before + 1)
+            discard_receipt = receipt_service.get_receipt(
+                pending_discard["proposal_id"]
+            )
+            discarded = receipt_service.discard_receipt(discard_receipt.id)
+            self.assertTrue(discarded.changed)
+            self.assertEqual(discarded.receipt.status, "discarded")
+            self.assertEqual(receipt_service.list_pending_receipts(), [])
+            self.assertEqual(len(self.notes.list_active_notes()), formal_before + 1)
+
+            pending_append = await self.call(
+                session,
+                "append_note",
+                {
+                    "request_id": "clawde-append-fictional",
+                    "note_id": accepted.note.id,
+                    "content": "fictional appended body",
+                    "expected_version": initial["version"],
+                },
+            )
+            self.assertEqual(pending_append["status"], "pending_confirmation")
+            self.assertFalse(pending_append["changed_formal_note"])
+            self.assertTrue(pending_append["pending_confirmation"])
+            after = await self.call(
+                session, "get_note", {"note_id": accepted.note.id}
+            )
+            self.assertEqual(after["content"], "fictional base body")
+            pending = receipt_service.list_pending_receipts()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].operation_type, "append")
+            self.assertEqual(pending[0].actor_target_id, "clawbot")
+            append_receipt = pending[0]
+            before_append_note = self.notes.get_note(accepted.note.id)
+            before_append_metadata = self.metadata.get_note_metadata(accepted.note.id)
+            before_append_tags = self.tags.get_note_tags(accepted.note.id)
+            accepted_append = receipt_service.accept_receipt(
+                append_receipt.id,
+                AiReceiptAcceptFields(
+                    title=append_receipt.title,
+                    body=append_receipt.body,
+                    main_category=append_receipt.main_category,
+                    sub_category=append_receipt.sub_category,
+                    tags=append_receipt.tags,
+                    visibility=append_receipt.ai_visibility,
+                    target_ids=("clawbot",),
+                ),
+            )
+            self.assertFalse(accepted_append.created)
+            self.assertEqual(accepted_append.note.id, accepted.note.id)
+            self.assertEqual(len(self.notes.list_active_notes()), formal_before + 1)
+            accepted_text = await self.call(
+                session, "get_note", {"note_id": accepted.note.id}
+            )
+            self.assertIn("fictional base body", accepted_text["content"])
+            self.assertTrue(
+                accepted_text["content"].endswith("fictional appended body")
+            )
+            self.assertEqual(
+                accepted_text["content"].count("fictional appended body"), 1
+            )
+            self.assertEqual(receipt_service.list_pending_receipts(), [])
+            self.assertEqual(
+                receipt_service.get_receipt(append_receipt.id).status, "accepted"
+            )
+            after_append_note = self.notes.get_note(accepted.note.id)
+            self.assertEqual(after_append_note.title, before_append_note.title)
+            self.assertEqual(after_append_note.location, before_append_note.location)
+            self.assertEqual(
+                after_append_note.directory_id, before_append_note.directory_id
+            )
+            after_append_metadata = self.metadata.get_note_metadata(
+                accepted.note.id
+            )
+            self.assertEqual(
+                after_append_metadata.visibility, before_append_metadata.visibility
+            )
+            self.assertEqual(
+                after_append_metadata.target_ids, before_append_metadata.target_ids
+            )
+            self.assertEqual(
+                self.tags.get_note_tags(accepted.note.id), before_append_tags
+            )
+            with self.connections.read() as connection:
+                history = connection.execute(
+                    """
+                    SELECT actor_target_id, modification_type, handling_mode
+                    FROM ai_note_history WHERE request_id = ?
+                    """,
+                    ("clawde-append-fictional",),
+                ).fetchall()
+                operation = connection.execute(
+                    "SELECT status FROM ai_operations WHERE request_id = ?",
+                    ("clawde-append-fictional",),
+                ).fetchone()
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["actor_target_id"], "clawbot")
+            self.assertEqual(history[0]["modification_type"], "append")
+            self.assertEqual(history[0]["handling_mode"], "human_approved")
+            self.assertEqual(operation["status"], "updated")
+
+            before_discard = accepted_text["content"]
+            discard_append = await self.call(
+                session,
+                "append_note",
+                {
+                    "request_id": "clawde-append-discard-fictional",
+                    "note_id": accepted.note.id,
+                    "content": "discarded appended body",
+                    "expected_version": accepted_text["version"],
+                },
+            )
+            self.assertEqual(discard_append["status"], "pending_confirmation")
+            discard_append_receipt = receipt_service.list_pending_receipts()[0]
+            receipt_service.discard_receipt(discard_append_receipt.id)
+            after_discard = await self.call(
+                session, "get_note", {"note_id": accepted.note.id}
+            )
+            self.assertEqual(after_discard["content"], before_discard)
+            self.assertNotIn("discarded appended body", after_discard["content"])
+
+            stale_append = await self.call(
+                session,
+                "append_note",
+                {
+                    "request_id": "clawde-append-stale-fictional",
+                    "note_id": accepted.note.id,
+                    "content": "stale appended body",
+                    "expected_version": after_discard["version"],
+                },
+            )
+            self.assertEqual(stale_append["status"], "pending_confirmation")
+            stale_receipt = receipt_service.list_pending_receipts()[0]
+            current_note = self.notes.get_note(accepted.note.id)
+            self.notes.save_note(
+                current_note.id,
+                title=current_note.title,
+                content_html=current_note.content_html + "<p>external change</p>",
+                location=current_note.location,
+                expected_revision=current_note.revision,
+            )
+            with self.assertRaisesRegex(ValueError, "笔记已被更新"):
+                receipt_service.accept_receipt(
+                    stale_receipt.id,
+                    AiReceiptAcceptFields(
+                        title=stale_receipt.title,
+                        body=stale_receipt.body,
+                        main_category=stale_receipt.main_category,
+                        sub_category=stale_receipt.sub_category,
+                        tags=stale_receipt.tags,
+                        visibility=stale_receipt.ai_visibility,
+                        target_ids=("clawbot",),
+                    ),
+                )
+            self.assertEqual(
+                receipt_service.get_receipt(stale_receipt.id).status, "pending"
+            )
+            after_conflict = await self.call(
+                session, "get_note", {"note_id": accepted.note.id}
+            )
+            self.assertIn("external change", after_conflict["content"])
+            self.assertNotIn("stale appended body", after_conflict["content"])
+
+        with self.connections.read() as connection:
+            audit_rows = connection.execute(
+                """
+                SELECT actor_target_id, operation_type, summary
+                FROM ai_call_logs
+                WHERE request_id IN (?, ?, ?)
+                """,
+                (
+                    "clawde-create-fictional",
+                    "clawde-create-discard-fictional",
+                    "clawde-append-fictional",
+                ),
+            ).fetchall()
+        self.assertEqual(len(audit_rows), 3)
+        self.assertEqual({row["actor_target_id"] for row in audit_rows}, {"clawbot"})
+        self.assertEqual(
+            {row["operation_type"] for row in audit_rows}, {"create", "append"}
+        )
+        self.assertEqual({row["summary"] for row in audit_rows}, {""})
 
     async def test_missing_rules_skip_only_redacted_and_audit_is_metadata_only(self) -> None:
         self.rules_path.unlink()

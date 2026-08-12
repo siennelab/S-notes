@@ -31,6 +31,19 @@ from src.snotes.transport.mcp.schemas import (
 
 
 LOGGER = logging.getLogger("snotes_r2_mcp")
+READ_TOOL_NAMES = frozenset({"search_notes", "get_note"})
+WRITE_TOOL_NAMES = frozenset(
+    {
+        "list_directories",
+        "list_tags",
+        "create_note",
+        "prepend_note",
+        "append_note",
+        "update_note_metadata",
+        "get_operation_status",
+    }
+)
+ALL_TOOL_NAMES = READ_TOOL_NAMES | WRITE_TOOL_NAMES
 WRITE_RULES = (
     "This tool may modify local data or create a pending human-confirmation proposal. "
     "request_id must remain stable for idempotency; retry the same operation with the same "
@@ -252,8 +265,23 @@ def register_tools(
     service: LocalMcpService,
     *,
     read_only: bool,
+    allowed_tools: frozenset[str] | None = None,
 ) -> None:
+    if allowed_tools is not None and not allowed_tools.issubset(ALL_TOOL_NAMES):
+        raise ValueError("unknown_tool_allowlist")
+    enabled_tools = READ_TOOL_NAMES if read_only else ALL_TOOL_NAMES
+    if allowed_tools is not None:
+        enabled_tools &= allowed_tools
     adapter = LocalMcpToolAdapter(service)
+
+    def add_enabled_tool(function, *, name, description, annotations):
+        if name in enabled_tools:
+            mcp.add_tool(
+                function,
+                name=name,
+                description=description,
+                annotations=annotations,
+            )
     read_annotations = ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -266,7 +294,7 @@ def register_tools(
         idempotentHint=True,
         openWorldHint=False,
     )
-    mcp.add_tool(
+    add_enabled_tool(
         adapter.search_notes,
         name="search_notes",
         description=(
@@ -275,7 +303,7 @@ def register_tools(
         ),
         annotations=read_annotations,
     )
-    mcp.add_tool(
+    add_enabled_tool(
         adapter.get_note,
         name="get_note",
         description=(
@@ -306,7 +334,9 @@ def register_tools(
         (
             adapter.create_note,
             "create_note",
-            "Create a plain-text note with full visibility for only the fixed actor. "
+            "Request a plain-text note with full visibility for only the fixed actor. "
+            "A restricted server profile may place the request in AI Center for human "
+            "confirmation before the formal note is created. "
             + WRITE_RULES,
             write_annotations,
         ),
@@ -343,7 +373,7 @@ def register_tools(
         ),
     )
     for function, name, description, annotations in registrations:
-        mcp.add_tool(
+        add_enabled_tool(
             function,
             name=name,
             description=description,

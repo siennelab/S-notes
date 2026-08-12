@@ -403,13 +403,13 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.assertEqual(operation["status"], "created")
         self.assertEqual(json.loads(operation["result_json"])["note_id"], first.note.id)
 
-    def test_existing_note_proposal_remains_out_of_scope_without_mutation(self) -> None:
+    def test_unsupported_prepend_proposal_remains_out_of_scope_without_mutation(self) -> None:
         self._insert_receipt(
             85,
             status="pending",
-            request_id="fictional-append-request-85",
+            request_id="fictional-prepend-request-85",
             actor_target_id="gale",
-            operation_type="append",
+            operation_type="prepend",
         )
         note_before = self._note_state()
 

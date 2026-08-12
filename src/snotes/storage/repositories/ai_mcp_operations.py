@@ -197,9 +197,10 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     connection, actor_target_id, operation_type, result
                 )
                 return result
-            if (
-                int(note["revision"]) != int(expected_revision)
-                or str(note["updated_at"]) != expected_updated_at
+            if not _note_version_matches(
+                note,
+                expected_revision=expected_revision,
+                expected_updated_at=expected_updated_at,
             ):
                 result = _result(
                     "conflict", request_id, note_id, str(note["title"]),
@@ -220,12 +221,16 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 timestamp,
             )
             result_title = str(note["title"])
-            if operation_type in {"prepend", "append"}:
-                content_html = (
-                    addition_html + str(note["content_html"])
-                    if operation_type == "prepend"
-                    else str(note["content_html"]) + addition_html
+            if operation_type == "append":
+                self._append_content_in_connection(
+                    connection,
+                    note,
+                    addition_html=addition_html,
+                    timestamp=timestamp,
+                    expected_revision=expected_revision,
                 )
+            elif operation_type == "prepend":
+                content_html = addition_html + str(note["content_html"])
                 connection.execute(
                     """
                     UPDATE notes
@@ -291,6 +296,115 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             self._store_operation(
                 connection, actor_target_id, operation_type, result
             )
+        return result
+
+    def accept_pending_append(
+        self,
+        *,
+        receipt_id: int,
+        addition_html: str,
+        accepted_body: str,
+    ) -> dict:
+        with self.connections.write() as connection:
+            receipt = connection.execute(
+                """
+                SELECT id, status, request_id, actor_target_id, operation_type,
+                       target_note_id, expected_updated_at, title
+                FROM ai_receipt_inbox
+                WHERE id = ?
+                """,
+                (receipt_id,),
+            ).fetchone()
+            if receipt is None:
+                raise ValueError(f"AI 回执不存在: {receipt_id}")
+            if receipt["status"] != "pending":
+                raise ValueError("该回执已处理，不能重复接受。")
+            if receipt["operation_type"] != "append":
+                raise ValueError("该回执不是末尾追加提案。")
+            request_id = str(receipt["request_id"] or "")
+            actor_target_id = str(receipt["actor_target_id"] or "")
+            expected_updated_at = str(receipt["expected_updated_at"] or "")
+            if not request_id or not actor_target_id or not expected_updated_at:
+                raise ValueError("追加提案缺少必要的身份或版本信息。")
+            if receipt["target_note_id"] is None:
+                raise ValueError("追加提案缺少目标笔记。")
+            note_id = int(receipt["target_note_id"])
+            note = connection.execute(
+                "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
+                (note_id,),
+            ).fetchone()
+            if note is None:
+                raise ValueError("目标笔记不存在。")
+            expected_revision = int(note["revision"])
+            if not _note_version_matches(
+                note,
+                expected_revision=expected_revision,
+                expected_updated_at=expected_updated_at,
+            ):
+                return _result(
+                    "conflict", request_id, note_id, str(note["title"]),
+                    "pending", False, True, "笔记已被更新。",
+                )
+
+            timestamp = next_note_updated_at(str(note["updated_at"]))
+            self._insert_history(
+                connection,
+                note,
+                actor_target_id,
+                request_id,
+                "append",
+                timestamp,
+                handling_mode="human_approved",
+            )
+            self._append_content_in_connection(
+                connection,
+                note,
+                addition_html=addition_html,
+                timestamp=timestamp,
+                expected_revision=expected_revision,
+            )
+            connection.execute(
+                "UPDATE ai_note_history SET after_updated_at = ? WHERE request_id = ?",
+                (timestamp, request_id),
+            )
+            result = _result(
+                "updated", request_id, note_id, str(note["title"]),
+                "human_approved", True, False, "",
+            )
+            result["proposal_id"] = receipt_id
+            note_uuid = connection.execute(
+                "SELECT note_uuid FROM notes WHERE id = ?",
+                (note_id,),
+            ).fetchone()["note_uuid"]
+            receipt_cursor = connection.execute(
+                """
+                UPDATE ai_receipt_inbox
+                SET status = "accepted", note_id = ?, accepted_note_uuid = ?,
+                    body = ?, result_status = "updated",
+                    updated_at = ?, decided_at = ?
+                WHERE id = ? AND status = "pending"
+                """,
+                (note_id, note_uuid, accepted_body, timestamp, timestamp, receipt_id),
+            )
+            if receipt_cursor.rowcount != 1:
+                raise RuntimeError("AI 回执状态已改变，请刷新后重试。")
+            operation_cursor = connection.execute(
+                """
+                UPDATE ai_operations
+                SET status = "updated", result_json = ?, updated_at = ?
+                WHERE request_id = ? AND actor_target_id = ?
+                  AND operation_type = "append"
+                  AND status = "pending_confirmation"
+                """,
+                (
+                    json.dumps(result, ensure_ascii=False),
+                    timestamp,
+                    request_id,
+                    actor_target_id,
+                ),
+            )
+            if operation_cursor.rowcount != 1:
+                raise RuntimeError("追加提案的操作记录已改变，请刷新后重试。")
         return result
 
     def create_pending(
@@ -424,6 +538,8 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         request_id: str,
         operation_type: str,
         timestamp: str,
+        *,
+        handling_mode: str = "direct",
     ) -> None:
         snapshot = {
             "title": note["title"],
@@ -440,7 +556,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 note_id, note_title, modification_type, actor_target_id,
                 request_id, modified_at, before_snapshot, after_updated_at,
                 handling_mode
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'direct')
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 note["id"],
@@ -451,8 +567,49 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 timestamp,
                 json.dumps(snapshot, ensure_ascii=False),
                 timestamp,
+                handling_mode,
             ),
         )
+
+    @staticmethod
+    def _append_content_in_connection(
+        connection,
+        note,
+        *,
+        addition_html: str,
+        timestamp: str,
+        expected_revision: int,
+    ) -> None:
+        content_html = str(note["content_html"]) + addition_html
+        cursor = connection.execute(
+            """
+            UPDATE notes
+            SET content_html = ?, body_rich_text = ?,
+                revision = revision + 1, updated_at = ?
+            WHERE id = ? AND revision = ?
+            """,
+            (
+                content_html,
+                content_html,
+                timestamp,
+                note["id"],
+                expected_revision,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("笔记已被更新。")
+
+
+def _note_version_matches(
+    note,
+    *,
+    expected_revision: int,
+    expected_updated_at: str,
+) -> bool:
+    return (
+        int(note["revision"]) == int(expected_revision)
+        and str(note["updated_at"]) == expected_updated_at
+    )
 
 
 def _result(

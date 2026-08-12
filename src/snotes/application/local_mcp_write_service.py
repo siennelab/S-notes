@@ -44,6 +44,7 @@ class LocalMcpWriteService:
         safe_reads: AiSafeReadService,
         audit: AiAuditService,
         receipt_inbox: AiReceiptInboxService,
+        create_confirmation_required: bool = False,
     ) -> None:
         self.actor_target_id = actor_target_id
         self._notes = notes
@@ -53,6 +54,7 @@ class LocalMcpWriteService:
         self._safe_reads = safe_reads
         self._audit = audit
         self._receipt_inbox = receipt_inbox
+        self._create_confirmation_required = create_confirmation_required
 
     def create_note(
         self,
@@ -77,7 +79,10 @@ class LocalMcpWriteService:
                 ),
             )
         target_directory_id, location = selected
-        if self._receipt_inbox.mcp_confirmation_required("create"):
+        if self._receipt_inbox.mcp_confirmation_required(
+            "create",
+            required_by_profile=self._create_confirmation_required,
+        ):
             result = self._receipt_inbox.mcp_create_pending(
                 actor_target_id=self.actor_target_id,
                 actor_display=self._actor_display(),

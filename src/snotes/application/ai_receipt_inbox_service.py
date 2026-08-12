@@ -116,8 +116,15 @@ class AiReceiptInboxService:
         """Idempotently create a pending receipt; never a formal note."""
         return self._receipts.import_gale_pending(submission)
 
-    def mcp_confirmation_required(self, operation_type: str) -> bool:
+    def mcp_confirmation_required(
+        self,
+        operation_type: str,
+        *,
+        required_by_profile: bool = False,
+    ) -> bool:
         """Keep local-MCP confirmation policy behind the receipt owner."""
+        if required_by_profile:
+            return True
         return self._require_mcp_operations().confirmation_required(operation_type)
 
     def mcp_get_operation(
@@ -144,6 +151,9 @@ class AiReceiptInboxService:
 
     def mcp_modify_direct(self, **values) -> dict:
         return self._require_mcp_operations().modify_direct(**values)
+
+    def mcp_accept_pending_append(self, **values) -> dict:
+        return self._require_mcp_operations().accept_pending_append(**values)
 
     def mcp_create_pending(self, **values) -> dict:
         return self._require_mcp_operations().create_pending(**values)
@@ -203,6 +213,29 @@ class AiReceiptInboxService:
                 raise ValueError("人工确认入库前，标题不能为空。")
             if not fields.main_category.strip():
                 raise ValueError("人工确认入库前，主分类不能为空。")
+
+        if receipt.request_id and receipt.operation_type == "append":
+            if not fields.body:
+                raise ValueError("追加内容不能为空。")
+            actor_id = resolve_target_id(receipt.actor_target_id)
+            if actor_id not in AI_ACTOR_IDS:
+                raise ValueError("回执中的 AI 身份未知或不可用。")
+            result = self.mcp_accept_pending_append(
+                receipt_id=receipt.id,
+                addition_html=self._plain_text_to_html(fields.body),
+                accepted_body=fields.body,
+            )
+            if result["status"] == "conflict":
+                raise ValueError(result["reason"])
+            if result["status"] != "updated":
+                raise RuntimeError(result.get("reason") or "接受追加提案失败。")
+            persisted_receipt = self._receipts.get(receipt.id)
+            note = notes.get_note(result["note_id"])
+            if persisted_receipt is None or note is None:
+                raise RuntimeError("接受追加提案后读取正式笔记失败。")
+            return AcceptReceiptResult(
+                persisted_receipt, note, False, False
+            )
 
         tags_value = tags.normalize_tags_text(fields.tags)
         location = NoteLocation(
