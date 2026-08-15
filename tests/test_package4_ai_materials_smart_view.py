@@ -228,6 +228,7 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
                 ("通用", "common"),
                 ("Gale", "gale"),
                 ("Clawbot", "clawbot"),
+                ("Antigravity", "antigravity"),
                 ("Claude Code", "claude-code"),
                 ("Ke", "ke-den"),
             ),

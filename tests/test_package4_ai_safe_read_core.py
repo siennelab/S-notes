@@ -52,6 +52,7 @@ class Package4AiSafeReadCoreTests(unittest.TestCase):
                 "common",
                 "gale",
                 "clawbot",
+                "antigravity",
                 "claude-code",
                 "ke-den",
                 "codex",

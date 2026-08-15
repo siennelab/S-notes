@@ -32,6 +32,7 @@ AI_TARGET_REGISTRY = (
         "clawbot",
         aliases=("微信 clawde",),
     ),
+    AiTargetDefinition("antigravity", "Antigravity", "antigravity"),
     AiTargetDefinition("claude-code", "Claude Code", "claude_code"),
     AiTargetDefinition(
         "ke-den",

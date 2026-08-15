@@ -12,7 +12,7 @@ from src.snotes.application.ai_actor_registry import (
 
 
 class Package4AiActorRegistryTests(unittest.TestCase):
-    def test_active_chooser_is_exactly_the_five_product_identities(self) -> None:
+    def test_active_chooser_is_exactly_the_six_product_identities(self) -> None:
         self.assertEqual(
             tuple(
                 (item.target_id, item.display_name)
@@ -22,6 +22,7 @@ class Package4AiActorRegistryTests(unittest.TestCase):
                 ("common", "通用"),
                 ("gale", "Gale"),
                 ("clawbot", "Clawbot"),
+                ("antigravity", "Antigravity"),
                 ("claude-code", "Claude Code"),
                 ("ke-den", "Ke"),
             ),

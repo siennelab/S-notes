@@ -54,6 +54,7 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
                 ("common", "通用"),
                 ("gale", "Gale"),
                 ("clawbot", "Clawbot"),
+                ("antigravity", "Antigravity"),
                 ("claude-code", "Claude Code"),
                 ("ke-den", "Ke"),
             ),

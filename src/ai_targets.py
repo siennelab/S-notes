@@ -37,6 +37,7 @@ AI_TARGET_DEFINITIONS = (
     AiTargetDefinition("common", "通用", "general", True),
     AiTargetDefinition("gale", "Gale", "gale"),
     AiTargetDefinition("clawbot", "Clawbot", "clawbot"),
+    AiTargetDefinition("antigravity", "Antigravity", "antigravity"),
     AiTargetDefinition("codex", "Codex", "codex"),
     AiTargetDefinition("ke-den", "ke-den", "ke_den"),
     AiTargetDefinition("gemini", "Gemini", "gemini"),
