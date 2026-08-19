@@ -19,7 +19,9 @@ LAUNCH_AGENT_INTERVAL_SECONDS = 300
 def run_one_shot(control: GaleControlService, *, scheduled: bool = False) -> int:
     try:
         if scheduled:
-            control.scheduled_once()
+            _pull_result, publish_result = control.scheduled_once()
+            if publish_result is not None and publish_result.status == "failed":
+                return 3
         else:
             control.check_submissions_now()
         return 0

@@ -28,3 +28,20 @@ This is an internal local build. The current repository does not provide:
 and by direct terminal builds.
 
 Both build paths must continue to keep user data outside the app bundle.
+
+## Formal Gale Background Helper Refresh
+
+Building `dist/S-notes.app` does not install or refresh the independent Gale
+background helper under Application Support. A formal closeout that rebuilds
+the App must therefore also use the existing operator-controlled helper refresh
+step:
+
+1. Compare the embedded helper with the helper path referenced by the loaded
+   `com.snotes.gale-production-pull` LaunchAgent.
+2. If they differ, atomically install the embedded helper at that existing path
+   with owner-only executable permissions.
+3. Reload the existing LaunchAgent plist without changing its label, interval,
+   data root, or user settings.
+4. Verify that both helper SHA-256 values match and run one scheduled one-shot.
+
+The build remains non-installing; no App-startup auto-updater is implied.

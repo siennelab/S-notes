@@ -143,6 +143,12 @@ class GaleMirrorService:
 class GalePublishService:
     """One chain for manual and automatic Oracle candidate activation."""
 
+    LEGACY_LAST_SUCCESS_HASH_KEY = "gale/last_success_hash"
+    LAST_SUCCESSFUL_MIRROR_HASH_KEY = "gale/last_successful_mirror_hash"
+    LAST_SUCCESSFUL_SOURCE_FINGERPRINT_KEY = (
+        "gale/last_successful_source_fingerprint"
+    )
+
     def __init__(
         self,
         mirror: GaleMirrorService,
@@ -177,47 +183,61 @@ class GalePublishService:
 
     def _publish(self, mode: str) -> GalePublishResult:
         request_id = uuid.uuid4().hex
+        source_fingerprint = ""
+        result: GalePublishResult | None = None
         try:
             if mode == "automatic":
-                source_hash, source_count = self._mirror.source_fingerprint()
-                if not self._automatic_due(source_hash):
+                source_fingerprint, source_count = (
+                    self._mirror.source_fingerprint()
+                )
+                if (
+                    source_fingerprint
+                    == self._last_successful_source_fingerprint()
+                ):
+                    result = GalePublishResult(
+                        "duplicate",
+                        self._last_successful_mirror_hash(),
+                        source_count,
+                        reason="same_source",
+                    )
+                elif not self._automatic_due(source_fingerprint):
                     result = GalePublishResult(
                         "deferred", "", source_count, reason="quiet_period"
                     )
-                    self._record_publish_audit(request_id, mode, result)
-                    return result
-            mirror = self._mirror.generate(self._mirror_path)
-            verified = self._mirror.verify(
-                self._mirror_path, expected_note_count=mirror.note_count
-            )
-            if self._last_success_hash() == mirror.sha256:
-                result = GalePublishResult(
-                    "duplicate", mirror.sha256, verified.note_count,
-                    reason="same_hash",
+            if result is None:
+                mirror = self._mirror.generate(self._mirror_path)
+                verified = self._mirror.verify(
+                    self._mirror_path, expected_note_count=mirror.note_count
                 )
-                self._record_publish_audit(request_id, mode, result)
-                return result
-            self._transport.upload_candidate(self._mirror_path, mirror.sha256)
-            activation = self._transport.activate_candidate(
-                mirror.sha256, verified.note_count
-            )
-            if activation.status == "duplicate":
-                result = GalePublishResult(
-                    "duplicate", mirror.sha256, verified.note_count,
-                    reason=activation.reason,
-                )
-            elif activation.status != "success":
-                result = GalePublishResult(
-                    "failed", mirror.sha256, verified.note_count,
-                    reason=activation.reason, uploaded=True,
-                    rolled_back=activation.rolled_back,
-                    previous_preserved=activation.previous_preserved,
-                )
-            else:
-                result = GalePublishResult(
-                    "success", mirror.sha256, verified.note_count,
-                    uploaded=True, activated=True,
-                )
+                if self._last_successful_mirror_hash() == mirror.sha256:
+                    result = GalePublishResult(
+                        "duplicate", mirror.sha256, verified.note_count,
+                        reason="same_hash",
+                    )
+                else:
+                    self._transport.upload_candidate(
+                        self._mirror_path, mirror.sha256
+                    )
+                    activation = self._transport.activate_candidate(
+                        mirror.sha256, verified.note_count
+                    )
+                    if activation.status == "duplicate":
+                        result = GalePublishResult(
+                            "duplicate", mirror.sha256, verified.note_count,
+                            reason=activation.reason,
+                        )
+                    elif activation.status != "success":
+                        result = GalePublishResult(
+                            "failed", mirror.sha256, verified.note_count,
+                            reason=activation.reason, uploaded=True,
+                            rolled_back=activation.rolled_back,
+                            previous_preserved=activation.previous_preserved,
+                        )
+                    else:
+                        result = GalePublishResult(
+                            "success", mirror.sha256, verified.note_count,
+                            uploaded=True, activated=True,
+                        )
         except GaleError as error:
             result = GalePublishResult(
                 "failed", "", 0, reason=error.code,
@@ -232,7 +252,17 @@ class GalePublishService:
             and result.sha256
             and self._settings is not None
         ):
-            self._settings.set_text("gale/last_success_hash", result.sha256)
+            self._settings.set_text(
+                self.LAST_SUCCESSFUL_MIRROR_HASH_KEY, result.sha256
+            )
+            self._settings.set_text(
+                self.LEGACY_LAST_SUCCESS_HASH_KEY, result.sha256
+            )
+            if mode == "automatic" and source_fingerprint:
+                self._settings.set_text(
+                    self.LAST_SUCCESSFUL_SOURCE_FINGERPRINT_KEY,
+                    source_fingerprint,
+                )
             for key in (
                 "gale/pending_hash", "gale/pending_first_at",
                 "gale/pending_last_at", "gale/retry_not_before",
@@ -261,11 +291,21 @@ class GalePublishService:
             handling_mode=mode,
             status=result.status,
             failure_reason="" if result.status != "failed" else result.reason,
+            is_duplicate=result.status == "duplicate",
         )
 
-    def _last_success_hash(self) -> str:
+    def _last_successful_mirror_hash(self) -> str:
+        if self._settings is None:
+            return ""
+        return self._settings.get_text(
+            self.LAST_SUCCESSFUL_MIRROR_HASH_KEY
+        ) or self._settings.get_text(self.LEGACY_LAST_SUCCESS_HASH_KEY)
+
+    def _last_successful_source_fingerprint(self) -> str:
         return (
-            self._settings.get_text("gale/last_success_hash")
+            self._settings.get_text(
+                self.LAST_SUCCESSFUL_SOURCE_FINGERPRINT_KEY
+            )
             if self._settings is not None
             else ""
         )
@@ -280,8 +320,6 @@ class GalePublishService:
             retry = 0
         if now < retry:
             return False
-        if sha256 == self._last_success_hash():
-            return True
         pending = self._settings.get_text("gale/pending_hash")
         if pending != sha256:
             self._settings.set_text("gale/pending_hash", sha256)

@@ -33,6 +33,7 @@ from src.snotes.domain.gale import (
     GALE_STAGING_SOURCE_ACTOR,
     GaleActivationResult,
     GaleError,
+    GalePublishResult,
     GaleSubmission,
 )
 from src.snotes.domain.models import NoteLocation
@@ -110,6 +111,27 @@ class RaisingReceipts:
 class FailingMirror:
     def generate(self, _path):
         raise GaleError("local_validation_failed")
+
+
+class FailingAutomaticMirror(FailingMirror):
+    def source_fingerprint(self):
+        return "f" * 64, 1
+
+
+class ScheduledStatusControl:
+    def __init__(self, status: str | None) -> None:
+        self.status = status
+
+    def scheduled_once(self):
+        publish_result = (
+            GalePublishResult(self.status, "", 0)
+            if self.status is not None
+            else None
+        )
+        return object(), publish_result
+
+    def check_submissions_now(self):
+        return object()
 
 
 class Package6GaleCodeGateTests(unittest.TestCase):
@@ -468,6 +490,7 @@ class Package6GaleCodeGateTests(unittest.TestCase):
 
     def test_background_defaults_and_scheduled_invocation(self) -> None:
         settings = JsonGaleRuntimeSettings(self.root / "config" / "runtime.json")
+        settings.set_text("gale/last_success_hash", "e" * 64)
         now = [1_000.0]
         publish_transport = FakePublishTransport()
         outbox = FakeOutboxTransport(())
@@ -485,6 +508,12 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         )
         self.assertFalse(control.auto_publish_enabled())
         self.assertTrue(control.auto_pull_enabled())
+        with self.connections.read() as connection:
+            note_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(notes)")
+            }
+        self.assertNotIn("sub_sub_category", note_columns)
         control.set_auto_publish_enabled(True)
         self.assertEqual(run_one_shot(control, scheduled=True), 0)
         self.assertTrue(control.last_completed_pull_at())
@@ -493,6 +522,32 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         self.assertEqual(run_one_shot(control, scheduled=True), 0)
         self.assertIn("upload", [call[0] for call in publish_transport.calls])
         self.assertTrue(control.last_successful_publish_at())
+        mirror_hash = settings.get_text(
+            GalePublishService.LAST_SUCCESSFUL_MIRROR_HASH_KEY
+        )
+        source_fingerprint = settings.get_text(
+            GalePublishService.LAST_SUCCESSFUL_SOURCE_FINGERPRINT_KEY
+        )
+        self.assertTrue(mirror_hash)
+        self.assertTrue(source_fingerprint)
+        self.assertNotEqual(mirror_hash, source_fingerprint)
+        self.assertEqual(
+            settings.get_text(GalePublishService.LEGACY_LAST_SUCCESS_HASH_KEY),
+            mirror_hash,
+        )
+        upload_count = len([
+            call for call in publish_transport.calls if call[0] == "upload"
+        ])
+        self.assertEqual(run_one_shot(control, scheduled=True), 0)
+        self.assertEqual(
+            len([
+                call for call in publish_transport.calls if call[0] == "upload"
+            ]),
+            upload_count,
+        )
+        latest_publish = self.audit.list_call_logs("gale_publish")[0]
+        self.assertEqual(latest_publish.status, "duplicate")
+        self.assertTrue(latest_publish.is_duplicate)
         plist = desired_launch_agent(self.root / "bin" / "snotes-gale-production-pull")
         self.assertTrue(plist["RunAtLoad"])
         self.assertEqual(plist["StartInterval"], LAUNCH_AGENT_INTERVAL_SECONDS)
@@ -502,6 +557,49 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             destination, self.root / "bin" / "snotes-gale-production-pull"
         )
         self.assertTrue(destination.is_file())
+
+    def test_scheduled_exit_status_distinguishes_publish_failure(self) -> None:
+        for status in (None, "success", "duplicate", "deferred"):
+            self.assertEqual(
+                run_one_shot(ScheduledStatusControl(status), scheduled=True),
+                0,
+            )
+        self.assertNotEqual(
+            run_one_shot(ScheduledStatusControl("failed"), scheduled=True),
+            0,
+        )
+
+    def test_pull_success_publish_failure_returns_nonzero(self) -> None:
+        settings = JsonGaleRuntimeSettings(
+            self.root / "config" / "failed-runtime.json"
+        )
+        now = [1_000.0]
+        publish = GalePublishService(
+            FailingAutomaticMirror(),
+            FakePublishTransport(),
+            self.audit,
+            mirror_path=self.root / "failed" / "gale-mirror.db",
+            settings=settings,
+            clock=lambda: now[0],
+        )
+        control = GaleControlService(
+            publish,
+            GalePullService(FakeOutboxTransport(()), self.receipts, self.audit),
+            settings,
+            clock=lambda: now[0],
+        )
+        control.set_auto_publish_enabled(True)
+        self.assertEqual(run_one_shot(control, scheduled=True), 0)
+        now[0] += 15 * 60
+        self.assertNotEqual(run_one_shot(control, scheduled=True), 0)
+        self.assertTrue(control.last_completed_pull_at())
+        latest_publish = self.audit.list_call_logs("gale_publish")[0]
+        latest_pull = self.audit.list_call_logs("gale_pull")[0]
+        self.assertEqual(latest_pull.status, "success")
+        self.assertEqual(latest_publish.status, "failed")
+        self.assertEqual(
+            latest_publish.failure_reason, "local_validation_failed"
+        )
 
     def test_continuous_changes_keep_thirty_minute_publish_bound(self) -> None:
         settings = JsonGaleRuntimeSettings(
