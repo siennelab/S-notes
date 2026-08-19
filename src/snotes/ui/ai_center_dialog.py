@@ -156,17 +156,17 @@ class ReceiptCard(QFrame):
         heading.addWidget(self.summary_label)
         top.addLayout(heading, stretch=1)
 
-        self.accept_button = QPushButton("接受")
+        self.accept_button = QPushButton("接受", self)
         self.accept_button.setObjectName("receiptAcceptButton")
         self.accept_button.clicked.connect(
             lambda: self.acceptRequested.emit(self.receipt_id)
         )
-        self.discard_button = QPushButton("丢弃")
+        self.discard_button = QPushButton("丢弃", self)
         self.discard_button.setObjectName("receiptRejectButton")
         self.discard_button.clicked.connect(
             lambda: self.discardRequested.emit(self.receipt_id)
         )
-        self.delete_button = QPushButton("删除")
+        self.delete_button = QPushButton("删除", self)
         self.delete_button.setObjectName("receiptRejectButton")
         self.delete_button.setToolTip("仅删除回执，不删除正式笔记")
         self.delete_button.clicked.connect(

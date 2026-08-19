@@ -10,12 +10,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
+from src.snotes.domain.ai_receipts import GaleReceiptImport
+from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
@@ -77,10 +79,19 @@ class WindowLifecycleWatch(QObject):
         self.center_hidden = 0
         self.center_closed = 0
         self.center_deactivated = 0
+        self.center_activated = 0
         self.main_activated = 0
+        self.top_level_receipt_button_shows = 0
         self.samples = []
 
     def eventFilter(self, watched, event):
+        if (
+            isinstance(watched, QPushButton)
+            and watched.objectName() == "receiptAcceptButton"
+            and event.type() == QEvent.Show
+            and watched.isWindow()
+        ):
+            self.top_level_receipt_button_shows += 1
         if watched is self.dialog:
             if event.type() == QEvent.Hide:
                 self.center_hidden += 1
@@ -88,6 +99,8 @@ class WindowLifecycleWatch(QObject):
                 self.center_closed += 1
             elif event.type() == QEvent.WindowDeactivate:
                 self.center_deactivated += 1
+            elif event.type() == QEvent.WindowActivate:
+                self.center_activated += 1
         elif watched is self.host and event.type() == QEvent.WindowActivate:
             self.main_activated += 1
         return False
@@ -121,6 +134,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             tags=tags,
             ai_metadata=metadata,
         )
+        self.receipts = receipts
         self.gale = FakeGaleControl()
         self.host = QMainWindow()
         self.dialog = AiCenterDialog(
@@ -265,11 +279,28 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             self.assertLess(left_right, right_left)
 
     def test_pull_keeps_same_host_visible_and_active_continuously(self) -> None:
+        original_pull = self.gale.check_submissions_now
+
+        def pull_with_new_receipt():
+            self.receipts.import_gale_submission(
+                GaleReceiptImport(
+                    external_submission_id="window-lifecycle-submission",
+                    idempotency_key="window-lifecycle-key",
+                    title="Window lifecycle receipt",
+                    body="Temporary test receipt",
+                    location=NoteLocation("临时", "Gale 投稿"),
+                    tags=("window-lifecycle",),
+                )
+            )
+            return original_pull()
+
+        self.gale.check_submissions_now = pull_with_new_receipt
         self.host.show()
         self.dialog.show()
         self.dialog.raise_()
         self.dialog.activateWindow()
         self.application.processEvents()
+        original_dialog = self.dialog
         refresh_threads = []
         activation_threads = []
         original_refresh = self.dialog.receipt_view.refresh_receipts
@@ -290,8 +321,8 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         watch = WindowLifecycleWatch(
             self.application, self.host, self.dialog
         )
-        self.host.installEventFilter(watch)
-        self.dialog.installEventFilter(watch)
+        self.application.installEventFilter(watch)
+        self.addCleanup(self.application.removeEventFilter, watch)
         timer = QTimer(self.dialog)
         timer.setInterval(1)
         timer.timeout.connect(watch.sample)
@@ -302,6 +333,8 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             self.gale.pull_release.clear()
             self.dialog.gale_pull_button.click()
             self._wait_for(self.gale.pull_started.is_set)
+            self.dialog.receipt_view.refresh_receipts()
+            self.application.processEvents()
             QTest.qWait(20)
             self.assertTrue(self.dialog.isVisible())
             self.assertTrue(self.dialog.isActiveWindow())
@@ -314,14 +347,18 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             self.assertIs(self.application.activeWindow(), self.dialog)
 
         timer.stop()
-        self.assertEqual(refresh_threads, [True, True, True])
+        self.assertEqual(refresh_threads, [True] * 6)
         self.assertEqual(activation_threads, [])
         self.assertGreater(len(watch.samples), 0)
         self.assertTrue(all(all(sample) for sample in watch.samples))
         self.assertEqual(watch.center_hidden, 0)
         self.assertEqual(watch.center_closed, 0)
         self.assertEqual(watch.center_deactivated, 0)
+        self.assertEqual(watch.center_activated, 0)
+        self.assertEqual(watch.top_level_receipt_button_shows, 0)
         self.assertEqual(watch.main_activated, 0)
+        self.assertIs(self.dialog, original_dialog)
+        self.assertEqual(len(self.receipts.list_pending_receipts()), 1)
         self.assertTrue(self.dialog.isVisible())
         self.assertTrue(self.dialog.isEnabled())
         self.assertTrue(self.dialog.gale_pull_button.isEnabled())
