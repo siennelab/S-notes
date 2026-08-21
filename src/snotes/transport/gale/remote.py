@@ -31,6 +31,9 @@ OUTBOX_MODES = {
     "production": (REMOTE_OUTBOX, AI_ACTOR_GALE_ID),
     "staging": (REMOTE_STAGING_OUTBOX, GALE_STAGING_SOURCE_ACTOR),
 }
+KNOWN_TRANSPORT_SOURCE_ACTORS = frozenset(
+    actor for _path, actor in OUTBOX_MODES.values()
+)
 
 
 class SystemOraclePublishTransport(GalePublishTransport):
@@ -189,9 +192,17 @@ def parse_export_payload(
     values = payload.get("submissions")
     if not isinstance(values, list) or len(values) > MAX_EXPORT_COUNT:
         raise GaleError("remote_payload_invalid")
-    if expected_source_actor not in {AI_ACTOR_GALE_ID, GALE_STAGING_SOURCE_ACTOR}:
+    if expected_source_actor not in KNOWN_TRANSPORT_SOURCE_ACTORS:
         raise GaleError("remote_actor_invalid")
-    return tuple(_submission(item, expected_source_actor) for item in values)
+    accepted: list[GaleSubmission] = []
+    for item in values:
+        actor = item.get("source_actor") if isinstance(item, dict) else None
+        if actor != expected_source_actor:
+            if actor in KNOWN_TRANSPORT_SOURCE_ACTORS:
+                continue
+            raise GaleError("remote_actor_invalid")
+        accepted.append(_submission(item, expected_source_actor))
+    return tuple(accepted)
 
 
 def _submission(value: object, expected_source_actor: str) -> GaleSubmission:

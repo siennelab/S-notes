@@ -447,6 +447,84 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         ).encode()
         self.assertEqual(parse_export_payload(raw), (submission,))
 
+    def test_production_parser_skips_staging_rows_without_importing_them(self) -> None:
+        submission = self._submission()
+        staging_uuid = str(uuid.UUID("00000000-0000-4000-8000-000000000607"))
+        raw = json.dumps(
+            {
+                "schema_version": 2,
+                "submissions": [
+                    {
+                        "submission_uuid": staging_uuid,
+                        "source_actor": GALE_STAGING_SOURCE_ACTOR,
+                        "external_submission_id": staging_uuid,
+                        "idempotency_key": "fictional-staging-607",
+                        "title": "Fictional staging row",
+                        "content": "Fictional staging body",
+                        "suggested_directory": "临时/Gale 投稿",
+                        "suggested_tags": ["staging"],
+                        "created_at": "2026-08-10T00:00:00Z",
+                        "delivery_state": "delivered",
+                        "delivered_at": "2026-08-10T00:01:00Z",
+                    },
+                    {
+                        "submission_uuid": submission.submission_uuid,
+                        "source_actor": "gale",
+                        "external_submission_id": submission.external_submission_id,
+                        "idempotency_key": submission.idempotency_key,
+                        "title": submission.title,
+                        "content": submission.content,
+                        "suggested_directory": submission.suggested_directory,
+                        "suggested_tags": list(submission.suggested_tags),
+                        "ai_visibility": "full",
+                        "ai_targets": ["gale"],
+                        "main_category": "待办",
+                        "sub_category": "Gale 投稿",
+                        "tags": ["gale", "mcp", "s-notes", "测试"],
+                        "created_at": submission.created_at,
+                        "delivery_state": "delivered",
+                        "delivered_at": submission.delivered_at,
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ).encode()
+
+        parsed = parse_export_payload(raw)
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0].source_actor, "gale")
+        self.assertEqual(parsed[0].main_category, "待办")
+        self.assertEqual(parsed[0].sub_category, "Gale 投稿")
+        self.assertEqual(parsed[0].tags, ("gale", "mcp", "s-notes", "测试"))
+        self.assertEqual(parsed[0].ai_visibility, "full")
+        self.assertEqual(parsed[0].ai_targets, ("gale",))
+
+    def test_production_parser_still_rejects_unknown_source_actor(self) -> None:
+        submission = self._submission()
+        raw = json.dumps(
+            {
+                "schema_version": 2,
+                "submissions": [{
+                    "submission_uuid": submission.submission_uuid,
+                    "source_actor": "model-controlled-actor",
+                    "external_submission_id": submission.external_submission_id,
+                    "idempotency_key": submission.idempotency_key,
+                    "title": submission.title,
+                    "content": submission.content,
+                    "suggested_directory": submission.suggested_directory,
+                    "suggested_tags": list(submission.suggested_tags),
+                    "created_at": submission.created_at,
+                    "delivery_state": "delivered",
+                    "delivered_at": submission.delivered_at,
+                }],
+            }
+        ).encode()
+
+        with self.assertRaises(GaleError) as caught:
+            parse_export_payload(raw)
+        self.assertEqual(caught.exception.code, "remote_actor_invalid")
+
     def test_frozen_production_outbox_command_and_ack_protocol(self) -> None:
         submission = self._submission()
         raw = json.dumps(

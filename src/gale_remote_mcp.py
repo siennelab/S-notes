@@ -996,7 +996,7 @@ def _print_safe_doctor(health, submission_counts: dict[str, int]) -> None:
     print(f"FTS_COUNT={health.fts_count}")
     print(f"FILE_MODE={health.file_mode}")
     print("MIRROR_READ_ONLY=YES")
-    print("TOOLS_EXPOSED=3")
+    print("TOOLS_EXPOSED=6")
     print(f"QUEUED_COUNT={submission_counts['queued']}")
     print(f"DELIVERED_COUNT={submission_counts['delivered']}")
     print(f"ACKNOWLEDGED_COUNT={submission_counts['acknowledged']}")
