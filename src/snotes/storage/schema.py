@@ -11,6 +11,8 @@ from src.snotes.storage.support import timestamp_seconds
 INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "备忘", "终端指令")
 CATEGORY_SCHEMA_VERSION_KEY = "category_schema_version"
 CATEGORY_SCHEMA_VERSION = "2"
+REMINDER_SCHEMA_VERSION_KEY = "reminder_schema_version"
+REMINDER_SCHEMA_VERSION = "1"
 
 FROZEN_SCHEMA_STATEMENTS = (
     """
@@ -221,6 +223,42 @@ FROZEN_SCHEMA_STATEMENTS = (
     """,
 )
 
+REMINDER_SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS reminders (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        lifecycle TEXT NOT NULL DEFAULT 'active',
+        action_spec_json TEXT NOT NULL,
+        deadline_spec_json TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reminder_occurrences (
+        id INTEGER PRIMARY KEY,
+        reminder_id INTEGER NOT NULL REFERENCES reminders(id) ON DELETE CASCADE,
+        occurrence_key TEXT NOT NULL,
+        action_date TEXT NOT NULL,
+        deadline_date TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        completed_at TEXT,
+        action_notified_at TEXT,
+        deadline_notified_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(reminder_id, occurrence_key)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_reminder_occurrences_due
+    ON reminder_occurrences(status, action_date, deadline_date)
+    """,
+)
+
 
 def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
     """Create or migrate the R2 schema at an explicitly supplied path."""
@@ -231,6 +269,7 @@ def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
         for statement in FROZEN_SCHEMA_STATEMENTS:
             connection.execute(statement)
         _migrate_two_level_category_schema(connection)
+        _migrate_reminder_schema(connection)
         count = int(connection.execute("SELECT COUNT(*) FROM directories").fetchone()[0])
         if count == 0:
             timestamp = timestamp_seconds()
@@ -246,6 +285,19 @@ def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
                 ],
             )
     return connections
+
+
+def _migrate_reminder_schema(connection) -> None:
+    for statement in REMINDER_SCHEMA_STATEMENTS:
+        connection.execute(statement)
+    connection.execute(
+        """
+        INSERT INTO schema_meta (meta_key, meta_value)
+        VALUES (?, ?)
+        ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value
+        """,
+        (REMINDER_SCHEMA_VERSION_KEY, REMINDER_SCHEMA_VERSION),
+    )
 
 
 def _migrate_two_level_category_schema(connection) -> None:

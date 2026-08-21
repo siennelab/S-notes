@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+import sys
+
+from src.app_paths import USER_DATA_ROOT
+from src.snotes.background.reminder import run_one_shot
+from src.snotes.background.reminder import HELPER_VERSION
+from src.snotes.application.reminder_service import ReminderService
+from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
+from src.snotes.storage.schema import initialize_database
+from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--version" in args:
+        print(f"snotes-reminder-helper {HELPER_VERSION}")
+        return 0
+    return run_one_shot(
+        compose_reminder_service(),
+        scheduled="--scheduled" in args,
+    )
+
+
+def compose_reminder_service() -> ReminderService:
+    connections = initialize_database(USER_DATA_ROOT / "s_notes.db")
+    repository = SQLiteReminderRepository(connections)
+    settings = repository.settings()
+    return ReminderService(
+        repository,
+        transport=NtfyReminderTransport(settings.ntfy_endpoint or "https://ntfy.sh"),
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

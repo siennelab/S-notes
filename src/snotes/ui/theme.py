@@ -366,6 +366,165 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
     border: 0; border-bottom: 1px solid {t.editor_border};
     padding: 6px 8px; background: {t.surface}; color: {t.text_muted};
 }}
+#reminderCenter {{
+    background: {t.editor}; color: {t.text};
+}}
+#reminderToolbar, #reminderSettings {{
+    background: transparent; color: {t.text};
+}}
+#reminderSettingsHint, #reminderSettingsLabel {{
+    color: {t.text_muted}; font-size: 12.5px;
+}}
+#reminderTable {{
+    border: 1px solid {t.editor_border};
+    border-radius: 8px;
+    background: {t.surface};
+    alternate-background-color: {t.surface_hover};
+    color: {t.text};
+    gridline-color: {t.editor_border};
+    selection-background-color: {t.surface_selected};
+    selection-color: {t.text};
+    outline: 0;
+}}
+#reminderTable QWidget {{
+    background: {t.surface};
+    color: {t.text};
+}}
+#reminderTable::item {{
+    padding: 6px 8px;
+    border: 0;
+}}
+#reminderTable::item:hover {{
+    background: {t.surface_hover};
+    color: {t.text};
+}}
+#reminderTable::item:selected {{
+    background: {t.surface_selected};
+    color: {t.text};
+}}
+#reminderTable QHeaderView {{
+    background: {t.surface};
+}}
+#reminderTable QHeaderView::section {{
+    border: 0;
+    border-bottom: 1px solid {t.editor_border};
+    border-right: 1px solid {t.editor_border};
+    padding: 7px 8px;
+    background: {t.surface};
+    color: {t.text_muted};
+    font-weight: 600;
+}}
+#reminderTable QTableCornerButton::section {{
+    border: 0;
+    border-bottom: 1px solid {t.editor_border};
+    background: {t.surface};
+}}
+#reminderDialog {{
+    background: {t.window}; color: {t.text};
+}}
+#reminderDialog QFormLayout QLabel, #reminderDialogFieldLabel {{
+    color: {t.text_muted};
+}}
+#reminderDateEdit, #reminderTimeEdit, #reminderTopicInput, #reminderDialog QLineEdit,
+#reminderDialog QTextEdit, #reminderDialog QComboBox, #reminderDialog QSpinBox {{
+    border: 1px solid {t.editor_border};
+    border-radius: 6px;
+    background: {t.surface};
+    color: {t.text};
+    selection-background-color: {t.selection_background};
+    selection-color: {t.selection_text};
+}}
+#reminderDateEdit:hover, #reminderTimeEdit:hover, #reminderTopicInput:hover,
+#reminderDialog QLineEdit:hover, #reminderDialog QTextEdit:hover,
+#reminderDialog QComboBox:hover, #reminderDialog QSpinBox:hover {{
+    background: {t.surface_hover};
+}}
+#reminderDateEdit:focus, #reminderTimeEdit:focus, #reminderTopicInput:focus,
+#reminderDialog QLineEdit:focus, #reminderDialog QTextEdit:focus,
+#reminderDialog QComboBox:focus, #reminderDialog QSpinBox:focus {{
+    border-color: {t.focus}; background: {t.surface};
+}}
+#reminderCalendar {{
+    border: 1px solid {t.editor_border};
+    border-radius: 8px;
+    background: {t.surface};
+    color: {t.text};
+}}
+#reminderCalendar QWidget, #reminderCalendar QWidget#qt_calendar_navigationbar {{
+    background: {t.surface};
+    color: {t.text};
+}}
+#reminderCalendar QToolButton,
+#reminderCalendar QToolButton#qt_calendar_prevmonth,
+#reminderCalendar QToolButton#qt_calendar_nextmonth,
+#reminderCalendar QToolButton#qt_calendar_monthbutton,
+#reminderCalendar QToolButton#qt_calendar_yearbutton {{
+    color: {t.text};
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 4px 8px;
+}}
+#reminderCalendar QToolButton:hover,
+#reminderCalendar QToolButton#qt_calendar_prevmonth:hover,
+#reminderCalendar QToolButton#qt_calendar_nextmonth:hover,
+#reminderCalendar QToolButton#qt_calendar_monthbutton:hover,
+#reminderCalendar QToolButton#qt_calendar_yearbutton:hover {{
+    background: {t.surface_hover};
+}}
+#reminderCalendar QSpinBox#qt_calendar_yearedit {{
+    border: 1px solid {t.editor_border};
+    border-radius: 6px;
+    background: {t.surface};
+    color: {t.text};
+    selection-background-color: {t.selection_background};
+    selection-color: {t.selection_text};
+}}
+#reminderCalendar QMenu, #reminderCalendarMonthMenu {{
+    border: 1px solid {t.editor_border};
+    border-radius: 8px;
+    background: {t.surface};
+    color: {t.text};
+    padding: 4px;
+}}
+#reminderCalendar QMenu::item, #reminderCalendarMonthMenu::item {{
+    min-height: 26px;
+    padding: 4px 18px;
+    border-radius: 6px;
+    background: transparent;
+    color: {t.text};
+}}
+#reminderCalendar QMenu::item:selected, #reminderCalendarMonthMenu::item:selected {{
+    background: {t.surface_hover};
+    color: {t.text};
+}}
+#reminderCalendar QMenu::item:disabled, #reminderCalendarMonthMenu::item:disabled {{
+    color: {t.disabled};
+}}
+#reminderCalendar QAbstractItemView, #reminderCalendarView {{
+    border: 0;
+    outline: 0;
+    background: {t.surface};
+    color: {t.text};
+    selection-background-color: {t.surface_selected};
+    selection-color: {t.text};
+}}
+#reminderCalendar QAbstractItemView:item, #reminderCalendarView::item {{
+    background: {t.surface};
+    color: {t.text};
+}}
+#reminderCalendar QAbstractItemView:item:hover, #reminderCalendarView::item:hover {{
+    background: {t.surface_hover};
+    color: {t.text};
+}}
+#reminderCalendar QAbstractItemView:item:selected, #reminderCalendarView::item:selected {{
+    background: {t.surface_selected};
+    color: {t.text};
+}}
+#reminderCalendar QAbstractItemView:item:disabled, #reminderCalendarView::item:disabled {{
+    color: {t.disabled};
+    background: {t.surface};
+}}
 #exportDialog {{ background: {t.window}; }}
 #aiSafeExportSection {{
     border: 1px solid {t.editor_border}; border-radius: 8px;
@@ -408,6 +567,13 @@ QScrollBar::handle:vertical {{ min-height: 24px; margin: 0 1px; border-radius: 3
 QScrollBar::handle:vertical:disabled {{ background: transparent; }}
 QScrollBar[scrollable='false']::handle:vertical {{ background: transparent; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar:horizontal {{ height: 8px; background: transparent; }}
+QScrollBar::handle:horizontal {{ min-width: 24px; margin: 1px 0; border-radius: 3px; background: {t.scrollbar}; }}
+QScrollBar::handle:horizontal:disabled {{ background: transparent; }}
+QScrollBar[scrollable='false']::handle:horizontal {{ background: transparent; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
 """
 
 

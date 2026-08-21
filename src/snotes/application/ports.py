@@ -29,6 +29,12 @@ from src.snotes.domain.models import (
     TrashSnapshot,
     ExportResult,
 )
+from src.snotes.domain.reminders import (
+    Reminder,
+    ReminderDraft,
+    ReminderOccurrence,
+    ReminderSettings,
+)
 
 
 AiTargetCatalogEntry = tuple[str, str, str, bool, bool]
@@ -151,6 +157,59 @@ class TagsRepository(Protocol):
     def list_all(self) -> list[str]: ...
 
     def get_records_for_note(self, note_id: int) -> list[TagRecord]: ...
+
+
+class ReminderRepository(Protocol):
+    def create(self, draft: ReminderDraft) -> Reminder: ...
+
+    def update(self, reminder_id: int, draft: ReminderDraft) -> Reminder: ...
+
+    def get(self, reminder_id: int) -> Reminder | None: ...
+
+    def list_active_records(self) -> list[Reminder]: ...
+
+    def set_lifecycle(
+        self,
+        reminder_id: int,
+        lifecycle: str,
+        completed_at: str | None = None,
+    ) -> None: ...
+
+    def delete(self, reminder_id: int) -> None: ...
+
+    def upsert_occurrence(
+        self,
+        reminder_id: int,
+        occurrence_key: str,
+        action_date: str,
+        deadline_date: str | None,
+    ) -> ReminderOccurrence: ...
+
+    def get_occurrence(
+        self,
+        reminder_id: int,
+        occurrence_key: str,
+    ) -> ReminderOccurrence | None: ...
+
+    def list_occurrences(self, reminder_id: int) -> list[ReminderOccurrence]: ...
+
+    def delete_pending_occurrences(self, reminder_id: int) -> None: ...
+
+    def mark_occurrence_completed(self, occurrence_id: int, completed_at: str) -> None: ...
+
+    def mark_notified(self, occurrence_id: int, kind: str, notified_at: str) -> None: ...
+
+    def settings(self) -> ReminderSettings: ...
+
+    def save_settings(self, settings: ReminderSettings) -> None: ...
+
+    def get_text_setting(self, key: str, default: str = "") -> str: ...
+
+    def set_text_setting(self, key: str, value: str) -> None: ...
+
+
+class ReminderNotificationTransport(Protocol):
+    def send(self, *, topic: str, title: str, message: str) -> None: ...
 
 
 class AiMcpOperationRepository(Protocol):

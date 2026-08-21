@@ -7,6 +7,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="$ROOT_DIR/.venv/bin/python"
 SPEC_FILE="$ROOT_DIR/packaging/S-notes.spec"
 HELPER_SPEC_FILE="$ROOT_DIR/packaging/snotes-gale-production-pull.spec"
+REMINDER_HELPER_SPEC_FILE="$ROOT_DIR/packaging/snotes-reminder-helper.spec"
 ICON_SOURCE="$ROOT_DIR/resources/macos/icon/S-notes-icon-source-2048.png"
 BUILD_DIR="$ROOT_DIR/build"
 DIST_DIR="$ROOT_DIR/dist"
@@ -22,9 +23,13 @@ ICNS_FILE="$BUILD_DIR/S-notes.icns"
 HELPER_WORK_DIR="$BUILD_DIR/helper-pyinstaller"
 HELPER_DIST_DIR="$BUILD_DIR/helper-dist"
 HELPER_EXECUTABLE="$HELPER_DIST_DIR/snotes-gale-production-pull"
+REMINDER_HELPER_WORK_DIR="$BUILD_DIR/reminder-helper-pyinstaller"
+REMINDER_HELPER_DIST_DIR="$BUILD_DIR/reminder-helper-dist"
+REMINDER_HELPER_EXECUTABLE="$REMINDER_HELPER_DIST_DIR/snotes-reminder-helper"
 APP_BUNDLE="$DIST_DIR/S-notes.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/S-notes"
 APP_HELPER="$APP_BUNDLE/Contents/Resources/bin/snotes-gale-production-pull"
+APP_REMINDER_HELPER="$APP_BUNDLE/Contents/Resources/bin/snotes-reminder-helper"
 
 EXPECTED_PYTHON_SERIES="3.13"
 EXPECTED_PYSIDE="6.10.3"
@@ -66,6 +71,7 @@ echo "Repository: $ROOT_DIR"
 [[ -x "$PYTHON" ]] || fail "Project Python not found: $PYTHON"
 [[ -f "$SPEC_FILE" ]] || fail "PyInstaller spec not found: $SPEC_FILE"
 [[ -f "$HELPER_SPEC_FILE" ]] || fail "Helper PyInstaller spec not found: $HELPER_SPEC_FILE"
+[[ -f "$REMINDER_HELPER_SPEC_FILE" ]] || fail "Reminder helper PyInstaller spec not found: $REMINDER_HELPER_SPEC_FILE"
 [[ -f "$ICON_SOURCE" ]] || fail "Official icon source not found: $ICON_SOURCE"
 
 for command_name in sips iconutil file lipo otool codesign du find grep tr awk shasum; do
@@ -89,8 +95,10 @@ hooks_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version(
 [[ "$(grep -c '^[[:space:]]*datas=' "$SPEC_FILE")" == "1" ]] || fail "The spec must define exactly one datas whitelist."
 grep -Fq '(str(SVG_DIR), "src/icons")' "$SPEC_FILE" || fail "The App spec must include src/icons."
 grep -Fq '(str(HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the production helper."
+grep -Fq '(str(REMINDER_HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the Reminder helper."
 grep -Fq 'target_arch="arm64"' "$SPEC_FILE" || fail "The spec must target arm64."
 grep -Fq 'target_arch="arm64"' "$HELPER_SPEC_FILE" || fail "The helper spec must target arm64."
+grep -Fq 'target_arch="arm64"' "$REMINDER_HELPER_SPEC_FILE" || fail "The Reminder helper spec must target arm64."
 grep -Fq 'bundle_identifier="de.ke-den.snotes"' "$SPEC_FILE" || fail "The Bundle Identifier is missing from the spec."
 grep -Fq '"CFBundleShortVersionString": "1.0.0"' "$SPEC_FILE" || fail "The short version is missing from the spec."
 grep -Fq '"CFBundleVersion": "1"' "$SPEC_FILE" || fail "The build version is missing from the spec."
@@ -147,6 +155,19 @@ echo "Building standalone production pull helper..."
 [[ "$("$HELPER_EXECUTABLE" --version)" == "snotes-gale-production-pull 1" ]] || fail "Production helper version check failed."
 codesign --verify --strict --verbose=2 "$HELPER_EXECUTABLE"
 
+echo "Building standalone Reminder helper..."
+"$PYTHON" -m PyInstaller \
+    --noconfirm \
+    --clean \
+    --workpath "$REMINDER_HELPER_WORK_DIR" \
+    --distpath "$REMINDER_HELPER_DIST_DIR" \
+    "$REMINDER_HELPER_SPEC_FILE"
+
+[[ -x "$REMINDER_HELPER_EXECUTABLE" ]] || fail "Reminder helper was not created: $REMINDER_HELPER_EXECUTABLE"
+[[ "$(lipo -archs "$REMINDER_HELPER_EXECUTABLE")" == "arm64" ]] || fail "Reminder helper is not arm64."
+[[ "$("$REMINDER_HELPER_EXECUTABLE" --version)" == "snotes-reminder-helper 1" ]] || fail "Reminder helper version check failed."
+codesign --verify --strict --verbose=2 "$REMINDER_HELPER_EXECUTABLE"
+
 icns_metadata="$(sips -g format -g pixelWidth -g pixelHeight "$ICNS_FILE")"
 grep -q "format: icns" <<<"$icns_metadata" || fail "Generated App icon must be ICNS."
 grep -q "pixelWidth: 1024" <<<"$icns_metadata" || fail "Generated App icon width must be 1024."
@@ -157,6 +178,7 @@ cd "$ROOT_DIR"
 env \
     S_NOTES_APP_ICON="$ICNS_FILE" \
     S_NOTES_HELPER_BINARY="$HELPER_EXECUTABLE" \
+    S_NOTES_REMINDER_HELPER_BINARY="$REMINDER_HELPER_EXECUTABLE" \
     "$PYTHON" -m PyInstaller \
     --noconfirm \
     --clean \
@@ -167,11 +189,17 @@ env \
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle was not created: $APP_BUNDLE"
 [[ -x "$APP_EXECUTABLE" ]] || fail "App executable was not created: $APP_EXECUTABLE"
 [[ -x "$APP_HELPER" ]] || fail "Embedded production helper is missing or not executable: $APP_HELPER"
+[[ -x "$APP_REMINDER_HELPER" ]] || fail "Embedded Reminder helper is missing or not executable: $APP_REMINDER_HELPER"
 [[ "$(lipo -archs "$APP_HELPER")" == "arm64" ]] || fail "Embedded production helper is not arm64."
+[[ "$(lipo -archs "$APP_REMINDER_HELPER")" == "arm64" ]] || fail "Embedded Reminder helper is not arm64."
 [[ "$("$APP_HELPER" --version)" == "snotes-gale-production-pull 1" ]] || fail "Embedded production helper version check failed."
+[[ "$("$APP_REMINDER_HELPER" --version)" == "snotes-reminder-helper 1" ]] || fail "Embedded Reminder helper version check failed."
 helper_hash="$(shasum -a 256 "$HELPER_EXECUTABLE" | awk '{print $1}')"
 embedded_helper_hash="$(shasum -a 256 "$APP_HELPER" | awk '{print $1}')"
 [[ "$helper_hash" == "$embedded_helper_hash" ]] || fail "Embedded helper hash differs from the standalone build."
+reminder_helper_hash="$(shasum -a 256 "$REMINDER_HELPER_EXECUTABLE" | awk '{print $1}')"
+embedded_reminder_helper_hash="$(shasum -a 256 "$APP_REMINDER_HELPER" | awk '{print $1}')"
+[[ "$reminder_helper_hash" == "$embedded_reminder_helper_hash" ]] || fail "Embedded Reminder helper hash differs from the standalone build."
 
 [[ "$(metadata_value CFBundleName)" == "S-notes" ]] || fail "Incorrect CFBundleName."
 [[ "$(metadata_value CFBundleDisplayName)" == "S-notes" ]] || fail "Incorrect CFBundleDisplayName."
@@ -217,6 +245,8 @@ echo "Size: $app_size"
 echo "Architecture: $executable_archs"
 echo "Helper: $APP_HELPER"
 echo "Helper SHA-256: $helper_hash"
+echo "Reminder Helper: $APP_REMINDER_HELPER"
+echo "Reminder Helper SHA-256: $reminder_helper_hash"
 echo "Qt platform plugin: ${qt_platform_plugin#"$APP_BUNDLE"/}"
 echo "Signature: codesign verification passed (ad-hoc)"
 echo "The App was not launched or installed."

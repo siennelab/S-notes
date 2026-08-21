@@ -18,6 +18,7 @@ from src.snotes.application.gale_service import GaleControlService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.note_service import NoteService
+from src.snotes.application.reminder_service import ReminderService
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.errors import NoteRevisionConflictError
 from src.snotes.domain.models import Note, NoteLocation
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         ai_safe_export_service: AiSafeExportService | None = None,
         ai_audit_service: AiAuditService | None = None,
         gale_control_service: GaleControlService | None = None,
+        reminder_service: ReminderService | None = None,
     ) -> None:
         super().__init__()
         self.note_service = note_service
@@ -72,6 +74,7 @@ class MainWindow(QMainWindow):
         self.ai_safe_export_service = ai_safe_export_service
         self.ai_audit_service = ai_audit_service
         self.gale_control_service = gale_control_service
+        self.reminder_service = reminder_service
         self.ai_center_dialog: AiCenterDialog | None = None
         self.theme_settings_path = Path(theme_settings_path)
         self.current_note: Note | None = None
@@ -88,11 +91,15 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("S-notes")
         self.resize(1420, 880)
-        self.shell = SnotesShell(self.theme_settings_path)
+        self.shell = SnotesShell(
+            self.theme_settings_path,
+            reminder_service=reminder_service,
+        )
         self.shell.sidebar.set_ai_center_available(
             self.receipt_inbox_service is not None
         )
         self.refresh_ai_center_badge()
+        self.refresh_reminder_badge()
         if self.ai_access_metadata_service is not None:
             target_options = tuple(
                 (item.target_id, item.display_name)
@@ -159,6 +166,11 @@ class MainWindow(QMainWindow):
         sidebar.emptyTrashRequested.connect(self.empty_trash)
         sidebar.aiCenterRequested.connect(self.open_ai_center)
         sidebar.aiActorFilterRequested.connect(self.set_ai_materials_actor_filter)
+        if self.shell.reminder_center is not None:
+            self.shell.reminder_center.changed.connect(self.refresh_reminder_badge)
+            self.shell.reminder_center.testNotificationRequested.connect(
+                self.send_reminder_test_notification
+            )
         self.title_input.textChanged.connect(self.mark_note_dirty)
         self.body_edit.textChanged.connect(self.mark_note_dirty)
         self.shell.tags_input.textChanged.connect(self.mark_note_dirty)
@@ -219,6 +231,19 @@ class MainWindow(QMainWindow):
         )
         self.shell.sidebar.set_ai_center_pending_count(pending_count)
 
+    def refresh_reminder_badge(self) -> None:
+        count = self.reminder_service.badge_count() if self.reminder_service is not None else 0
+        self.shell.sidebar.set_reminder_badge_count(count)
+
+    def send_reminder_test_notification(self) -> None:
+        if self.reminder_service is None:
+            return
+        try:
+            self.reminder_service.send_test_notification()
+            self.shell.set_normal_status("Reminder 测试通知已发送")
+        except Exception as error:
+            self.shell.set_normal_status(f"Reminder 测试通知失败：{error}")
+
     def refresh_external_receipts(self) -> None:
         """Refresh receipt UI after a headless helper writes the shared inbox."""
         self.refresh_ai_center_badge()
@@ -248,12 +273,19 @@ class MainWindow(QMainWindow):
                 self.current_directory_path = ()
         self.shell.sidebar.set_directories(directories, self.current_directory_path)
         if self.current_mode == "search":
+            self.shell.show_notes_surface()
             self.visible_notes = self.note_service.search_notes(self.current_filter)
             self.shell.sidebar.show_flat(self.visible_notes, mode="search", selected_note_id=selected_note_id)
         elif self.current_mode == "tag":
+            self.shell.show_notes_surface()
             self.visible_notes = self.note_service.notes_for_tag(self.current_filter)
             self.shell.sidebar.show_flat(self.visible_notes, mode="tag", selected_note_id=selected_note_id)
+        elif self.current_mode == "smart_view" and self.current_filter == "reminder":
+            self.visible_notes = []
+            self.shell.sidebar.set_active_smart_view("reminder")
+            self.shell.show_reminder_surface()
         elif self.current_mode == "smart_view":
+            self.shell.show_notes_surface()
             _title, self.visible_notes = self.note_service.smart_view(
                 self.current_filter,
                 actor_target_id=(
@@ -269,6 +301,7 @@ class MainWindow(QMainWindow):
             )
             self.shell.sidebar.show_flat(self.visible_notes, mode="smart_view", selected_note_id=selected_note_id)
         else:
+            self.shell.show_notes_surface()
             self.current_mode = "directory"
             location = (
                 location_from_path(self.current_directory_path)
@@ -304,6 +337,7 @@ class MainWindow(QMainWindow):
         self.load_note(note_id)
 
     def load_note(self, note_id: int) -> bool:
+        self.shell.show_notes_surface()
         note = self.note_service.get_note(note_id)
         if note is None:
             self.status_label.setText("无法加载：笔记不存在或已删除")
@@ -523,6 +557,7 @@ class MainWindow(QMainWindow):
             self.load_note(self.current_note.id)
 
     def show_directory(self) -> None:
+        self.shell.show_notes_surface()
         self.current_mode = "directory"
         self.current_filter = ""
         self.refresh_note_list()
@@ -554,6 +589,8 @@ class MainWindow(QMainWindow):
         if self.current_mode == "smart_view" and self.current_filter == name:
             self.current_directory_path = ()
             self.show_directory()
+            return
+        if name == "reminder" and not self.force_save_current_note():
             return
         self.current_mode = "smart_view"
         self.current_filter = name

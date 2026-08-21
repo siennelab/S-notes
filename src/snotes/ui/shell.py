@@ -16,15 +16,18 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from src.snotes.application.reminder_service import ReminderService
 from src.snotes.domain.tags import parse_tags
 from src.snotes.ui.editor import NotesEditor
 from src.snotes.ui.editor_toolbar import EditorToolbar
 from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.link_drawer import LinkDrawer
+from src.snotes.ui.reminder_center import ReminderCenter
 from src.snotes.ui.sidebar import NoteSidebar
 from src.snotes.ui.theme import apply_selection_palette, repolish, themed_icon
 
@@ -35,7 +38,13 @@ class SnotesShell(QWidget):
     MAX_SIDEBAR_WIDTH = 480
     SIDEBAR_WIDTH_SETTING = "ui/sidebar_width"
 
-    def __init__(self, theme_settings_path: Path, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        theme_settings_path: Path,
+        *,
+        reminder_service: ReminderService | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.settings = QSettings(str(theme_settings_path), QSettings.IniFormat)
         self.metadata_expanded = False
@@ -77,18 +86,34 @@ class SnotesShell(QWidget):
         content_layout.addWidget(self.editor_pane, stretch=1)
         content_layout.addWidget(self.link_drawer)
 
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self.main_content)
+        self.reminder_center = (
+            ReminderCenter(reminder_service) if reminder_service is not None else None
+        )
+        if self.reminder_center is not None:
+            self.content_stack.addWidget(self.reminder_center)
+
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setObjectName("mainSplitter")
         self.splitter.setHandleWidth(4)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.setOpaqueResize(True)
         self.splitter.addWidget(self.sidebar)
-        self.splitter.addWidget(self.main_content)
+        self.splitter.addWidget(self.content_stack)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([self._stored_sidebar_width(), 1140])
         self.splitter.splitterMoved.connect(self._save_sidebar_width)
         root_layout.addWidget(self.splitter)
+
+    def show_notes_surface(self) -> None:
+        self.content_stack.setCurrentWidget(self.main_content)
+
+    def show_reminder_surface(self) -> None:
+        if self.reminder_center is not None:
+            self.reminder_center.refresh()
+            self.content_stack.setCurrentWidget(self.reminder_center)
 
     def _build_title(self, layout: QVBoxLayout) -> None:
         self.title_band = QWidget()
@@ -366,6 +391,8 @@ class SnotesShell(QWidget):
         self.metadata_collapse_button.setIcon(themed_icon("chevron-up.svg"))
         apply_selection_palette(self.body_editor)
         apply_selection_palette(self.body_editor.viewport())
+        if self.reminder_center is not None:
+            self.reminder_center.refresh_theme()
 
     @staticmethod
     def _make_surface_child_transparent(widget: QWidget) -> None:

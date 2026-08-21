@@ -13,6 +13,12 @@ HELPER_BINARY = Path(
         str(ROOT / "build" / "helper-dist" / "snotes-gale-production-pull"),
     )
 )
+REMINDER_HELPER_BINARY = Path(
+    os.environ.get(
+        "S_NOTES_REMINDER_HELPER_BINARY",
+        str(ROOT / "build" / "reminder-helper-dist" / "snotes-reminder-helper"),
+    )
+)
 
 
 analysis = Analysis(
@@ -22,6 +28,7 @@ analysis = Analysis(
     datas=[
         (str(SVG_DIR), "src/icons"),
         (str(HELPER_BINARY), "bin"),
+        (str(REMINDER_HELPER_BINARY), "bin"),
     ],
     hiddenimports=["PySide6.QtSvg"],
     hookspath=[],

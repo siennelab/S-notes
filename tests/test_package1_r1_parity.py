@@ -39,6 +39,11 @@ def open_closing_r1_connection(database_path: Path) -> sqlite3.Connection:
 
 
 class Package1R1ParityTests(unittest.TestCase):
+    R2_ONLY_REMINDER_OBJECTS = {
+        "idx_reminder_occurrences_due",
+        "reminder_occurrences",
+        "reminders",
+    }
     def setUp(self) -> None:
         self.database_connect_patch = patch.object(
             r1_database, "_connect", open_closing_r1_connection
@@ -164,13 +169,16 @@ class Package1R1ParityTests(unittest.TestCase):
     def schema_signature(path: Path):
         with closing(sqlite3.connect(path)) as connection:
             objects = tuple(
-                connection.execute(
+                row
+                for row in connection.execute(
                     """
                     SELECT type, name, tbl_name FROM sqlite_master
                     WHERE name NOT LIKE 'sqlite_%'
                     ORDER BY type, name
                     """
                 ).fetchall()
+                if row[1] not in Package1R1ParityTests.R2_ONLY_REMINDER_OBJECTS
+                and row[2] not in Package1R1ParityTests.R2_ONLY_REMINDER_OBJECTS
             )
             table_names = [
                 row[1] for row in objects if row[0] == "table"

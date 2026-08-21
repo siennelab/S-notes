@@ -15,6 +15,7 @@ from src.snotes.application.ai_safe_export_service import AiSafeExportService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
 from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.application.note_service import NoteService
+from src.snotes.application.reminder_service import ReminderService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.tag_service import TagService
@@ -29,9 +30,11 @@ from src.snotes.storage.repositories.ai_mcp_operations import (
     SQLiteAiMcpOperationRepository,
 )
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
+from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.gale_bootstrap import compose_gale_control
+from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
 from src.snotes.ui.main_window import MainWindow
 
 
@@ -94,6 +97,7 @@ def build_application(
         receipt_inbox_service,
         ai_audit_service,
     )
+    reminder_service = compose_reminder_service(root)
     window = MainWindow(
         note_service,
         theme_settings_path=root / "config" / "ui_settings.ini",
@@ -105,8 +109,19 @@ def build_application(
         ai_safe_export_service=ai_safe_export_service,
         ai_audit_service=ai_audit_service,
         gale_control_service=gale_control_service,
+        reminder_service=reminder_service,
     )
     return application, window
+
+
+def compose_reminder_service(root: Path) -> ReminderService:
+    connections = initialize_database(Path(root) / "s_notes.db")
+    repository = SQLiteReminderRepository(connections)
+    settings = repository.settings()
+    transport = NtfyReminderTransport(
+        ReminderService._private_ntfy_endpoint(settings.ntfy_endpoint)
+    )
+    return ReminderService(repository, transport=transport)
 
 
 def build_local_mcp_service(

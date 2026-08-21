@@ -4,12 +4,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QColor, QFontInfo, QPalette
-from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QTreeWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QAbstractItemView,
+    QComboBox,
+    QPushButton,
+    QToolButton,
+    QTreeWidget,
+)
 
 from src.snotes.bootstrap import build_application
+from src.snotes.domain.reminders import REMINDER_ACTIVE, ReminderDraft
 from src.snotes.domain.models import NoteLocation
+from src.snotes.ui.reminder_center import ReminderDialog
 from src.snotes.ui.sidebar import PAYLOAD_ROLE
 from src.snotes.ui.directory_dialog import DirectoryManagerDialog
 from src.snotes.ui.floating_combo import FloatingComboBox
@@ -18,6 +27,7 @@ from src.snotes.ui.theme import (
     THEMES,
     THEME_SWATCH_COLORS,
     THEME_SWATCH_RING_COLORS,
+    apply_theme,
     build_app_style,
 )
 
@@ -162,7 +172,7 @@ class Package3UiTests(unittest.TestCase):
     def test_sidebar_restores_r1_information_structure(self) -> None:
         sidebar = self.window.shell.sidebar
         self.assertEqual(sidebar.search_input.placeholderText(), "搜索笔记或 #标签")
-        self.assertEqual(set(sidebar.smart_buttons), {"recent", "todo", "ai"})
+        self.assertEqual(set(sidebar.smart_buttons), {"reminder", "todo", "ai"})
         self.assertTrue(sidebar.ai_center_button.isEnabled())
         self.assertEqual(sidebar.ai_center_button.toolTip(), "打开 AI 中心")
         self.assertFalse(hasattr(sidebar, "tagRequested"))
@@ -211,7 +221,7 @@ class Package3UiTests(unittest.TestCase):
             button.text()
             for button in sidebar.findChildren(QPushButton, "smartTabButton")
         ]
-        self.assertEqual(smart_labels, ["最近", "待办", "AI资料", "AI中心"])
+        self.assertEqual(smart_labels, ["提醒", "待办", "AI资料", "AI中心"])
         self.assertEqual(sidebar.main_filter_combo.itemText(0), "全部")
         self.assertEqual(sidebar.sub_filter_combo.itemText(0), "-")
         self.assertEqual(len(sidebar._filter_combos), 2)
@@ -256,7 +266,7 @@ class Package3UiTests(unittest.TestCase):
         self.assertEqual(len(font_signatures), 1)
         self.assertEqual(next(iter(font_signatures))[1], 13)
 
-        for name in ("recent", "todo", "ai"):
+        for name in ("todo", "ai"):
             with self.subTest(view=name):
                 sidebar.smart_buttons[name].click()
                 self.app.processEvents()
@@ -268,6 +278,183 @@ class Package3UiTests(unittest.TestCase):
                 self.assertEqual(self.window.current_directory_path, ())
                 self.assertEqual({note.id for note in self.window.visible_notes}, all_notes)
                 self.assertFalse(any(button.property("active") for button in sidebar.smart_buttons.values()))
+
+    def test_reminder_dialog_uses_localized_dates_and_dynamic_repeat_parameters(self) -> None:
+        dialog = ReminderDialog(parent=self.window)
+        self.addCleanup(dialog.close)
+        self.assertIsInstance(dialog.lifecycle_combo, FloatingComboBox)
+        self.assertIsInstance(dialog.repeat_combo, FloatingComboBox)
+        self.assertIsInstance(dialog.repeat_until_combo, FloatingComboBox)
+        self.assertEqual(dialog.repeat_combo.view().objectName(), "comboPopupView")
+        self.assertEqual(dialog.action_date.displayFormat(), "yyyy-MM-dd")
+        self.assertEqual(dialog.deadline_date.displayFormat(), "yyyy-MM-dd")
+        self.assertEqual(dialog.repeat_until_date.displayFormat(), "yyyy-MM-dd")
+        self.assertEqual(dialog.action_date.locale().name(), "zh_CN")
+        self.assertFalse(dialog.form.isRowVisible(dialog.repeat_param_label))
+        self.assertFalse(dialog.form.isRowVisible(dialog.repeat_until_label))
+        self.assertEqual(dialog.deadline_combo.currentText(), "无")
+        self.assertIsNone(dialog.draft().deadline_spec)
+        self.assertGreaterEqual(dialog.lifecycle_combo.minimumWidth(), 140)
+        self.assertGreaterEqual(dialog.repeat_combo.minimumWidth(), 320)
+        self.assertGreaterEqual(dialog.repeat_until_combo.minimumWidth(), 150)
+
+        dialog.repeat_combo.setCurrentIndex(
+            dialog.repeat_combo.findData("monthly_day")
+        )
+        self.assertTrue(dialog.form.isRowVisible(dialog.repeat_param_label))
+        self.assertTrue(dialog.form.isRowVisible(dialog.repeat_until_label))
+        self.assertEqual(dialog.repeat_param_label.text(), "每月第")
+        self.assertEqual(dialog.repeat_param_unit.text(), "日")
+        dialog.repeat_number.setValue(10)
+        dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("set"))
+        dialog.deadline_day.setValue(15)
+        self.assertFalse(dialog.deadline_day.isHidden())
+        dialog.repeat_until_combo.setCurrentIndex(
+            dialog.repeat_until_combo.findData("date")
+        )
+        dialog.repeat_until_date.setDate(dialog.action_date.date().addYears(1))
+        self.assertEqual(dialog.repeat_until_combo.currentText(), "指定日期")
+        self.assertFalse(dialog.repeat_until_date.isHidden())
+        monthly_draft = dialog.draft()
+        self.assertEqual(monthly_draft.action_spec["day"], 10)
+        self.assertEqual(monthly_draft.deadline_spec, {"type": "monthly_day", "day": 15})
+        self.assertIn("repeat_until", monthly_draft.action_spec)
+        dialog.repeat_until_combo.setCurrentIndex(
+            dialog.repeat_until_combo.findData("never")
+        )
+        self.assertEqual(dialog.repeat_until_combo.currentText(), "永久重复")
+        self.assertTrue(dialog.repeat_until_date.isHidden())
+
+        dialog.repeat_combo.setCurrentIndex(
+            dialog.repeat_combo.findData("interval_from_completion")
+        )
+        dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("none"))
+        dialog.repeat_until_combo.setCurrentIndex(
+            dialog.repeat_until_combo.findData("never")
+        )
+        dialog.repeat_number.setValue(90)
+        self.assertEqual(dialog.repeat_param_label.text(), "实际完成后再间隔")
+        self.assertEqual(dialog.repeat_param_unit.text(), "天")
+        self.assertEqual(dialog.draft().action_spec["days"], 90)
+        self.assertIsNone(dialog.draft().deadline_spec)
+        self.assertEqual(dialog.deadline_combo.currentText(), "无")
+        self.assertFalse(dialog.deadline_combo.isEnabled())
+
+    def test_reminder_dialog_nth_weekday_yearly_and_monthly_round_trip(self) -> None:
+        dialog = ReminderDialog(parent=self.window)
+        self.addCleanup(dialog.close)
+        dialog.title_input.setText("FICTIONAL_FATHERS_DAY_UI")
+        dialog.repeat_combo.setCurrentIndex(
+            dialog.repeat_combo.findData("nth_weekday_yearly")
+        )
+        dialog.action_date.setDate(QDate(2027, 6, 20))
+        draft = dialog.draft()
+        self.assertEqual(
+            draft.action_spec,
+            {"type": "nth_weekday", "nth": 3, "weekday": 6, "month": 6},
+        )
+        yearly = self.window.reminder_service.create_reminder(draft)
+        edit_dialog = ReminderDialog(yearly, self.window)
+        self.addCleanup(edit_dialog.close)
+        self.assertEqual(edit_dialog.repeat_combo.currentData(), "nth_weekday_yearly")
+        self.assertEqual(edit_dialog.draft().action_spec, draft.action_spec)
+
+        monthly = self.window.reminder_service.create_reminder(
+            ReminderDraft(
+                title="FICTIONAL_NTH_MONTHLY_UI",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "nth_weekday", "nth": 2, "weekday": 0},
+                deadline_spec=None,
+                note="",
+            )
+        )
+        monthly_dialog = ReminderDialog(monthly, self.window)
+        self.addCleanup(monthly_dialog.close)
+        self.assertEqual(monthly_dialog.repeat_combo.currentData(), "nth_weekday_monthly")
+        self.assertEqual(
+            monthly_dialog.draft().action_spec,
+            {"type": "nth_weekday", "nth": 2, "weekday": 0},
+        )
+
+    def test_reminder_dialog_calendar_and_combo_follow_themes(self) -> None:
+        for theme_name, tokens in THEMES.items():
+            with self.subTest(theme=theme_name):
+                apply_theme(self.app, theme_name)
+                dialog = ReminderDialog(parent=self.window)
+                self.addCleanup(dialog.close)
+                calendar = dialog.action_date.calendarWidget()
+                self.app.processEvents()
+                self.assertEqual(
+                    calendar.palette().color(QPalette.Base).name().lower(),
+                    QColor(tokens.surface).name().lower(),
+                )
+                self.assertIsNotNone(
+                    calendar.findChild(QAbstractItemView, "reminderCalendarView")
+                )
+                month_button = calendar.findChild(QToolButton, "qt_calendar_monthbutton")
+                self.assertIsNotNone(month_button)
+                self.assertEqual(month_button.menu().objectName(), "reminderCalendarMonthMenu")
+                self.assertEqual(
+                    month_button.menu().palette().color(QPalette.WindowText).name().lower(),
+                    QColor(tokens.text).name().lower(),
+                )
+                self.assertEqual(dialog.repeat_combo.view().objectName(), "comboPopupView")
+
+    def test_reminder_center_button_states_and_completed_occurrence_text(self) -> None:
+        service = self.window.reminder_service
+        reminder = service.create_reminder(
+            ReminderDraft(
+                title="FICTIONAL_MONTHLY_UI",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "monthly_day", "day": 20},
+                deadline_spec=None,
+                note="",
+            )
+        )
+        center = self.window.shell.reminder_center
+        center.refresh()
+        self.assertEqual(
+            [center.table.horizontalHeaderItem(i).text() for i in range(6)],
+            ["事项", "状态", "开始处理日", "重复", "最晚处理日", "备注"],
+        )
+        self.assertEqual(
+            center.table.horizontalHeader().defaultAlignment(),
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        center.table.resize(1000, center.table.height())
+        center._apply_table_widths()
+        self.assertGreaterEqual(center.table.columnWidth(1), 260)
+        self.assertGreaterEqual(center.table.columnWidth(3), 220)
+        self.assertGreaterEqual(center.table.columnWidth(5), 360)
+        self.assertGreater(
+            sum(center.table.columnWidth(column) for column in range(6)),
+            center.table.viewport().width(),
+        )
+        self.assertEqual(
+            center.table.item(0, 0).textAlignment(),
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        center.table.setCurrentCell(0, 0)
+        self.app.processEvents()
+        self.assertTrue(center.pause_button.isEnabled())
+        self.assertFalse(center.resume_button.isEnabled())
+        self.assertTrue(center.complete_occurrence_button.isEnabled())
+        self.assertFalse(center.complete_button.isEnabled())
+
+        service.complete_occurrence(reminder.id)
+        center.refresh()
+        self.assertIn("本次已完成 · 下次", center.table.item(0, 1).text())
+        center.table.setCurrentCell(0, 0)
+        self.app.processEvents()
+        self.assertFalse(center.resume_button.isEnabled())
+        self.assertFalse(center.complete_occurrence_button.isEnabled())
+
+        service.pause_reminder(reminder.id)
+        center.refresh()
+        center.table.setCurrentCell(0, 0)
+        self.app.processEvents()
+        self.assertFalse(center.pause_button.isEnabled())
+        self.assertTrue(center.resume_button.isEnabled())
 
     def test_metadata_hierarchy_theme_swatches_and_selection_palette(self) -> None:
         note = self.create_note("层级对照", "<p>这是用于主题选择的虚构正文</p>")
@@ -355,6 +542,14 @@ class Package3UiTests(unittest.TestCase):
                 self.assertIn(f"color: {tokens.sidebar_text_subtle};", style)
                 self.assertIn("#sidebarSearch, #categoryFilter", style)
                 self.assertIn("#trashTree::item:selected", style)
+                self.assertIn(
+                    f"QScrollBar::handle:vertical {{ min-height: 24px; margin: 0 1px; border-radius: 3px; background: {tokens.scrollbar}; }}",
+                    style,
+                )
+                self.assertIn(
+                    f"QScrollBar::handle:horizontal {{ min-width: 24px; margin: 1px 0; border-radius: 3px; background: {tokens.scrollbar}; }}",
+                    style,
+                )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,526 @@
+from __future__ import annotations
+
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from datetime import date, datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from src.snotes.application.reminder_service import ReminderService
+from src.snotes.background.reminder import (
+    LAUNCH_AGENT_INTERVAL_SECONDS,
+    desired_launch_agent,
+    write_launch_agent_template,
+)
+from src.snotes.domain.reminder_schedule import (
+    is_cn_a_share_trading_day,
+    lunar_to_solar,
+)
+from src.snotes.domain.reminders import (
+    REMINDER_ACTIVE,
+    REMINDER_PAUSED,
+    ReminderDraft,
+)
+from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
+from src.snotes.storage.schema import initialize_database
+
+
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
+class FakeClock:
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value.timestamp()
+
+    def set(self, value: datetime) -> None:
+        self.value = value
+
+
+class FakeTransport:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict[str, str]] = []
+
+    def send(self, *, topic: str, title: str, message: str) -> None:
+        if self.fail:
+            raise RuntimeError("FICTIONAL_NTFY_FAILURE")
+        self.calls.append({"topic": topic, "title": title, "message": message})
+
+
+class ReminderR1Tests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="snotes-reminder-r1-")
+        self.database_path = Path(self.temporary.name) / "fictional.db"
+        self.connections = initialize_database(self.database_path)
+        self.clock = FakeClock(datetime(2026, 9, 10, 10, 0, tzinfo=SHANGHAI))
+        self.transport = FakeTransport()
+        self.repository = SQLiteReminderRepository(
+            self.connections,
+            clock=lambda: datetime.fromtimestamp(self.clock(), SHANGHAI),
+        )
+        self.service = ReminderService(
+            self.repository,
+            transport=self.transport,
+            clock=self.clock,
+        )
+        self.service.settings()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def create(self, title: str, action_spec: dict, deadline_spec: dict | None = None):
+        return self.service.create_reminder(
+            ReminderDraft(
+                title=title,
+                lifecycle=REMINDER_ACTIVE,
+                action_spec=action_spec,
+                deadline_spec=deadline_spec,
+                note="FICTIONAL_NOTE",
+            )
+        )
+
+    def test_one_time_due_and_complete(self) -> None:
+        reminder = self.create(
+            "FICTIONAL_ONE_TIME",
+            {"type": "one_time", "date": "2026-09-10"},
+        )
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.status, "due")
+        self.assertEqual(self.service.badge_count(), 1)
+        self.service.complete_reminder(reminder.id)
+        self.assertEqual(self.service.list_reminders()[0].status, "completed")
+        self.assertEqual(self.service.badge_count(), 0)
+
+    def test_monthly_action_deadline_and_badge_semantics(self) -> None:
+        self.create(
+            "FICTIONAL_MONTHLY_BILL",
+            {"type": "monthly_day", "day": 10},
+            {"type": "monthly_day", "day": 15},
+        )
+        self.create("FICTIONAL_FUTURE", {"type": "one_time", "date": "2026-09-20"})
+        paused = self.create("FICTIONAL_PAUSED", {"type": "one_time", "date": "2026-09-01"})
+        self.service.pause_reminder(paused.id)
+        self.assertEqual(self.service.badge_count(), 1)
+        self.clock.set(datetime(2026, 9, 16, 10, 0, tzinfo=SHANGHAI))
+        items = {item.reminder.title: item for item in self.service.list_reminders()}
+        self.assertEqual(items["FICTIONAL_MONTHLY_BILL"].status, "overdue")
+        self.assertEqual(self.service.badge_count(), 1)
+
+    def test_action_equal_deadline_sends_only_one_notification(self) -> None:
+        self.create(
+            "FICTIONAL_SAME_DAY",
+            {"type": "one_time", "date": "2026-09-10"},
+            {"type": "same_day"},
+        )
+        self.assertEqual(self.service.dispatch_due_notifications(), 1)
+        self.assertEqual(len(self.transport.calls), 1)
+        self.assertIn("最晚处理日", self.transport.calls[0]["message"])
+        self.assertEqual(self.service.dispatch_due_notifications(), 0)
+
+    def test_recurring_complete_occurrence_leaves_next_cycle_active(self) -> None:
+        reminder = self.create(
+            "FICTIONAL_RECURRING",
+            {"type": "monthly_day", "day": 10},
+            {"type": "monthly_day", "day": 15},
+        )
+        self.service.complete_occurrence(reminder.id)
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.next_action_date, "2026-10-10")
+        self.assertEqual(item.next_deadline_date, "2026-10-15")
+        self.assertNotEqual(item.next_deadline_date, "2026-08-15")
+        self.assertEqual(item.status, "occurrence_completed")
+        self.clock.set(datetime(2026, 10, 10, 10, 0, tzinfo=SHANGHAI))
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.next_action_date, "2026-10-10")
+        self.assertEqual(item.next_deadline_date, "2026-10-15")
+        self.assertEqual(item.status, "due")
+
+    def test_editing_schedule_refreshes_uncompleted_occurrence(self) -> None:
+        self.clock.set(datetime(2026, 8, 21, 10, 0, tzinfo=SHANGHAI))
+        reminder = self.create(
+            "FICTIONAL_CELLFIE",
+            {"type": "monthly_day", "day": 4},
+        )
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.next_action_date, "2026-09-04")
+        self.assertIsNone(item.next_deadline_date)
+
+        self.service.update_reminder(
+            reminder.id,
+            ReminderDraft(
+                title="FICTIONAL_CELLFIE",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "monthly_day", "day": 1},
+                deadline_spec={"type": "monthly_day", "day": 3},
+                note="FICTIONAL_NOTE",
+            ),
+        )
+
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.next_action_date, "2026-09-01")
+        self.assertEqual(item.next_deadline_date, "2026-09-03")
+        occurrences = self.service.history(reminder.id)
+        self.assertEqual([occurrence.action_date for occurrence in occurrences], ["2026-09-01"])
+
+    def test_completion_suppresses_same_occurrence_deadline(self) -> None:
+        reminder = self.create(
+            "FICTIONAL_DEADLINE_SUPPRESSED",
+            {"type": "monthly_day", "day": 10},
+            {"type": "monthly_day", "day": 15},
+        )
+        self.service.complete_occurrence(reminder.id)
+        self.clock.set(datetime(2026, 9, 16, 10, 0, tzinfo=SHANGHAI))
+        self.assertEqual(self.service.dispatch_due_notifications(), 0)
+
+    def test_pause_resume_and_delete_history(self) -> None:
+        reminder = self.create("FICTIONAL_MUTABLE", {"type": "one_time", "date": "2026-09-10"})
+        self.service.pause_reminder(reminder.id)
+        self.assertEqual(self.service.list_reminders()[0].status, "paused")
+        self.service.resume_reminder(reminder.id)
+        self.assertEqual(self.service.list_reminders()[0].status, "due")
+        self.service.dispatch_due_notifications()
+        self.assertEqual(len(self.service.history(reminder.id)), 1)
+        self.service.delete_reminder(reminder.id)
+        self.assertEqual(self.service.list_reminders(), [])
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            count = connection.execute("SELECT COUNT(*) FROM reminder_occurrences").fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_default_sorting_puts_most_actionable_first(self) -> None:
+        self.clock.set(datetime(2026, 8, 1, 10, 0, tzinfo=SHANGHAI))
+        self.create("FICTIONAL_FUTURE_LATE", {"type": "one_time", "date": "2026-09-25"})
+        self.create("FICTIONAL_TODAY", {"type": "one_time", "date": "2026-09-10"})
+        self.create(
+            "FICTIONAL_OVERDUE",
+            {"type": "one_time", "date": "2026-09-01"},
+            {"type": "one_time", "date": "2026-09-05"},
+        )
+        self.create("FICTIONAL_FUTURE_SOON", {"type": "one_time", "date": "2026-09-12"})
+        paused = self.create("FICTIONAL_PAUSED_SORT", {"type": "one_time", "date": "2026-09-01"})
+        done = self.create("FICTIONAL_DONE_SORT", {"type": "one_time", "date": "2026-09-01"})
+        recurring = self.create("FICTIONAL_RECURRING_DONE_SORT", {"type": "monthly_day", "day": 10})
+        self.clock.set(datetime(2026, 9, 10, 10, 0, tzinfo=SHANGHAI))
+        self.service.pause_reminder(paused.id)
+        self.service.complete_reminder(done.id)
+        self.service.complete_occurrence(recurring.id)
+        titles = [item.reminder.title for item in self.service.list_reminders()]
+        self.assertEqual(
+            titles,
+            [
+                "FICTIONAL_OVERDUE",
+                "FICTIONAL_TODAY",
+                "FICTIONAL_FUTURE_SOON",
+                "FICTIONAL_FUTURE_LATE",
+                "FICTIONAL_RECURRING_DONE_SORT",
+                "FICTIONAL_PAUSED_SORT",
+                "FICTIONAL_DONE_SORT",
+            ],
+        )
+
+    def test_repeat_until(self) -> None:
+        self.create(
+            "FICTIONAL_REPEAT_UNTIL",
+            {"type": "monthly_day", "day": 10, "repeat_until": "2026-09-30"},
+        )
+        self.assertEqual(self.service.list_reminders()[0].status, "due")
+        self.clock.set(datetime(2026, 10, 1, 10, 0, tzinfo=SHANGHAI))
+        self.service.complete_occurrence(self.service.list_reminders()[0].reminder.id)
+        self.assertIsNone(self.service.list_reminders()[0].next_action_date)
+
+    def test_repeat_until_is_independent_from_occurrence_deadline(self) -> None:
+        self.clock.set(datetime(2027, 2, 7, 10, 0, tzinfo=SHANGHAI))
+        reminder = self.create(
+            "FICTIONAL_GEMINI",
+            {"type": "monthly_day", "day": 7, "repeat_until": "2027-02-07"},
+            {"type": "monthly_day", "day": 7},
+        )
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.next_action_date, "2027-02-07")
+        self.assertEqual(item.next_deadline_date, "2027-02-07")
+        self.assertEqual(self.service.dispatch_due_notifications(), 1)
+        self.assertEqual(len(self.transport.calls), 1)
+        self.service.complete_occurrence(reminder.id)
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.status, "occurrence_completed")
+        self.assertIsNone(item.next_action_date)
+        self.assertIsNone(item.next_deadline_date)
+
+    def test_interval_from_completion_uses_actual_completion_date(self) -> None:
+        self.clock.set(datetime(2026, 9, 4, 10, 0, tzinfo=SHANGHAI))
+        reminder = self.create(
+            "FICTIONAL_90_DAY_KEEPALIVE",
+            {"type": "interval_from_completion", "anchor_date": "2026-09-01", "days": 90},
+        )
+        self.assertIsNone(self.service.list_reminders()[0].next_deadline_date)
+        self.service.complete_occurrence(reminder.id)
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.next_action_date, "2026-12-03")
+        self.assertIsNone(item.next_deadline_date)
+
+    def test_no_deadline_reminder_still_notifies_and_completes(self) -> None:
+        reminder = self.create(
+            "FICTIONAL_NO_DEADLINE",
+            {"type": "one_time", "date": "2026-09-10"},
+            None,
+        )
+        item = self.service.list_reminders()[0]
+        self.assertEqual(item.status, "due")
+        self.assertIsNone(item.next_deadline_date)
+        self.assertEqual(self.service.dispatch_due_notifications(), 1)
+        self.assertIn("开始处理", self.transport.calls[0]["message"])
+        self.service.complete_reminder(reminder.id)
+        self.assertEqual(self.service.list_reminders()[0].status, "completed")
+
+    def test_public_ntfy_default_is_not_used(self) -> None:
+        self.repository.set_text_setting("reminder/ntfy_endpoint", "https://ntfy.sh")
+        settings = self.service.settings()
+        self.assertEqual(settings.ntfy_endpoint, "")
+
+    def test_nth_weekday(self) -> None:
+        self.create(
+            "FICTIONAL_NTH_WEEKDAY",
+            {"type": "nth_weekday", "month": 5, "nth": 2, "weekday": "sunday"},
+        )
+        self.clock.set(datetime(2027, 1, 1, 10, 0, tzinfo=SHANGHAI))
+        self.assertEqual(self.service.list_reminders()[0].next_action_date, "2027-05-09")
+
+    def test_yearly_nth_weekday_for_parents_days(self) -> None:
+        self.create(
+            "FICTIONAL_FATHERS_DAY",
+            {"type": "nth_weekday", "month": 6, "nth": 3, "weekday": 6},
+        )
+        self.create(
+            "FICTIONAL_MOTHERS_DAY",
+            {"type": "nth_weekday", "month": 5, "nth": 2, "weekday": 6},
+        )
+        items = {item.reminder.title: item for item in self.service.list_reminders()}
+        self.assertEqual(items["FICTIONAL_FATHERS_DAY"].next_action_date, "2027-06-20")
+        self.assertEqual(items["FICTIONAL_MOTHERS_DAY"].next_action_date, "2027-05-09")
+
+    def test_nth_weekday_skips_months_without_that_slot(self) -> None:
+        self.create(
+            "FICTIONAL_FIFTH_MONDAY",
+            {"type": "nth_weekday", "nth": 5, "weekday": 0},
+        )
+        self.assertEqual(self.service.list_reminders()[0].next_action_date, "2026-11-30")
+
+    def test_s_catalog_every_required_schedule_is_expressible(self) -> None:
+        # 逐条覆盖产品清单：账单、保号、生日、A股定投都必须能算出正确日期。
+        expectations = {
+            "FICTIONAL_GEMINI_FAMILY": (
+                {"type": "monthly_day", "day": 7, "repeat_until": "2027-02-07"},
+                {"type": "monthly_day", "day": 7},
+                "2026-10-07",
+                "2026-10-07",
+            ),
+            "FICTIONAL_QQPW_HOME": (
+                {"type": "monthly_day", "day": 10},
+                {"type": "monthly_day", "day": 15},
+                "2026-09-10",
+                "2026-09-15",
+            ),
+            "FICTIONAL_VMISS_TRI": (
+                {"type": "monthly_day", "day": 12},
+                {"type": "monthly_day", "day": 21},
+                "2026-09-12",
+                "2026-09-21",
+            ),
+            "FICTIONAL_GPT_BUSINESS": (
+                {"type": "monthly_day", "day": 22},
+                {"type": "monthly_day", "day": 29},
+                "2026-09-22",
+                "2026-09-29",
+            ),
+            "FICTIONAL_BWG_TEARDOWN": (
+                {"type": "one_time", "date": "2026-09-11"},
+                {"type": "one_time", "date": "2026-09-18"},
+                "2026-09-11",
+                "2026-09-18",
+            ),
+            "FICTIONAL_REDPOCKET_RENEWAL": (
+                {"type": "one_time", "date": "2027-06-03"},
+                None,
+                "2027-06-03",
+                None,
+            ),
+            "FICTIONAL_CTEXCEL_KEEPALIVE": (
+                {
+                    "type": "interval_from_completion",
+                    "anchor_date": "2026-08-05",
+                    "days": 90,
+                },
+                None,
+                "2026-11-03",
+                None,
+            ),
+            "FICTIONAL_DAD_LUNAR_BIRTHDAY": (
+                {"type": "lunar_yearly", "month": 9, "day": 2, "leap_month": False},
+                None,
+                "2026-10-11",
+                None,
+            ),
+            "FICTIONAL_MOM_LUNAR_BIRTHDAY": (
+                {"type": "lunar_yearly", "month": 7, "day": 4, "leap_month": False},
+                None,
+                "2027-08-05",
+                None,
+            ),
+            "FICTIONAL_A_SHARE_ETF": (
+                {"type": "cn_a_share_on_or_after", "day": 5},
+                None,
+                "2026-10-08",
+                None,
+            ),
+        }
+        for title, (action_spec, deadline_spec, _a, _d) in expectations.items():
+            self.create(title, action_spec, deadline_spec)
+        items = {item.reminder.title: item for item in self.service.list_reminders()}
+        for title, (_spec, _deadline, action, deadline) in expectations.items():
+            with self.subTest(reminder=title):
+                self.assertEqual(items[title].next_action_date, action)
+                self.assertEqual(items[title].next_deadline_date, deadline)
+
+    def test_lunar_yearly_conversion_known_fixture_years(self) -> None:
+        self.assertEqual(lunar_to_solar(2025, 1, 1), date(2025, 1, 29))
+        self.assertEqual(lunar_to_solar(2026, 1, 1), date(2026, 2, 17))
+        self.assertEqual(lunar_to_solar(2026, 8, 15), date(2026, 9, 25))
+        self.assertEqual(lunar_to_solar(2025, 6, 1), date(2025, 6, 25))
+        self.assertEqual(lunar_to_solar(2050, 1, 1), date(2050, 1, 23))
+        self.assertEqual(
+            lunar_to_solar(2025, 6, 1, leap_month=True),
+            date(2025, 7, 25),
+        )
+        self.create(
+            "FICTIONAL_LUNAR_BIRTHDAY",
+            {"type": "lunar_yearly", "month": 9, "day": 2, "leap_month": False},
+        )
+        self.assertRegex(self.service.list_reminders()[0].next_action_date or "", r"2026-\d\d-\d\d")
+
+    def test_lunar_year_after_embedded_table_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lunar_year_out_of_supported_range"):
+            lunar_to_solar(2051, 1, 1)
+        self.clock.set(datetime(2051, 1, 1, 10, 0, tzinfo=SHANGHAI))
+        self.create(
+            "FICTIONAL_LUNAR_OUT_OF_RANGE",
+            {"type": "lunar_yearly", "month": 1, "day": 1, "leap_month": False},
+        )
+        with self.assertRaisesRegex(ValueError, "lunar_year_out_of_supported_range"):
+            self.service.list_reminders()
+
+    def test_a_share_day_five_or_next_actual_trading_day(self) -> None:
+        self.assertFalse(is_cn_a_share_trading_day(date(2026, 5, 5)))
+        self.assertTrue(is_cn_a_share_trading_day(date(2026, 5, 6)))
+        self.clock.set(datetime(2026, 5, 1, 10, 0, tzinfo=SHANGHAI))
+        self.create(
+            "FICTIONAL_MARKET_DAY",
+            {"type": "cn_a_share_on_or_after", "day": 5},
+        )
+        self.assertEqual(self.service.list_reminders()[0].next_action_date, "2026-05-06")
+
+    def test_a_share_unsupported_future_year_fails_closed(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "cn_a_share_calendar_year_not_supported:2027",
+        ):
+            is_cn_a_share_trading_day(date(2027, 1, 5))
+        self.clock.set(datetime(2027, 1, 1, 10, 0, tzinfo=SHANGHAI))
+        self.create(
+            "FICTIONAL_MARKET_UNSUPPORTED_YEAR",
+            {"type": "cn_a_share_on_or_after", "day": 5},
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "cn_a_share_calendar_year_not_supported:2027",
+        ):
+            self.service.list_reminders()
+
+    def test_asia_shanghai_independent_from_machine_timezone(self) -> None:
+        self.clock.set(datetime(2026, 9, 9, 18, 30, tzinfo=ZoneInfo("UTC")))
+        self.create("FICTIONAL_TZ", {"type": "one_time", "date": "2026-09-10"})
+        self.assertEqual(self.service.badge_count(), 1)
+
+    def test_ntfy_failure_remains_retryable_and_success_dedups(self) -> None:
+        reminder = self.create("FICTIONAL_RETRY", {"type": "one_time", "date": "2026-09-10"})
+        failing = FakeTransport(fail=True)
+        failing_service = ReminderService(self.repository, transport=failing, clock=self.clock)
+        with self.assertRaises(RuntimeError):
+            failing_service.dispatch_due_notifications()
+        self.assertIsNone(self.service.history(reminder.id)[0].action_notified_at)
+        self.assertEqual(self.service.dispatch_due_notifications(), 1)
+        self.assertEqual(self.service.dispatch_due_notifications(), 0)
+
+    def test_missed_action_recovery_and_deadline_compaction(self) -> None:
+        self.clock.set(datetime(2026, 9, 1, 10, 0, tzinfo=SHANGHAI))
+        self.create(
+            "FICTIONAL_MISSED_ACTION",
+            {"type": "monthly_day", "day": 10},
+            {"type": "monthly_day", "day": 15},
+        )
+        self.clock.set(datetime(2026, 9, 12, 10, 0, tzinfo=SHANGHAI))
+        self.assertEqual(self.service.dispatch_due_notifications(), 1)
+        self.assertIn("开始处理", self.transport.calls[-1]["message"])
+
+        self.temporary.cleanup()
+        self.setUp()
+        self.clock.set(datetime(2026, 9, 1, 10, 0, tzinfo=SHANGHAI))
+        self.create(
+            "FICTIONAL_COMPACTED",
+            {"type": "monthly_day", "day": 10},
+            {"type": "monthly_day", "day": 15},
+        )
+        self.clock.set(datetime(2026, 9, 16, 10, 0, tzinfo=SHANGHAI))
+        self.assertEqual(self.service.dispatch_due_notifications(), 1)
+        self.assertIn("最晚处理日", self.transport.calls[-1]["message"])
+
+    def test_scheduled_window_and_no_real_network_in_unit_tests(self) -> None:
+        self.create("FICTIONAL_SCHEDULED", {"type": "one_time", "date": "2026-09-10"})
+        self.clock.set(datetime(2026, 9, 10, 9, 59, tzinfo=SHANGHAI))
+        self.assertEqual(self.service.run_scheduled_once(), 0)
+        self.clock.set(datetime(2026, 9, 10, 10, 0, tzinfo=SHANGHAI))
+        self.assertEqual(self.service.run_scheduled_once(), 1)
+        self.assertEqual(self.service.run_scheduled_once(), 0)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_independent_reminder_helper_launch_agent_template(self) -> None:
+        helper = Path(self.temporary.name) / "bin" / "snotes-reminder-helper"
+        plist = desired_launch_agent(helper)
+        self.assertEqual(plist["Label"], "com.snotes.reminder-helper")
+        self.assertEqual(plist["StartInterval"], LAUNCH_AGENT_INTERVAL_SECONDS)
+        self.assertEqual(plist["ProgramArguments"][-1], "--scheduled")
+        destination = Path(self.temporary.name) / "LaunchAgents" / "com.snotes.reminder-helper.plist"
+        write_launch_agent_template(destination, helper)
+        self.assertTrue(destination.is_file())
+
+    def test_migration_from_pre_reminder_schema_preserves_existing_content(self) -> None:
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            connection.execute("DROP TABLE reminder_occurrences")
+            connection.execute("DROP TABLE reminders")
+            connection.execute(
+                """
+                INSERT INTO notes (
+                    title, body_rich_text, content_html, created_at, updated_at
+                ) VALUES ('FICTIONAL_EXISTING_NOTE', '', '<p>safe</p>', '2026-01-01', '2026-01-01')
+                """
+            )
+            connection.commit()
+        initialize_database(self.database_path)
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            title = connection.execute("SELECT title FROM notes").fetchone()[0]
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+        self.assertEqual(title, "FICTIONAL_EXISTING_NOTE")
+        self.assertIn("reminders", tables)
+        self.assertIn("reminder_occurrences", tables)
+
+
+if __name__ == "__main__":
+    unittest.main()

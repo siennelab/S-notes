@@ -93,7 +93,11 @@ class NoteSidebar(QWidget):
         smart_row = QHBoxLayout()
         smart_row.setSpacing(4)
         self.smart_buttons: dict[str, QPushButton] = {}
-        for label, name in (("最近", "recent"), ("待办", "todo"), ("AI资料", "ai")):
+        for label, name in (
+            ("提醒", "reminder"),
+            ("待办", "todo"),
+            ("AI资料", "ai"),
+        ):
             button = QPushButton(label)
             button.setObjectName("smartTabButton")
             button.setProperty("active", False)
@@ -156,6 +160,13 @@ class NoteSidebar(QWidget):
         self.ai_center_button.setText(
             f"AI中心 ({count})" if count else "AI中心"
         )
+
+    def set_reminder_badge_count(self, pending_count: int) -> None:
+        button = self.smart_buttons.get("reminder")
+        if button is None:
+            return
+        count = int(pending_count)
+        button.setText(f"提醒 ({count})" if count else "提醒")
 
     def configure_ai_actor_filters(
         self,
