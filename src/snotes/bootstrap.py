@@ -120,6 +120,7 @@ def compose_reminder_service(root: Path) -> ReminderService:
     settings = repository.settings()
     transport = NtfyReminderTransport(
         ReminderService._private_ntfy_endpoint(settings.ntfy_endpoint)
+        or "https://ntfy.sh"
     )
     return ReminderService(repository, transport=transport)
 

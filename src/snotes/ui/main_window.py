@@ -330,11 +330,21 @@ class MainWindow(QMainWindow):
 
     def switch_note(self, note_id: int) -> None:
         if self.current_note is not None and note_id == self.current_note.id:
+            self._enter_note_navigation_mode()
             return
         if not self.force_save_current_note():
             self._restore_sidebar_selection()
             return
+        self._enter_note_navigation_mode()
         self.load_note(note_id)
+
+    def _enter_note_navigation_mode(self) -> None:
+        if self.current_mode == "smart_view" and self.current_filter == "reminder":
+            self.current_mode = "directory"
+            self.current_filter = ""
+            self.shell.sidebar.mode = "directory"
+            self.shell.sidebar.clear_active_smart_view()
+        self.shell.show_notes_surface()
 
     def load_note(self, note_id: int) -> bool:
         self.shell.show_notes_surface()

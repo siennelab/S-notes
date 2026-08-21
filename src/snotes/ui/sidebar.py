@@ -238,6 +238,7 @@ class NoteSidebar(QWidget):
     def _build_content_stack(self, layout: QVBoxLayout) -> None:
         self.note_list = NoteListWidget()
         self.note_list.currentItemChanged.connect(self._emit_selected_note)
+        self.note_list.itemClicked.connect(self._emit_clicked_note)
         self.note_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.note_list.customContextMenuRequested.connect(self._open_note_context_menu)
         self.trash_tree = QTreeWidget()
@@ -524,9 +525,17 @@ class NoteSidebar(QWidget):
         self.active_smart_view = name
         self._update_mode_states()
 
+    def clear_active_smart_view(self) -> None:
+        self.active_smart_view = ""
+        self._update_mode_states()
+
     def _emit_selected_note(self, current: QListWidgetItem | None, _previous) -> None:
         if current is not None:
             self.noteSelected.emit(int(current.data(Qt.UserRole)))
+
+    def _emit_clicked_note(self, item: QListWidgetItem | None) -> None:
+        if item is not None:
+            self.noteSelected.emit(int(item.data(Qt.UserRole)))
 
     def _toggle_trash(self) -> None:
         (self.exitTrashRequested if self.mode == "trash" else self.trashRequested).emit()

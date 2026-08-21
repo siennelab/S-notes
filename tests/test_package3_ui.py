@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QComboBox,
+    QLabel,
+    QLineEdit,
     QPushButton,
     QToolButton,
     QTreeWidget,
@@ -70,6 +72,14 @@ class Package3UiTests(unittest.TestCase):
         for index in range(tree.topLevelItemCount()):
             visit(tree.topLevelItem(index))
         return items
+
+    def note_list_item(self, note_id: int):
+        note_list = self.window.shell.sidebar.note_list
+        for row in range(note_list.count()):
+            item = note_list.item(row)
+            if int(item.data(Qt.UserRole)) == note_id:
+                return item
+        raise AssertionError(f"note item not found: {note_id}")
 
     def test_search_tag_smart_views_and_multi_selection_are_operable(self) -> None:
         first = self.create_note("Alpha 中文", "<p>正文</p>", tags=("todo",))
@@ -195,6 +205,66 @@ class Package3UiTests(unittest.TestCase):
         self.assertLess(shell.links_button.geometry().top(), shell.body_editor.geometry().top())
         self.assertLess(shell.export_button.geometry().top(), shell.body_editor.geometry().top())
         self.assertGreater(shell.delete_button.mapTo(shell.editor_pane, shell.delete_button.rect().topLeft()).y(), shell.body_editor.geometry().top())
+
+    def test_reminder_note_navigation_is_single_click_and_stays_in_editor(self) -> None:
+        note = self.create_note("导航 A", "<p>虚构正文</p>")
+        self.create_note("导航 B", "<p>其他正文</p>")
+        self.window.refresh_note_list(note.id)
+        self.window.load_note(note.id)
+        item = self.note_list_item(note.id)
+
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+
+        item = self.note_list_item(note.id)
+        self.window.shell.sidebar.note_list.itemClicked.emit(item)
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+        self.assertEqual(self.window.current_mode, "directory")
+
+        self.window.body_edit.insertPlainText(" 输入")
+        self.window.save_timer.stop()
+        self.assertTrue(self.window.save_current_note())
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+
+        item = self.note_list_item(note.id)
+        self.window.shell.sidebar.note_list.itemClicked.emit(item)
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+
+        self.window.shell.sidebar.note_list.itemClicked.emit(item)
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
 
     def test_frozen_r1_geometry_and_approved_two_level_classification(self) -> None:
         shell = self.window.shell
@@ -413,6 +483,22 @@ class Package3UiTests(unittest.TestCase):
         )
         center = self.window.shell.reminder_center
         center.refresh()
+        self.assertIsInstance(center.topic_input, QLineEdit)
+        self.assertTrue(center.topic_input.isReadOnly())
+        self.assertTrue(center.topic_input.text().startswith("snotes-reminder-"))
+        self.assertGreaterEqual(
+            center.topic_input.width(),
+            center.topic_input.fontMetrics().horizontalAdvance(center.topic_input.text()),
+        )
+        self.assertEqual(center.copy_topic_button.text(), "复制 Topic")
+        self.assertNotIn(
+            "发送测试通知",
+            [button.text() for button in center.findChildren(QPushButton)],
+        )
+        self.assertFalse(
+            any("时区" in label.text() or "服务器" in label.text() for label in center.findChildren(QLabel))
+        )
+        self.assertEqual(center.findChildren(QLabel, "reminderSettingsHint"), [])
         self.assertEqual(
             [center.table.horizontalHeaderItem(i).text() for i in range(6)],
             ["事项", "状态", "开始处理日", "重复", "最晚处理日", "备注"],

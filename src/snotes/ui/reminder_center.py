@@ -116,33 +116,25 @@ class ReminderCenter(QWidget):
         self.settings_widget = QWidget()
         self.settings_widget.setObjectName("reminderSettings")
         settings = QHBoxLayout(self.settings_widget)
-        settings.setContentsMargins(0, 0, 0, 0)
-        settings.setSpacing(8)
+        settings.setContentsMargins(0, 2, 0, 0)
+        settings.setSpacing(6)
         self.enabled_check = QCheckBox("通知：开启")
         self.time_edit = QTimeEdit()
         self.time_edit.setObjectName("reminderTimeEdit")
         self.time_edit.setDisplayFormat("HH:mm")
-        self.server_value_label = QLabel()
-        self.server_value_label.setObjectName("reminderSettingsLabel")
         self.topic_input = QLineEdit()
         self.topic_input.setObjectName("reminderTopicInput")
         self.topic_input.setPlaceholderText("Reminder ntfy topic")
+        self.topic_input.setReadOnly(True)
+        self.topic_input.setMinimumWidth(420)
         self.copy_topic_button = QPushButton("复制 Topic")
-        self.settings_hint = QLabel("手机 ntfy → 添加订阅 → 使用以上服务器和 Topic")
-        self.settings_hint.setObjectName("reminderSettingsHint")
-        self.test_button = QPushButton("发送测试通知")
         settings.addWidget(self.enabled_check)
         settings.addWidget(_settings_label("时间"))
         settings.addWidget(self.time_edit)
-        settings.addWidget(_settings_label("时区：Asia/Shanghai"))
-        settings.addWidget(_settings_label("服务器"))
-        settings.addWidget(self.server_value_label)
         settings.addWidget(_settings_label("Topic"))
         settings.addWidget(self.topic_input, stretch=1)
         settings.addWidget(self.copy_topic_button)
-        settings.addWidget(self.test_button)
         layout.addWidget(self.settings_widget)
-        layout.addWidget(self.settings_hint)
 
         self.new_button.clicked.connect(self._new)
         self.edit_button.clicked.connect(self._edit)
@@ -153,9 +145,7 @@ class ReminderCenter(QWidget):
         self.complete_button.clicked.connect(self._complete)
         self.enabled_check.stateChanged.connect(self._save_settings)
         self.time_edit.timeChanged.connect(self._save_settings)
-        self.topic_input.editingFinished.connect(self._save_settings)
         self.copy_topic_button.clicked.connect(self._copy_topic)
-        self.test_button.clicked.connect(self._test_notification)
         self.refresh_theme()
         self.refresh()
 
@@ -287,8 +277,6 @@ class ReminderCenter(QWidget):
         self.enabled_check.setChecked(settings.notifications_enabled)
         parsed_time = QTime.fromString(settings.daily_time, "HH:mm")
         self.time_edit.setTime(parsed_time if parsed_time.isValid() else QTime(10, 0))
-        self.server_value_label.setText(_endpoint_host(settings.ntfy_endpoint))
-        self.server_value_label.setToolTip(settings.ntfy_endpoint)
         self.topic_input.setText(settings.ntfy_topic)
         self.enabled_check.blockSignals(False)
         self.time_edit.blockSignals(False)
@@ -728,9 +716,9 @@ def _status_text(item: ReminderListItem) -> str:
 
 def _endpoint_host(endpoint: str) -> str:
     if not endpoint.strip():
-        return "需要配置 VMISS TRI ntfy"
+        return "ntfy.sh"
     parsed = urlparse(endpoint if "://" in endpoint else f"https://{endpoint}")
-    return parsed.netloc or parsed.path or "需要配置 VMISS TRI ntfy"
+    return parsed.netloc or parsed.path or "ntfy.sh"
 
 
 def _settings_label(text: str) -> QLabel:

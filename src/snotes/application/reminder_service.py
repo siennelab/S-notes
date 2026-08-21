@@ -141,8 +141,8 @@ class ReminderService:
             raise RuntimeError("reminder_notification_transport_not_configured")
         self._transport.send(
             topic=settings.ntfy_topic,
-            title="S-notes Reminder 测试",
-            message="FICTIONAL_REMINDER_TEST",
+            title="S-notes Reminder",
+            message="Reminder ntfy test OK",
         )
         self._repository.set_text_setting(self.LAST_TEST_TOPIC_KEY, settings.ntfy_topic)
 

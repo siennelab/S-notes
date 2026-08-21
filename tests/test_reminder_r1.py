@@ -14,6 +14,7 @@ from src.snotes.background.reminder import (
     desired_launch_agent,
     write_launch_agent_template,
 )
+from src.snotes.bootstrap import compose_reminder_service
 from src.snotes.domain.reminder_schedule import (
     is_cn_a_share_trading_day,
     lunar_to_solar,
@@ -281,6 +282,11 @@ class ReminderR1Tests(unittest.TestCase):
         settings = self.service.settings()
         self.assertEqual(settings.ntfy_endpoint, "")
 
+    def test_test_notification_uses_human_gate_copy(self) -> None:
+        self.service.send_test_notification()
+        self.assertEqual(self.transport.calls[-1]["title"], "S-notes Reminder")
+        self.assertEqual(self.transport.calls[-1]["message"], "Reminder ntfy test OK")
+
     def test_nth_weekday(self) -> None:
         self.create(
             "FICTIONAL_NTH_WEEKDAY",
@@ -495,6 +501,11 @@ class ReminderR1Tests(unittest.TestCase):
         destination = Path(self.temporary.name) / "LaunchAgents" / "com.snotes.reminder-helper.plist"
         write_launch_agent_template(destination, helper)
         self.assertTrue(destination.is_file())
+
+    def test_helper_composition_uses_public_ntfy_default(self) -> None:
+        root = Path(self.temporary.name) / "formal-root"
+        service = compose_reminder_service(root)
+        self.assertEqual(service._transport.endpoint, "https://ntfy.sh/")
 
     def test_migration_from_pre_reminder_schema_preserves_existing_content(self) -> None:
         with closing(sqlite3.connect(self.database_path)) as connection:
