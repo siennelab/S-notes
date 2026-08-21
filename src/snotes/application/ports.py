@@ -313,6 +313,10 @@ class GaleMirrorWriter(Protocol):
         output_path: Path,
         *,
         actor_target_id: str,
+        directories: Sequence[dict] = (),
+        tags: Sequence[str] = (),
+        visibility_options: Sequence[tuple[str, str]] = (),
+        ai_targets: Sequence[tuple[str, str]] = (),
     ) -> GaleMirrorResult: ...
 
     def verify(

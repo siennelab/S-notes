@@ -15,6 +15,7 @@ from src.snotes.application.gale_service import (
     GalePublishService,
     GalePullService,
 )
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.ports import GaleOutboxTransport, GalePublishTransport
 from src.snotes.application.tag_service import TagService
@@ -62,6 +63,9 @@ def build_gale_control_service(
         notes,
         receipts,
         audit,
+        directories=DirectoryService(directories, notes),
+        tags=TagService(tags),
+        ai_metadata=metadata,
         publish_transport=publish_transport,
         outbox_transport=outbox_transport,
         outbox_mode=outbox_mode,
@@ -74,6 +78,9 @@ def compose_gale_control(
     receipts: AiReceiptInboxService,
     audit: AiAuditService,
     *,
+    directories: DirectoryService | None = None,
+    tags: TagService | None = None,
+    ai_metadata: AiAccessMetadataService | None = None,
     publish_transport: GalePublishTransport | None = None,
     outbox_transport: GaleOutboxTransport | None = None,
     outbox_mode: str = "production",
@@ -87,6 +94,9 @@ def compose_gale_control(
         ),
         SQLiteGaleMirrorWriter(),
         audit,
+        directories=directories,
+        tags=tags,
+        ai_metadata=ai_metadata,
     )
     publish = GalePublishService(
         mirror,

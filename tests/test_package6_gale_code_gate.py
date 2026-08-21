@@ -13,8 +13,12 @@ from pathlib import Path
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_audit_service import AiAuditService
-from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
+from src.snotes.application.ai_receipt_inbox_service import (
+    AiReceiptAcceptFields,
+    AiReceiptInboxService,
+)
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.gale_service import (
     GaleControlService,
     GaleMirrorService,
@@ -178,6 +182,9 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             AiSafeReadService(self.rules, body_renderer=html_to_text),
             SQLiteGaleMirrorWriter(),
             self.audit,
+            directories=DirectoryService(self.directories, self.note_repository),
+            tags=self.tags,
+            ai_metadata=self.metadata,
         )
 
     def _seed(
@@ -213,7 +220,7 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         result = self.mirror.generate(path)
         rows = self._mirror_rows(path)
         flattened = repr(rows)
-        self.assertEqual(result.schema_version, "1")
+        self.assertEqual(result.schema_version, "2")
         self.assertEqual(result.target_actor, "gale")
         self.assertEqual(result.file_mode, "0600")
         self.assertEqual(result.note_count, 3)
@@ -229,6 +236,15 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             metadata = dict(connection.execute(
                 "SELECT meta_key, meta_value FROM mirror_metadata"
             ))
+            catalog_tables = {
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name LIKE 'mirror_%'
+                    """
+                )
+            }
         self.assertEqual(
             set(metadata),
             {
@@ -236,6 +252,9 @@ class Package6GaleCodeGateTests(unittest.TestCase):
                 "generator_app_version", "note_count", "generation_summary",
             },
         )
+        self.assertIn("mirror_directories", catalog_tables)
+        self.assertIn("mirror_tags", catalog_tables)
+        self.assertIn("mirror_ai_targets", catalog_tables)
 
     def test_redaction_unavailable_skips_only_redacted(self) -> None:
         self.rules.unlink()
@@ -337,6 +356,59 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         self.assertFalse(hasattr(pending[0], "sub_sub_category"))
         self.assertEqual(len(transport.acks), 2)
         self.assertEqual(len(self.notes.list_active_notes()), 6)
+
+    def test_pull_prefills_metadata_and_accept_uses_s_final_fields(self) -> None:
+        base = self._submission()
+        submission = GaleSubmission(
+            base.submission_uuid,
+            base.source_actor,
+            base.external_submission_id,
+            base.idempotency_key,
+            base.title,
+            base.content,
+            base.suggested_directory,
+            base.suggested_tags,
+            base.created_at,
+            base.delivery_state,
+            base.delivered_at,
+            "full",
+            ("gale",),
+            "Gale Proposal",
+            "Draft",
+            ("gale-proposed",),
+        )
+        pull = GalePullService(
+            FakeOutboxTransport((submission,)),
+            self.receipts,
+            self.audit,
+        )
+        pull.pull_once()
+        pending = self.receipts.list_pending_receipts()[0]
+        self.assertEqual(pending.ai_visibility, "full")
+        self.assertEqual(pending.ai_targets, "gale")
+        self.assertEqual(
+            (pending.main_category, pending.sub_category, pending.tags),
+            ("Gale Proposal", "Draft", "gale-proposed"),
+        )
+
+        accepted = self.receipts.accept_receipt(
+            pending.id,
+            AiReceiptAcceptFields(
+                title="S final Gale note",
+                body="S final body",
+                main_category="S Final",
+                sub_category="Chosen",
+                tags="s-final",
+                visibility="redacted",
+                target_ids=("ke-den",),
+            ),
+        )
+        note = accepted.note
+        self.assertEqual((note.main_category, note.sub_category), ("S Final", "Chosen"))
+        self.assertEqual(self.tags.get_note_tags(note.id), ["s-final"])
+        metadata = self.metadata.get_note_metadata(note.id)
+        self.assertEqual(metadata.visibility, "redacted")
+        self.assertEqual(metadata.target_ids, ("ke-den",))
 
     def test_local_failure_has_no_ack_and_ack_retry_has_no_duplicate(self) -> None:
         submission = self._submission()

@@ -36,6 +36,9 @@ from src.services.gale_remote_service import (
     GaleRemoteConfig,
     GaleRemoteError,
     get_remote_note,
+    list_remote_ai_metadata_options,
+    list_remote_directories,
+    list_remote_tags,
     load_gale_remote_config,
     monotonic_milliseconds,
     safe_request_id,
@@ -85,6 +88,9 @@ TitleText = Annotated[str, Field(min_length=1, max_length=MAX_TITLE_LENGTH)]
 ContentText = Annotated[str, Field(min_length=1, max_length=MAX_CONTENT_LENGTH)]
 DirectoryText = Annotated[str, Field(max_length=MAX_DIRECTORY_LENGTH)]
 TagText = Annotated[str, Field(min_length=1, max_length=MAX_TAG_LENGTH)]
+MetadataText = Annotated[str, Field(max_length=MAX_DIRECTORY_LENGTH)]
+VisibilityText = Annotated[str, Field(max_length=20)]
+TargetText = Annotated[str, Field(min_length=1, max_length=MAX_TAG_LENGTH)]
 IdempotencyText = Annotated[
     str,
     Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_LENGTH),
@@ -118,6 +124,10 @@ class RemoteGetResponse(StrictModel):
     content: str = ""
     directory: str = ""
     tags: list[str] = Field(default_factory=list)
+    ai_visibility: str = ""
+    ai_targets: list[str] = Field(default_factory=list)
+    main_category: str = ""
+    sub_category: str = ""
     updated_at: str = ""
     version: str = ""
     reason: str = ""
@@ -129,6 +139,49 @@ class CreateSubmissionResponse(StrictModel):
     external_submission_id: str = ""
     delivery_state: str = ""
     duplicate: bool = False
+    reason: str = ""
+
+
+class RemoteDirectoryItem(StrictModel):
+    directory_id: int
+    name: str
+    parent_id: int | None = None
+    main_category: str
+    sub_category: str = ""
+    path: list[str]
+    writable: bool = True
+
+
+class RemoteDirectoryResponse(StrictModel):
+    status: Literal["ok", "unavailable", "failed"]
+    directories: list[RemoteDirectoryItem]
+    reason: str = ""
+
+
+class RemoteTagItem(StrictModel):
+    name: str
+
+
+class RemoteTagResponse(StrictModel):
+    status: Literal["ok", "unavailable", "failed"]
+    tags: list[RemoteTagItem]
+    reason: str = ""
+
+
+class RemoteVisibilityOption(StrictModel):
+    value: str
+    label: str
+
+
+class RemoteAiTargetOption(StrictModel):
+    target_id: str
+    display_name: str
+
+
+class RemoteAiMetadataOptionsResponse(StrictModel):
+    status: Literal["ok", "unavailable", "failed"]
+    ai_visibility_options: list[RemoteVisibilityOption]
+    ai_targets: list[RemoteAiTargetOption]
     reason: str = ""
 
 
@@ -409,6 +462,9 @@ async def _send_anonymous_tool_list(
                 if tool.get("name") not in {
                     "search_notes",
                     "get_note",
+                    "list_directories",
+                    "list_tags",
+                    "list_ai_metadata_options",
                     "create_note_submission",
                 }:
                     continue
@@ -638,6 +694,118 @@ def _register_read_only_tools(
                 reason="mirror_read_unavailable",
             )
 
+    @server.tool(
+        name="list_directories",
+        title="List S-notes directory catalog",
+        description=(
+            "Read-only metadata discovery from the current Gale mirror catalog. "
+            "This lists product categories, not note permissions."
+        ),
+        annotations=annotations,
+        meta=OAUTH_TOOL_META,
+    )
+    def list_directories() -> RemoteDirectoryResponse:
+        started_at = time.monotonic()
+        request_id = safe_request_id()
+        try:
+            result = list_remote_directories(config)
+            _log_tool_event(
+                request_id=request_id,
+                tool_name="list_directories",
+                status=result["status"],
+                result_count=len(result["directories"]),
+                latency_ms=monotonic_milliseconds(started_at),
+            )
+            return RemoteDirectoryResponse(**result)
+        except Exception:
+            _log_tool_event(
+                request_id=request_id,
+                tool_name="list_directories",
+                status="failed",
+                result_count=0,
+                latency_ms=monotonic_milliseconds(started_at),
+                error_code="catalog_read_failed",
+            )
+            return RemoteDirectoryResponse(
+                status="failed",
+                directories=[],
+                reason="catalog_read_unavailable",
+            )
+
+    @server.tool(
+        name="list_tags",
+        title="List S-notes tag catalog",
+        description="Read-only metadata discovery of current S-notes tags.",
+        annotations=annotations,
+        meta=OAUTH_TOOL_META,
+    )
+    def list_tags() -> RemoteTagResponse:
+        started_at = time.monotonic()
+        request_id = safe_request_id()
+        try:
+            result = list_remote_tags(config)
+            _log_tool_event(
+                request_id=request_id,
+                tool_name="list_tags",
+                status=result["status"],
+                result_count=len(result["tags"]),
+                latency_ms=monotonic_milliseconds(started_at),
+            )
+            return RemoteTagResponse(**result)
+        except Exception:
+            _log_tool_event(
+                request_id=request_id,
+                tool_name="list_tags",
+                status="failed",
+                result_count=0,
+                latency_ms=monotonic_milliseconds(started_at),
+                error_code="catalog_read_failed",
+            )
+            return RemoteTagResponse(
+                status="failed",
+                tags=[],
+                reason="catalog_read_unavailable",
+            )
+
+    @server.tool(
+        name="list_ai_metadata_options",
+        title="List AI metadata options",
+        description=(
+            "Read-only metadata discovery of valid AI visibility values and "
+            "active AI actor stable IDs."
+        ),
+        annotations=annotations,
+        meta=OAUTH_TOOL_META,
+    )
+    def list_ai_metadata_options() -> RemoteAiMetadataOptionsResponse:
+        started_at = time.monotonic()
+        request_id = safe_request_id()
+        try:
+            result = list_remote_ai_metadata_options(config)
+            _log_tool_event(
+                request_id=request_id,
+                tool_name="list_ai_metadata_options",
+                status=result["status"],
+                result_count=len(result["ai_targets"]),
+                latency_ms=monotonic_milliseconds(started_at),
+            )
+            return RemoteAiMetadataOptionsResponse(**result)
+        except Exception:
+            _log_tool_event(
+                request_id=request_id,
+                tool_name="list_ai_metadata_options",
+                status="failed",
+                result_count=0,
+                latency_ms=monotonic_milliseconds(started_at),
+                error_code="catalog_read_failed",
+            )
+            return RemoteAiMetadataOptionsResponse(
+                status="failed",
+                ai_visibility_options=[],
+                ai_targets=[],
+                reason="catalog_read_unavailable",
+            )
+
 
 def _register_submission_tool(
     server: FastMCP,
@@ -667,6 +835,11 @@ def _register_submission_tool(
         content: ContentText,
         suggested_directory: DirectoryText = "",
         suggested_tags: list[TagText] | None = None,
+        ai_visibility: VisibilityText | None = None,
+        ai_targets: list[TargetText] | None = None,
+        main_category: MetadataText | None = None,
+        sub_category: MetadataText | None = None,
+        tags: list[TagText] | None = None,
         idempotency_key: IdempotencyText | None = None,
     ) -> CreateSubmissionResponse:
         started_at = time.monotonic()
@@ -686,12 +859,19 @@ def _register_submission_tool(
         try:
             if suggested_tags is not None and len(suggested_tags) > MAX_TAG_COUNT:
                 raise GaleSubmissionOutboxError("too_many_tags")
+            if tags is not None and len(tags) > MAX_TAG_COUNT:
+                raise GaleSubmissionOutboxError("too_many_tags")
             submission, duplicate = create_submission(
                 outbox_path,
                 title=title,
                 content=content,
                 suggested_directory=suggested_directory,
                 suggested_tags=suggested_tags or [],
+                ai_visibility=ai_visibility,
+                ai_targets=ai_targets,
+                main_category=main_category,
+                sub_category=sub_category,
+                tags=tags,
                 idempotency_key=idempotency_key,
                 source_actor=GALE_PRODUCTION_ACTOR,
             )

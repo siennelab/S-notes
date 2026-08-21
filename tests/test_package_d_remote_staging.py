@@ -133,6 +133,34 @@ class PackageDRemoteStagingTest(unittest.TestCase):
                 local_receipt_id="43",
             )
 
+    def test_metadata_submission_round_trips_without_breaking_old_calls(self) -> None:
+        old_submission, _duplicate = self.create_fictional(suffix="old")
+        new_submission, _duplicate = create_submission(
+            self.outbox,
+            title="FICTIONAL_REMOTE_GALE_METADATA_SUBMISSION",
+            content="Fictional metadata proposal body.",
+            suggested_directory="旧兼容/Gale",
+            suggested_tags=["legacy"],
+            ai_visibility="redacted",
+            ai_targets=["gale", "ke-den"],
+            main_category="技术",
+            sub_category="网络",
+            tags=["metadata", "roundtrip"],
+            idempotency_key="fictional-remote-metadata-roundtrip",
+            source_actor=GALE_STAGING_ACTOR,
+        )
+        exported = export_unacknowledged(self.outbox)
+        by_id = {item.submission_uuid: item for item in exported}
+        self.assertEqual(by_id[old_submission.submission_uuid].ai_visibility, "")
+        restored = by_id[new_submission.submission_uuid]
+        self.assertEqual(restored.ai_visibility, "redacted")
+        self.assertEqual(restored.ai_targets, ("gale", "ke-den"))
+        self.assertEqual(
+            (restored.main_category, restored.sub_category),
+            ("技术", "网络"),
+        )
+        self.assertEqual(restored.tags, ("metadata", "roundtrip"))
+
     def test_outbox_lock_fails_without_dropping_submission(self) -> None:
         locking = sqlite3.connect(self.outbox, timeout=0)
         locking.execute("BEGIN IMMEDIATE")

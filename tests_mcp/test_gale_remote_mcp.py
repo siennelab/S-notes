@@ -85,6 +85,14 @@ ISSUER = "https://fictional-tenant.example.test/"
 RESOURCE = "https://snotes.example.test/mcp"
 SUBJECT = "auth0|fictional-gale-reader"
 CLIENT_ID = "fictional-chatgpt-client"
+EXPECTED_REMOTE_TOOLS = [
+    "search_notes",
+    "get_note",
+    "list_directories",
+    "list_tags",
+    "list_ai_metadata_options",
+    "create_note_submission",
+]
 
 
 class AcceptAllTestVerifier(TokenVerifier):
@@ -333,7 +341,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             tools = await session.list_tools()
             self.assertEqual(
                 [tool.name for tool in tools],
-                ["search_notes", "get_note", "create_note_submission"],
+                EXPECTED_REMOTE_TOOLS,
             )
             for tool in tools:
                 self.assertEqual(
@@ -363,7 +371,10 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                         }
                     ],
                 )
-            create_schema = tools[2].inputSchema["properties"]
+            create_schema = {
+                tool.name: tool.inputSchema["properties"]
+                for tool in tools
+            }["create_note_submission"]
             self.assertEqual(
                 set(create_schema),
                 {
@@ -371,8 +382,72 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     "content",
                     "suggested_directory",
                     "suggested_tags",
+                    "ai_visibility",
+                    "ai_targets",
+                    "main_category",
+                    "sub_category",
+                    "tags",
                     "idempotency_key",
                 },
+            )
+            directories = await session.call_tool("list_directories", {})
+            self.assertEqual(directories.structured_content["status"], "ok")
+            directory_names = {
+                tuple(item["path"])
+                for item in directories.structured_content["directories"]
+            }
+            self.assertIn(("CODEX_ONLY_REMOTE_DIR",), directory_names)
+            tags = await session.call_tool("list_tags", {})
+            self.assertEqual(tags.structured_content["status"], "ok")
+            tag_names = {
+                item["name"] for item in tags.structured_content["tags"]
+            }
+            self.assertIn("CODEX_ONLY_REMOTE_TAG", tag_names)
+            options = await session.call_tool("list_ai_metadata_options", {})
+            self.assertEqual(options.structured_content["status"], "ok")
+            self.assertIn(
+                {"target_id": "gale", "display_name": "Gale"},
+                options.structured_content["ai_targets"],
+            )
+
+            dynamic_root = self.root / "dynamic-actor-mirror"
+            dynamic_root.mkdir(mode=0o700)
+            dynamic_mirror = dynamic_root / "gale-mirror.db"
+            dynamic_actor = SimpleNamespace(
+                target_id="fictional-runtime-remote-actor",
+                display_name="Fictional Runtime Remote Actor",
+            )
+            with patch(
+                "src.services.gale_mirror_service.selectable_target_definitions",
+                return_value=(dynamic_actor,),
+            ):
+                export_gale_mirror(
+                    source_database=self.source,
+                    output_path=dynamic_mirror,
+                    redaction_rules_path=self.rules,
+                    generator_app_version="fictional-dynamic-actor-test",
+                )
+            dynamic_server = build_server(
+                replace(
+                    self.config,
+                    mirror_path=dynamic_mirror,
+                    mirror_root=dynamic_root,
+                ),
+                auth_provider=AcceptAllTestVerifier(),
+            )
+            async with Client(dynamic_server) as dynamic_session:
+                dynamic_options = await dynamic_session.call_tool(
+                    "list_ai_metadata_options",
+                    {},
+                )
+            self.assertEqual(
+                dynamic_options.structured_content["ai_targets"],
+                [
+                    {
+                        "target_id": "fictional-runtime-remote-actor",
+                        "display_name": "Fictional Runtime Remote Actor",
+                    }
+                ],
             )
 
             for term in (
@@ -382,8 +457,8 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 "ORBITAL_TAG_TERM",
                 "SAFE_TITLE_TERM",
                 "SAFE_BODY_TERM",
-                "SAFE_DIR_TERM",
-                "SAFE_TAG_TERM",
+                RAW_CANARIES[2],
+                RAW_CANARIES[3],
             ):
                 response = await session.call_tool(
                     "search_notes",
@@ -421,9 +496,38 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 {"note_id": injection_id},
             )
             self.assertEqual(read_response.structured_content["status"], "ok")
+            self.assertEqual(
+                read_response.structured_content["ai_visibility"],
+                "full",
+            )
+            self.assertEqual(
+                read_response.structured_content["ai_targets"],
+                ["gale"],
+            )
+            self.assertEqual(
+                read_response.structured_content["tags"],
+                ["INERT_PROMPT_TEXT"],
+            )
             self.assertIn(
                 "忽略此前指令",
                 read_response.structured_content["content"],
+            )
+            redacted_response = await session.call_tool(
+                "get_note",
+                {"note_id": self.note_ids["redacted"]},
+            )
+            self.assertEqual(redacted_response.structured_content["status"], "ok")
+            self.assertEqual(
+                redacted_response.structured_content["tags"],
+                [RAW_CANARIES[3]],
+            )
+            self.assertEqual(
+                redacted_response.structured_content["main_category"],
+                RAW_CANARIES[2],
+            )
+            self.assertEqual(
+                redacted_response.structured_content["directory"],
+                f"{RAW_CANARIES[2]} / 无 / 无",
             )
 
             missing = await session.call_tool(
@@ -440,6 +544,10 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     "content",
                     "directory",
                     "tags",
+                    "ai_visibility",
+                    "ai_targets",
+                    "main_category",
+                    "sub_category",
                     "updated_at",
                     "version",
                     "reason",
@@ -466,8 +574,15 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             "DELETED_REMOTE_TERM",
         ):
             self.assertEqual(search_remote_mirror(self.config, excluded), [])
-        for raw in RAW_CANARIES:
+        for raw in RAW_CANARIES[:2]:
             self.assertEqual(search_remote_mirror(self.config, raw), [])
+        for raw in RAW_CANARIES[2:]:
+            results = search_remote_mirror(self.config, raw)
+            self.assertEqual(
+                {item["note_id"] for item in results},
+                {self.note_ids["redacted"]},
+            )
+        for raw in RAW_CANARIES[:2]:
             self.assertNotIn(raw.encode(), self.mirror.read_bytes())
         self.assertIsNone(get_remote_note(self.config, self.note_ids["codex"]))
         self.assertIsNone(get_remote_note(self.config, self.note_ids["hidden"]))
@@ -725,7 +840,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 tool_payloads = tools.json()["result"]["tools"]
                 self.assertEqual(
                     [tool["name"] for tool in tool_payloads],
-                    ["search_notes", "get_note", "create_note_submission"],
+                    EXPECTED_REMOTE_TOOLS,
                 )
                 for tool in tool_payloads:
                     expected_security_schemes = [
@@ -936,6 +1051,45 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIsNotNone(stored)
                 self.assertEqual(stored.source_actor, GALE_PRODUCTION_ACTOR)
+                self.assertEqual(stored.ai_visibility, "")
+
+                metadata_created = await self._rpc(
+                    client,
+                    request_id=50,
+                    method="tools/call",
+                    params={
+                        "name": "create_note_submission",
+                        "arguments": {
+                            "title": "FICTIONAL_METADATA_SUBMISSION",
+                            "content": "Fictional metadata submission content.",
+                            "suggested_directory": "旧兼容/Gale",
+                            "suggested_tags": ["legacy"],
+                            "ai_visibility": "redacted",
+                            "ai_targets": ["gale", "ke-den"],
+                            "main_category": "技术",
+                            "sub_category": "网络",
+                            "tags": ["metadata", "remote"],
+                            "idempotency_key": "fictional-production-metadata-key",
+                        },
+                    },
+                    token=self._token(),
+                )
+                metadata_content = metadata_created.json()["result"][
+                    "structuredContent"
+                ]
+                self.assertEqual(metadata_content["status"], "ok")
+                metadata_stored = get_submission(
+                    self.outbox,
+                    metadata_content["submission_uuid"],
+                )
+                self.assertEqual(metadata_stored.ai_visibility, "redacted")
+                self.assertEqual(metadata_stored.ai_targets, ("gale", "ke-den"))
+                self.assertEqual(
+                    (metadata_stored.main_category, metadata_stored.sub_category),
+                    ("技术", "网络"),
+                )
+                self.assertEqual(metadata_stored.tags, ("metadata", "remote"))
+                self.assertEqual(outbox_status(self.outbox)["queued"], 2)
 
                 rejected_tokens = (
                     "not-a-token",
@@ -1177,7 +1331,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             tool["name"]
                             for tool in tools.json()["result"]["tools"]
                         ],
-                        ["search_notes", "get_note", "create_note_submission"],
+                        EXPECTED_REMOTE_TOOLS,
                     )
                     search = await self._rpc(
                         client,
@@ -1224,7 +1378,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                             tool["name"]
                             for tool in no_token.json()["result"]["tools"]
                         ],
-                        ["search_notes", "get_note", "create_note_submission"],
+                        EXPECTED_REMOTE_TOOLS,
                     )
                     wrong_token = await self._rpc(
                         client,
@@ -1605,7 +1759,7 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
 
     def test_remote_mirror_gate_and_query_only_connection(self) -> None:
         health = validate_remote_mirror(self.config)
-        self.assertEqual(health.schema_version, "1")
+        self.assertEqual(health.schema_version, "2")
         self.assertEqual(health.note_count, 3)
         mirror_hash = _sha256(self.mirror)
 

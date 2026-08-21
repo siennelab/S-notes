@@ -181,7 +181,10 @@ def parse_export_payload(
     raw: bytes, *, expected_source_actor: str = AI_ACTOR_GALE_ID
 ) -> tuple[GaleSubmission, ...]:
     payload = _decode_json(raw, "remote_payload_invalid")
-    if not isinstance(payload, dict) or payload.get("schema_version") != OUTBOX_SCHEMA_VERSION:
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {
+        1,
+        OUTBOX_SCHEMA_VERSION,
+    }:
         raise GaleError("remote_schema_unsupported")
     values = payload.get("submissions")
     if not isinstance(values, list) or len(values) > MAX_EXPORT_COUNT:
@@ -197,7 +200,12 @@ def _submission(value: object, expected_source_actor: str) -> GaleSubmission:
         "idempotency_key", "title", "content", "suggested_directory",
         "suggested_tags", "created_at", "delivery_state", "delivered_at",
     }
-    if not isinstance(value, dict) or set(value) != required:
+    optional = {
+        "ai_visibility", "ai_targets", "main_category", "sub_category", "tags",
+    }
+    if not isinstance(value, dict) or not required.issubset(value):
+        raise GaleError("remote_submission_invalid")
+    if not set(value).issubset(required | optional):
         raise GaleError("remote_submission_invalid")
     submission_uuid = _uuid(value["submission_uuid"])
     if value["source_actor"] != expected_source_actor:
@@ -218,11 +226,18 @@ def _submission(value: object, expected_source_actor: str) -> GaleSubmission:
         raise GaleError("suggested_tags_invalid")
     if value["delivery_state"] != "delivered":
         raise GaleError("remote_delivery_state_invalid")
+    ai_targets = _text_list(value.get("ai_targets") or [], 50, 20, "ai_targets")
+    proposal_tags = _text_list(value.get("tags") or [], 50, 20, "tags")
     return GaleSubmission(
         submission_uuid, expected_source_actor, submission_uuid, key, title, content,
         directory, tuple(dict.fromkeys(tag.strip() for tag in tags)),
         _text(value["created_at"], 40, "created_at"), "delivered",
         _text(value["delivered_at"], 40, "delivered_at"),
+        _text(value.get("ai_visibility") or "", 20, "ai_visibility", required=False),
+        ai_targets,
+        _text(value.get("main_category") or "", 200, "main_category", required=False),
+        _text(value.get("sub_category") or "", 200, "sub_category", required=False),
+        proposal_tags,
     )
 
 
@@ -261,6 +276,26 @@ def _text(value: object, maximum: int, field: str, *, required: bool = True) -> 
     if len(text) > maximum:
         raise GaleError(f"{field}_too_long")
     return text
+
+
+def _text_list(
+    value: object,
+    maximum: int,
+    count: int,
+    field: str,
+) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, list):
+        raise GaleError(f"{field}_invalid")
+    if len(value) > count:
+        raise GaleError(f"{field}_too_many")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = _text(item, maximum, field)
+        if text not in seen:
+            seen.add(text)
+            normalized.append(text)
+    return tuple(normalized)
 
 
 def _validate_hash(value: str) -> None:

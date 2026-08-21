@@ -96,6 +96,9 @@ def build_application(
         notes,
         receipt_inbox_service,
         ai_audit_service,
+        directories=directory_service,
+        tags=tag_service,
+        ai_metadata=ai_access_metadata_service,
     )
     reminder_service = compose_reminder_service(root)
     window = MainWindow(

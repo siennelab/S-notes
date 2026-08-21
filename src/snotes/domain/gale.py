@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-MIRROR_SCHEMA_VERSION = "1"
-OUTBOX_SCHEMA_VERSION = 1
+MIRROR_SCHEMA_VERSION = "2"
+OUTBOX_SCHEMA_VERSION = 2
 GALE_STAGING_SOURCE_ACTOR = "gale-staging"
 
 
@@ -30,6 +30,10 @@ class GaleMirrorRecord:
     visibility: str
     redacted: bool
     redaction_count: int
+    ai_visibility: str = ""
+    ai_targets: tuple[str, ...] = ()
+    main_category: str = ""
+    sub_category: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +90,11 @@ class GaleSubmission:
     created_at: str
     delivery_state: str
     delivered_at: str
+    ai_visibility: str = ""
+    ai_targets: tuple[str, ...] = ()
+    main_category: str = ""
+    sub_category: str = ""
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

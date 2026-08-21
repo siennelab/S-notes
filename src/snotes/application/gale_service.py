@@ -12,12 +12,14 @@ from pathlib import Path
 
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_actor_registry import AI_ACTOR_GALE_ID
+from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import (
     AiSafeReadService,
     AiSafeReadSource,
     RedactionUnavailableError,
 )
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_write_service import note_version_token
 from src.snotes.application.ports import (
     GaleMirrorWriter,
@@ -37,6 +39,7 @@ from src.snotes.domain.gale import (
 )
 from src.snotes.domain.models import NoteLocation
 from src.snotes.domain.tags import parse_tags
+from src.snotes.application.tag_service import TagService
 
 
 class GaleMirrorService:
@@ -48,11 +51,18 @@ class GaleMirrorService:
         safe_reads: AiSafeReadService,
         writer: GaleMirrorWriter,
         audit: AiAuditService,
+        *,
+        directories: DirectoryService | None = None,
+        tags: TagService | None = None,
+        ai_metadata: AiAccessMetadataService | None = None,
     ) -> None:
         self._notes = notes
         self._safe_reads = safe_reads
         self._writer = writer
         self._audit = audit
+        self._directories = directories
+        self._tags = tags
+        self._ai_metadata = ai_metadata
 
     def generate(self, output_path: Path) -> GaleMirrorResult:
         request_id = uuid.uuid4().hex
@@ -63,6 +73,7 @@ class GaleMirrorService:
                 records,
                 Path(output_path),
                 actor_target_id=AI_ACTOR_GALE_ID,
+                **self._metadata_catalog(),
             )
         except Exception:
             self._audit.record_event(
@@ -121,16 +132,64 @@ class GaleMirrorService:
                     source_note_id=note.id,
                     title=safe.title,
                     body=safe.content,
-                    directory=safe.directory,
-                    tags=safe.tags,
+                    directory=" / ".join(note.location.values()),
+                    tags=tuple(parse_tags(note.tags)),
                     source_updated_at=note.updated_at,
                     source_version=note_version_token(note.id, note.updated_at),
                     visibility=safe.visibility,
                     redacted=safe.redacted,
                     redaction_count=safe.redaction_count,
+                    ai_visibility=stored.ai_visibility,
+                    ai_targets=tuple(target_ids),
+                    main_category=note.location.values()[0],
+                    sub_category=note.location.values()[1],
                 )
             )
         return records, redaction_unavailable
+
+    def _metadata_catalog(self) -> dict:
+        directories: list[dict] = []
+        if self._directories is not None:
+            for directory in self._directories.list_directories():
+                path = self._directories.get_directory_path(directory.id)
+                directories.append(
+                    {
+                        "directory_id": directory.id,
+                        "name": directory.name,
+                        "parent_id": directory.parent_id,
+                        "main_category": path[0] if path else directory.name,
+                        "sub_category": path[1] if len(path) > 1 else "",
+                        "path": path,
+                    }
+                )
+        tags = tuple(self._tags.list_tags()) if self._tags is not None else ()
+        visibility_options = (
+            self._ai_metadata.available_visibility_options()
+            if self._ai_metadata is not None
+            else ()
+        )
+        ai_targets = (
+            tuple(
+                (target.target_id, target.display_name)
+                for target in self._ai_metadata.available_targets()
+            )
+            if self._ai_metadata is not None
+            else ()
+        )
+        return {
+            "directories": tuple(
+                sorted(
+                    directories,
+                    key=lambda item: (
+                        tuple(item["path"]),
+                        int(item["directory_id"]),
+                    ),
+                )
+            ),
+            "tags": tuple(sorted(tags, key=str.casefold)),
+            "visibility_options": visibility_options,
+            "ai_targets": ai_targets,
+        }
 
     def verify(self, path: Path, *, expected_note_count: int | None = None):
         return self._writer.verify(
@@ -374,8 +433,10 @@ class GalePullService:
                         idempotency_key=submission.idempotency_key,
                         title=submission.title,
                         body=submission.content,
-                        location=_location(submission.suggested_directory),
-                        tags=submission.suggested_tags,
+                        location=_submission_location(submission),
+                        tags=_submission_tags(submission),
+                        ai_visibility=submission.ai_visibility,
+                        ai_targets=submission.ai_targets,
                     )
                 )
                 imported += int(created)
@@ -420,6 +481,19 @@ def _location(value: str) -> NoteLocation:
         parts[0] if parts else "临时",
         parts[1] if len(parts) > 1 else "Gale 投稿",
     )
+
+
+def _submission_location(submission: GaleSubmission) -> NoteLocation:
+    if submission.main_category.strip():
+        return NoteLocation(
+            submission.main_category.strip(),
+            submission.sub_category.strip() or "无",
+        )
+    return _location(submission.suggested_directory)
+
+
+def _submission_tags(submission: GaleSubmission) -> tuple[str, ...]:
+    return submission.tags or submission.suggested_tags
 
 
 class GaleControlService:

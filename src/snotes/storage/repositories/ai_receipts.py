@@ -58,7 +58,7 @@ GALE_IMPORT_SQL = """INSERT INTO ai_receipt_inbox (
     sub_category, tags, ai_visibility, ai_targets, body,
     created_at, updated_at, external_submission_id, idempotency_key
 ) VALUES ('', 'parsed', 'pending', 'Gale', '新增', ?, ?, ?, ?,
-          'hidden', '', ?, ?, ?, ?, ?)"""
+          ?, ?, ?, ?, ?, ?, ?)"""
 
 
 class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
@@ -109,6 +109,8 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 main,
                 sub,
                 ", ".join(submission.tags),
+                submission.ai_visibility,
+                ", ".join(submission.ai_targets),
                 submission.body,
                 timestamp,
                 timestamp,

@@ -262,10 +262,26 @@ def get_remote_note(
         raise GaleRemoteError("invalid_note_id")
     connection = _open_remote_mirror(config)
     try:
+        has_metadata = _table_has_columns(
+            connection,
+            "mirror_notes",
+            {
+                "ai_visibility",
+                "ai_targets_json",
+                "main_category",
+                "sub_category",
+            },
+        )
+        metadata_columns = (
+            ", ai_visibility, ai_targets_json, main_category, sub_category"
+            if has_metadata
+            else ""
+        )
         row = connection.execute(
-            """
+            f"""
             SELECT source_note_id, title, body, directory, tags_json,
                    source_updated_at, source_version
+                   {metadata_columns}
             FROM mirror_notes
             WHERE source_note_id = ?
             """,
@@ -277,7 +293,7 @@ def get_remote_note(
         connection.close()
     if row is None:
         return None
-    return {
+    result = {
         "note_id": int(row["source_note_id"]),
         "title": str(row["title"]),
         "content": str(row["body"]),
@@ -285,6 +301,124 @@ def get_remote_note(
         "tags": _safe_tags(row["tags_json"]),
         "updated_at": str(row["source_updated_at"]),
         "version": str(row["source_version"]),
+    }
+    if has_metadata:
+        result.update(
+            {
+                "ai_visibility": str(row["ai_visibility"]),
+                "ai_targets": _safe_tags(row["ai_targets_json"]),
+                "main_category": str(row["main_category"]),
+                "sub_category": str(row["sub_category"]),
+            }
+        )
+    return result
+
+
+def list_remote_directories(config: GaleRemoteConfig) -> dict[str, Any]:
+    connection = _open_remote_mirror(config)
+    try:
+        if not _table_exists(connection, "mirror_directories"):
+            return {
+                "status": "unavailable",
+                "directories": [],
+                "reason": "catalog_unavailable",
+            }
+        rows = connection.execute(
+            """
+            SELECT directory_id, name, parent_id, main_category,
+                   sub_category, path_json
+            FROM mirror_directories
+            ORDER BY path_json, directory_id
+            """
+        ).fetchall()
+    except sqlite3.Error as error:
+        raise GaleRemoteError("catalog_read_failed") from error
+    finally:
+        connection.close()
+    return {
+        "status": "ok",
+        "directories": [
+            {
+                "directory_id": int(row["directory_id"]),
+                "name": str(row["name"]),
+                "parent_id": (
+                    int(row["parent_id"]) if row["parent_id"] is not None else None
+                ),
+                "main_category": str(row["main_category"]),
+                "sub_category": str(row["sub_category"]),
+                "path": _safe_tags(row["path_json"]),
+                "writable": True,
+            }
+            for row in rows
+        ],
+        "reason": "",
+    }
+
+
+def list_remote_tags(config: GaleRemoteConfig) -> dict[str, Any]:
+    connection = _open_remote_mirror(config)
+    try:
+        if not _table_exists(connection, "mirror_tags"):
+            return {"status": "unavailable", "tags": [], "reason": "catalog_unavailable"}
+        rows = connection.execute(
+            "SELECT name FROM mirror_tags ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    except sqlite3.Error as error:
+        raise GaleRemoteError("catalog_read_failed") from error
+    finally:
+        connection.close()
+    return {
+        "status": "ok",
+        "tags": [{"name": str(row["name"])} for row in rows],
+        "reason": "",
+    }
+
+
+def list_remote_ai_metadata_options(config: GaleRemoteConfig) -> dict[str, Any]:
+    connection = _open_remote_mirror(config)
+    try:
+        if not all(
+            _table_exists(connection, table)
+            for table in ("mirror_ai_visibility_options", "mirror_ai_targets")
+        ):
+            return {
+                "status": "unavailable",
+                "ai_visibility_options": [],
+                "ai_targets": [],
+                "reason": "catalog_unavailable",
+            }
+        visibility_rows = connection.execute(
+            """
+            SELECT value, label
+            FROM mirror_ai_visibility_options
+            ORDER BY rowid
+            """
+        ).fetchall()
+        target_rows = connection.execute(
+            """
+            SELECT target_id, display_name
+            FROM mirror_ai_targets
+            ORDER BY rowid
+            """
+        ).fetchall()
+    except sqlite3.Error as error:
+        raise GaleRemoteError("catalog_read_failed") from error
+    finally:
+        connection.close()
+    return {
+        "status": "ok",
+        "ai_visibility_options": [
+            {"value": str(row["value"]), "label": str(row["label"])}
+            for row in visibility_rows
+        ],
+        "ai_targets": [
+            {
+                "target_id": str(row["target_id"]),
+                "display_name": str(row["display_name"]),
+            }
+            for row in target_rows
+        ],
+        "reason": "",
     }
 
 
@@ -311,6 +445,30 @@ def _open_remote_mirror(config: GaleRemoteConfig) -> sqlite3.Connection:
     connection.execute("PRAGMA trusted_schema = OFF")
     connection.execute("PRAGMA busy_timeout = 5000")
     return connection
+
+
+def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = ?
+        """,
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_has_columns(
+    connection: sqlite3.Connection,
+    table: str,
+    columns: set[str],
+) -> bool:
+    existing = {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    return columns.issubset(existing)
 
 
 def _validate_exact_fts_rowids(mirror: Path) -> None:
@@ -359,7 +517,7 @@ def _prove_read_only_reopen(mirror: Path) -> None:
         ).fetchone()
         if query_only != 1 or schema_version is None:
             raise GaleRemoteError("read_only_reopen_failed")
-        if str(schema_version[0]) != MIRROR_SCHEMA_VERSION:
+        if str(schema_version[0]) not in {"1", MIRROR_SCHEMA_VERSION}:
             raise GaleRemoteError("schema_version_mismatch")
     except sqlite3.Error as error:
         raise GaleRemoteError("read_only_reopen_failed") from error
@@ -386,7 +544,7 @@ def _health_from_verification(
     verification: GaleMirrorVerification,
 ) -> GaleRemoteHealth:
     return GaleRemoteHealth(
-        schema_version=MIRROR_SCHEMA_VERSION,
+        schema_version=getattr(verification, "schema_version", MIRROR_SCHEMA_VERSION),
         note_count=verification.note_count,
         fts_count=verification.fts_count,
         file_mode=verification.file_mode,

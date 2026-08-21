@@ -91,3 +91,5 @@ class GaleReceiptImport:
     body: str
     location: NoteLocation
     tags: tuple[str, ...]
+    ai_visibility: str = "hidden"
+    ai_targets: tuple[str, ...] = ()

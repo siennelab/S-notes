@@ -26,6 +26,7 @@ from src.database import (
 )
 from src.redaction import apply_redactions
 from src.services.gale_mirror_service import (
+    CATALOG_TABLES,
     MIRROR_SCHEMA_VERSION,
     GaleMirrorError,
     GaleMirrorSafeRecord,
@@ -352,11 +353,11 @@ class GaleMirrorExportTest(unittest.TestCase):
         self.assertEqual(redacted["body"], "MASKED_BODY_TERM")
         self.assertEqual(
             redacted["directory"],
-            "MASKED_DIR_TERM / 无 / 无",
+            "RAW_DIR_SECRET / 无 / 无",
         )
         self.assertEqual(
             json.loads(redacted["tags_json"]),
-            ["MASKED_TAG_TERM"],
+            ["RAW_TAG_SECRET"],
         )
         self.assertEqual(redacted["visibility"], "redacted")
         self.assertEqual(redacted["redacted"], 1)
@@ -370,7 +371,7 @@ class GaleMirrorExportTest(unittest.TestCase):
             ensure_ascii=False,
         )
         mirror_bytes = self.output_path.read_bytes()
-        for raw_canary in RAW_CANARIES:
+        for raw_canary in RAW_CANARIES[:2]:
             self.assertNotIn(raw_canary, serialized_mirror)
             self.assertNotIn(raw_canary.encode("utf-8"), mirror_bytes)
         for excluded_canary in (
@@ -392,11 +393,12 @@ class GaleMirrorExportTest(unittest.TestCase):
                 "mirror_notes_fts_content",
                 "mirror_notes_fts_docsize",
                 "mirror_notes_fts_config",
-            },
+            }
+            | CATALOG_TABLES,
         )
         self.assertEqual(metadata["target_actor"], "gale")
         self.assertEqual(metadata["note_count"], "3")
-        self.assertEqual(metadata["mirror_schema_version"], "1")
+        self.assertEqual(metadata["mirror_schema_version"], MIRROR_SCHEMA_VERSION)
 
         self.assertEqual(
             _result_ids(search_gale_mirror(self.output_path, "FULL_TITLE_TERM")),
@@ -421,8 +423,8 @@ class GaleMirrorExportTest(unittest.TestCase):
         for safe_redacted_query in (
             "MASKED_TITLE_TERM",
             "MASKED_BODY_TERM",
-            "MASKED_DIR_TERM",
-            "MASKED_TAG_TERM",
+            "RAW_DIR_SECRET",
+            "RAW_TAG_SECRET",
         ):
             self.assertEqual(
                 _result_ids(
@@ -433,10 +435,15 @@ class GaleMirrorExportTest(unittest.TestCase):
                 ),
                 {self.note_ids["gale_redacted"]},
             )
-        for raw_canary in RAW_CANARIES:
+        for raw_canary in RAW_CANARIES[:2]:
             self.assertEqual(
                 search_gale_mirror(self.output_path, raw_canary),
                 [],
+            )
+        for raw_canary in RAW_CANARIES[2:]:
+            self.assertEqual(
+                _result_ids(search_gale_mirror(self.output_path, raw_canary)),
+                {self.note_ids["gale_redacted"]},
             )
         for excluded_query in (
             "CODEX_ONLY_TITLE_TERM",

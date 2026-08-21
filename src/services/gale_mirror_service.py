@@ -7,11 +7,16 @@ import sqlite3
 import stat
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from src.ai_targets import AI_VISIBILITY_FULL, AI_VISIBILITY_REDACTED
+from src.snotes.application.ai_actor_registry import selectable_target_definitions
+from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_VALUES,
+    visibility_display,
+)
 from src.search_query import (
     build_safe_fts_phrase,
     match_search_fields,
@@ -21,7 +26,7 @@ from src.services.ai_access_service import materialize_ai_safe_notes_for_target
 from src.time_utils import now_shanghai_iso
 
 
-MIRROR_SCHEMA_VERSION = "1"
+MIRROR_SCHEMA_VERSION = "2"
 GALE_ACTOR_ID = "gale"
 GENERATOR_APP_VERSION = "S-notes 1.0.0 R1A"
 SEMANTIC_SEARCH_INCLUDED = False
@@ -31,6 +36,12 @@ REQUIRED_TABLES = {
     "mirror_notes",
     "mirror_notes_fts",
 }
+CATALOG_TABLES = {
+    "mirror_directories",
+    "mirror_tags",
+    "mirror_ai_visibility_options",
+    "mirror_ai_targets",
+}
 FTS_SHADOW_TABLES = {
     "mirror_notes_fts_data",
     "mirror_notes_fts_idx",
@@ -38,7 +49,7 @@ FTS_SHADOW_TABLES = {
     "mirror_notes_fts_docsize",
     "mirror_notes_fts_config",
 }
-ALLOWED_TABLES = REQUIRED_TABLES | FTS_SHADOW_TABLES
+ALLOWED_TABLES = REQUIRED_TABLES | CATALOG_TABLES | FTS_SHADOW_TABLES
 REQUIRED_INDEXES = {
     "idx_mirror_notes_source_updated_at",
 }
@@ -62,6 +73,10 @@ CREATE TABLE mirror_notes (
     visibility TEXT NOT NULL CHECK(visibility IN ('full', 'redacted')),
     redacted INTEGER NOT NULL CHECK(redacted IN (0, 1)),
     redaction_count INTEGER NOT NULL CHECK(redaction_count >= 0),
+    ai_visibility TEXT NOT NULL DEFAULT '',
+    ai_targets_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(ai_targets_json)),
+    main_category TEXT NOT NULL DEFAULT '',
+    sub_category TEXT NOT NULL DEFAULT '',
     CHECK(
         (visibility = 'full' AND redacted = 0)
         OR (visibility = 'redacted' AND redacted = 1)
@@ -77,6 +92,29 @@ CREATE VIRTUAL TABLE mirror_notes_fts USING fts5(
     directory,
     tags,
     tokenize='unicode61'
+);
+
+CREATE TABLE mirror_directories (
+    directory_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_id INTEGER,
+    main_category TEXT NOT NULL,
+    sub_category TEXT NOT NULL DEFAULT '',
+    path_json TEXT NOT NULL CHECK(json_valid(path_json))
+);
+
+CREATE TABLE mirror_tags (
+    name TEXT PRIMARY KEY
+);
+
+CREATE TABLE mirror_ai_visibility_options (
+    value TEXT PRIMARY KEY,
+    label TEXT NOT NULL
+);
+
+CREATE TABLE mirror_ai_targets (
+    target_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL
 );
 """
 
@@ -99,6 +137,10 @@ class GaleMirrorSafeRecord:
     visibility: str
     redacted: bool
     redaction_count: int
+    ai_visibility: str = ""
+    ai_targets: tuple[str, ...] = ()
+    main_category: str = ""
+    sub_category: str = ""
 
     @classmethod
     def from_materialized(cls, safe_note: Mapping[str, Any]) -> GaleMirrorSafeRecord:
@@ -132,6 +174,7 @@ class GaleMirrorVerification:
     full_note_count: int
     redacted_note_count: int
     file_mode: str
+    schema_version: str
 
 
 @dataclass(frozen=True)
@@ -168,9 +211,13 @@ def export_gale_mirror(
     if warning:
         raise GaleMirrorError("redaction_rules_unavailable")
     safe_records = tuple(
-        GaleMirrorSafeRecord.from_materialized(safe_note)
+        _record_with_formal_metadata(
+            source,
+            GaleMirrorSafeRecord.from_materialized(safe_note),
+        )
         for safe_note in safe_notes
     )
+    metadata_catalog = _metadata_catalog(source)
 
     temporary_path = _new_temporary_mirror_path(output)
     try:
@@ -179,6 +226,7 @@ def export_gale_mirror(
             safe_records,
             actor=actor,
             generator_app_version=generator_app_version,
+            **metadata_catalog,
         )
         os.chmod(temporary_path, 0o600)
         verification = verify_gale_mirror(
@@ -260,7 +308,8 @@ def verify_gale_mirror(
         }
         if set(metadata) != required_metadata:
             raise GaleMirrorError("metadata_invalid")
-        if metadata["mirror_schema_version"] != MIRROR_SCHEMA_VERSION:
+        schema_version = metadata["mirror_schema_version"]
+        if schema_version not in {"1", MIRROR_SCHEMA_VERSION}:
             raise GaleMirrorError("schema_version_mismatch")
         if metadata["target_actor"] != expected_actor:
             raise GaleMirrorError("target_actor_mismatch")
@@ -340,6 +389,8 @@ def verify_gale_mirror(
             raise GaleMirrorError("fts_rowid_mismatch")
         if fts_mismatch_count:
             raise GaleMirrorError("fts_content_mismatch")
+        if CATALOG_TABLES.issubset(table_names):
+            _validate_catalog_tables(connection)
         if int(metadata["note_count"]) != note_count:
             raise GaleMirrorError("metadata_count_mismatch")
         if expected_note_count is not None and note_count != expected_note_count:
@@ -365,6 +416,7 @@ def verify_gale_mirror(
         full_note_count=full_note_count,
         redacted_note_count=redacted_note_count,
         file_mode=_file_mode(path),
+        schema_version=schema_version,
     )
 
 
@@ -496,6 +548,10 @@ def _write_gale_mirror_database(
     *,
     actor: str,
     generator_app_version: str,
+    directories: Sequence[dict] = (),
+    tags: Sequence[str] = (),
+    visibility_options: Sequence[tuple[str, str]] = (),
+    ai_targets: Sequence[tuple[str, str]] = (),
 ) -> None:
     if not all(isinstance(record, GaleMirrorSafeRecord) for record in records):
         raise GaleMirrorError("raw_record_rejected")
@@ -542,10 +598,11 @@ def _write_gale_mirror_database(
                 """
                 INSERT INTO mirror_notes (
                     mirror_note_id, source_note_id, title, body, directory,
-                    tags_json, tags_text, source_updated_at, source_version,
-                    visibility, redacted, redaction_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                        tags_json, tags_text, source_updated_at, source_version,
+                        visibility, redacted, redaction_count, ai_visibility,
+                        ai_targets_json, main_category, sub_category
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                 (
                     mirror_note_id,
                     record.source_note_id,
@@ -559,6 +616,14 @@ def _write_gale_mirror_database(
                     record.visibility,
                     int(record.redacted),
                     record.redaction_count,
+                    record.ai_visibility,
+                    json.dumps(
+                        record.ai_targets,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    record.main_category,
+                    record.sub_category,
                 ),
             )
             connection.execute(
@@ -574,6 +639,45 @@ def _write_gale_mirror_database(
                     tags_text,
                 ),
             )
+        for directory in directories:
+            connection.execute(
+                """
+                INSERT INTO mirror_directories (
+                    directory_id, name, parent_id, main_category,
+                    sub_category, path_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(directory["directory_id"]),
+                    str(directory["name"]),
+                    directory["parent_id"],
+                    str(directory["main_category"]),
+                    str(directory.get("sub_category") or ""),
+                    json.dumps(
+                        tuple(directory["path"]),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+        connection.executemany(
+            "INSERT INTO mirror_tags(name) VALUES (?)",
+            ((str(tag),) for tag in tags),
+        )
+        connection.executemany(
+            """
+            INSERT INTO mirror_ai_visibility_options(value, label)
+            VALUES (?, ?)
+            """,
+            ((str(value), str(label)) for value, label in visibility_options),
+        )
+        connection.executemany(
+            """
+            INSERT INTO mirror_ai_targets(target_id, display_name)
+            VALUES (?, ?)
+            """,
+            ((str(target_id), str(display_name)) for target_id, display_name in ai_targets),
+        )
         connection.commit()
     except Exception:
         connection.rollback()
@@ -613,6 +717,158 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _record_with_formal_metadata(
+    source: Path,
+    record: GaleMirrorSafeRecord,
+) -> GaleMirrorSafeRecord:
+    connection = sqlite3.connect(source)
+    connection.row_factory = sqlite3.Row
+    try:
+        note = connection.execute(
+            """
+            SELECT main_category, sub_category, sub_sub_category, ai_visibility
+            FROM notes
+            WHERE id = ?
+            """,
+            (record.source_note_id,),
+        ).fetchone()
+        if note is None:
+            return record
+        targets = tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT target_id
+                FROM note_ai_targets
+                WHERE note_id = ?
+                ORDER BY target_id
+                """,
+                (record.source_note_id,),
+            ).fetchall()
+        )
+        tags = tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT tags.name
+                FROM note_tags
+                JOIN tags ON tags.id = note_tags.tag_id
+                WHERE note_tags.note_id = ?
+                ORDER BY tags.name COLLATE NOCASE
+                """,
+                (record.source_note_id,),
+            ).fetchall()
+        )
+    finally:
+        connection.close()
+    return replace(
+        record,
+        ai_visibility=str(note["ai_visibility"]),
+        ai_targets=targets,
+        main_category=str(note["main_category"]),
+        sub_category=str(note["sub_category"]),
+        directory=_formal_directory(note),
+        tags=tags,
+    )
+
+
+def _formal_directory(note: sqlite3.Row) -> str:
+    parts = (
+        str(note["main_category"]),
+        str(note["sub_category"]),
+        str(note["sub_sub_category"]),
+    )
+    return " / ".join(part for part in parts if part)
+
+
+def _metadata_catalog(source: Path) -> dict:
+    connection = sqlite3.connect(source)
+    connection.row_factory = sqlite3.Row
+    try:
+        directories = tuple(_directory_catalog(connection))
+        tags = tuple(
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM tags ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        )
+    finally:
+        connection.close()
+    return {
+        "directories": directories,
+        "tags": tags,
+        "visibility_options": tuple(
+            (visibility, visibility_display(visibility))
+            for visibility in AI_VISIBILITY_VALUES
+        ),
+        "ai_targets": tuple(
+            (target.target_id, target.display_name)
+            for target in selectable_target_definitions()
+        ),
+    }
+
+
+def _directory_catalog(connection: sqlite3.Connection) -> list[dict]:
+    rows = connection.execute(
+        """
+        SELECT id, name, parent_id
+        FROM directories
+        WHERE COALESCE(is_deleted, 0) = 0
+        ORDER BY parent_id, sort_order, name, id
+        """
+    ).fetchall()
+    by_id = {int(row["id"]): row for row in rows}
+    result: list[dict] = []
+    for row in rows:
+        path = _directory_path(by_id, int(row["id"]))
+        result.append(
+            {
+                "directory_id": int(row["id"]),
+                "name": str(row["name"]),
+                "parent_id": (
+                    int(row["parent_id"]) if row["parent_id"] is not None else None
+                ),
+                "main_category": path[0] if path else str(row["name"]),
+                "sub_category": path[1] if len(path) > 1 else "",
+                "path": path,
+            }
+        )
+    return sorted(result, key=lambda item: (tuple(item["path"]), item["directory_id"]))
+
+
+def _directory_path(
+    rows: dict[int, sqlite3.Row],
+    directory_id: int,
+) -> tuple[str, ...]:
+    names: list[str] = []
+    current_id: int | None = directory_id
+    seen: set[int] = set()
+    while current_id is not None and current_id not in seen:
+        seen.add(current_id)
+        row = rows.get(current_id)
+        if row is None:
+            break
+        names.append(str(row["name"]))
+        current_id = (
+            int(row["parent_id"]) if row["parent_id"] is not None else None
+        )
+    return tuple(reversed(names))
+
+
+def _validate_catalog_tables(connection: sqlite3.Connection) -> None:
+    invalid_directory = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM mirror_directories
+            WHERE NOT json_valid(path_json)
+            """
+        ).fetchone()[0]
+    )
+    if invalid_directory:
+        raise GaleMirrorError("catalog_invalid")
 
 
 def _file_mode(path: Path) -> str:

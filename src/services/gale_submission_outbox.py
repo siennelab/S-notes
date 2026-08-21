@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-OUTBOX_SCHEMA_VERSION = 1
+OUTBOX_SCHEMA_VERSION = 2
 GALE_STAGING_ACTOR = "gale-staging"
 GALE_PRODUCTION_ACTOR = "gale"
 GALE_SOURCE_ACTORS = frozenset({GALE_STAGING_ACTOR, GALE_PRODUCTION_ACTOR})
@@ -24,6 +24,7 @@ MAX_CONTENT_LENGTH = 50_000
 MAX_DIRECTORY_LENGTH = 200
 MAX_TAG_LENGTH = 50
 MAX_TAG_COUNT = 20
+MAX_AI_TARGET_COUNT = 20
 MAX_IDEMPOTENCY_KEY_LENGTH = 200
 MAX_EXPORT_COUNT = 100
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
@@ -45,6 +46,11 @@ class GaleSubmission:
     content: str
     suggested_directory: str
     suggested_tags: tuple[str, ...]
+    ai_visibility: str
+    ai_targets: tuple[str, ...]
+    main_category: str
+    sub_category: str
+    tags: tuple[str, ...]
     created_at: str
     delivery_state: str
     delivered_at: str | None
@@ -61,6 +67,11 @@ class GaleSubmission:
             "content": self.content,
             "suggested_directory": self.suggested_directory,
             "suggested_tags": list(self.suggested_tags),
+            "ai_visibility": self.ai_visibility,
+            "ai_targets": list(self.ai_targets),
+            "main_category": self.main_category,
+            "sub_category": self.sub_category,
+            "tags": list(self.tags),
             "created_at": self.created_at,
             "delivery_state": self.delivery_state,
             "delivered_at": self.delivered_at,
@@ -93,6 +104,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     suggested_directory TEXT NOT NULL DEFAULT ''
         CHECK (length(suggested_directory) <= 200),
     suggested_tags_json TEXT NOT NULL DEFAULT '[]',
+    proposal_metadata_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(proposal_metadata_json)),
     created_at TEXT NOT NULL,
     delivery_state TEXT NOT NULL DEFAULT 'queued'
         CHECK (delivery_state IN ('queued', 'delivered', 'acknowledged')),
@@ -138,6 +151,7 @@ def initialize_outbox(database_path: Path) -> None:
             raise GaleSubmissionOutboxError("outbox_schema_too_new")
         connection.execute(SUBMISSIONS_TABLE_SQL)
         connection.execute(DELIVERY_INDEX_SQL)
+        _migrate_schema(connection)
         if schema_version < OUTBOX_SCHEMA_VERSION:
             connection.execute(f"PRAGMA user_version = {OUTBOX_SCHEMA_VERSION}")
         connection.commit()
@@ -156,6 +170,11 @@ def create_submission(
     content: str,
     suggested_directory: str = "",
     suggested_tags: list[str] | tuple[str, ...] | None = None,
+    ai_visibility: str | None = None,
+    ai_targets: list[str] | tuple[str, ...] | None = None,
+    main_category: str | None = None,
+    sub_category: str | None = None,
+    tags: list[str] | tuple[str, ...] | None = None,
     idempotency_key: str | None = None,
     source_actor: str = GALE_STAGING_ACTOR,
 ) -> tuple[GaleSubmission, bool]:
@@ -164,6 +183,13 @@ def create_submission(
     normalized_content = _required_text(content, "content", MAX_CONTENT_LENGTH)
     normalized_directory = _normalize_directory(suggested_directory)
     normalized_tags = _normalize_tags(suggested_tags or ())
+    proposal_metadata = _normalize_proposal_metadata(
+        ai_visibility=ai_visibility,
+        ai_targets=ai_targets,
+        main_category=main_category,
+        sub_category=sub_category,
+        tags=tags,
+    )
     normalized_actor = _validated_source_actor(source_actor)
     normalized_key = _optional_text(
         idempotency_key,
@@ -198,9 +224,10 @@ def create_submission(
                 INSERT INTO submissions (
                     submission_uuid, source_actor, external_submission_id,
                     idempotency_key, title, content, suggested_directory,
-                    suggested_tags_json, created_at, delivery_state
+                    suggested_tags_json, proposal_metadata_json, created_at,
+                    delivery_state
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
                 """,
                 (
                     submission_uuid,
@@ -212,6 +239,11 @@ def create_submission(
                     normalized_directory,
                     json.dumps(
                         normalized_tags,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(
+                        proposal_metadata,
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
@@ -425,6 +457,21 @@ def _connect(database_path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _migrate_schema(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(submissions)").fetchall()
+    }
+    if "proposal_metadata_json" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE submissions
+            ADD COLUMN proposal_metadata_json TEXT NOT NULL DEFAULT '{}'
+                CHECK (json_valid(proposal_metadata_json))
+            """
+        )
+
+
 def _validated_database_path(database_path: Path) -> Path:
     path = Path(database_path)
     if not path.is_absolute():
@@ -499,6 +546,72 @@ def _normalize_tags(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _normalize_proposal_metadata(
+    *,
+    ai_visibility: str | None,
+    ai_targets: list[str] | tuple[str, ...] | None,
+    main_category: str | None,
+    sub_category: str | None,
+    tags: list[str] | tuple[str, ...] | None,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    visibility = _optional_text(ai_visibility, "ai_visibility", 20)
+    if visibility:
+        metadata["ai_visibility"] = visibility
+    targets = _normalize_target_ids(ai_targets or ())
+    if targets:
+        metadata["ai_targets"] = list(targets)
+    main = _optional_text(main_category, "main_category", MAX_DIRECTORY_LENGTH)
+    if main:
+        if any(ord(character) < 32 for character in main):
+            raise GaleSubmissionOutboxError("main_category_invalid")
+        metadata["main_category"] = main
+    sub = _optional_text(sub_category, "sub_category", MAX_DIRECTORY_LENGTH)
+    if sub:
+        if any(ord(character) < 32 for character in sub):
+            raise GaleSubmissionOutboxError("sub_category_invalid")
+        metadata["sub_category"] = sub
+    normalized_tags = _normalize_tags(tags or ())
+    if normalized_tags:
+        metadata["tags"] = list(normalized_tags)
+    return metadata
+
+
+def _normalize_target_ids(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+        raise GaleSubmissionOutboxError("ai_targets_invalid")
+    if len(values) > MAX_AI_TARGET_COUNT:
+        raise GaleSubmissionOutboxError("too_many_ai_targets")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise GaleSubmissionOutboxError("ai_target_invalid")
+        target_id = value.strip()
+        if not target_id:
+            raise GaleSubmissionOutboxError("ai_target_empty")
+        if len(target_id) > MAX_TAG_LENGTH:
+            raise GaleSubmissionOutboxError("ai_target_too_long")
+        if target_id not in seen:
+            seen.add(target_id)
+            normalized.append(target_id)
+    return tuple(normalized)
+
+
+def _stored_proposal_metadata(row: sqlite3.Row) -> dict[str, object]:
+    try:
+        raw = row["proposal_metadata_json"]
+    except (KeyError, IndexError):
+        return {}
+    try:
+        value = json.loads(str(raw or "{}"))
+    except json.JSONDecodeError as error:
+        raise GaleSubmissionOutboxError("stored_metadata_invalid") from error
+    if not isinstance(value, dict):
+        raise GaleSubmissionOutboxError("stored_metadata_invalid")
+    return value
+
+
 def _validated_uuid(value: object) -> str:
     try:
         parsed = uuid.UUID(str(value))
@@ -519,6 +632,12 @@ def _submission_from_row(row: sqlite3.Row) -> GaleSubmission:
     except json.JSONDecodeError as error:
         raise GaleSubmissionOutboxError("stored_tags_invalid") from error
     normalized_tags = _normalize_tags(tags)
+    metadata = _stored_proposal_metadata(row)
+    proposal_visibility = str(metadata.get("ai_visibility") or "")
+    proposal_targets = _normalize_target_ids(metadata.get("ai_targets") or ())
+    proposal_main = str(metadata.get("main_category") or "")
+    proposal_sub = str(metadata.get("sub_category") or "")
+    proposal_tags = _normalize_tags(metadata.get("tags") or ())
     state = str(row["delivery_state"])
     if state not in DELIVERY_STATES:
         raise GaleSubmissionOutboxError("stored_state_invalid")
@@ -531,6 +650,11 @@ def _submission_from_row(row: sqlite3.Row) -> GaleSubmission:
         content=str(row["content"]),
         suggested_directory=str(row["suggested_directory"]),
         suggested_tags=normalized_tags,
+        ai_visibility=proposal_visibility,
+        ai_targets=proposal_targets,
+        main_category=proposal_main,
+        sub_category=proposal_sub,
+        tags=proposal_tags,
         created_at=str(row["created_at"]),
         delivery_state=state,
         delivered_at=(
