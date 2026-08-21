@@ -413,20 +413,36 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
             dynamic_root = self.root / "dynamic-actor-mirror"
             dynamic_root.mkdir(mode=0o700)
             dynamic_mirror = dynamic_root / "gale-mirror.db"
-            dynamic_actor = SimpleNamespace(
-                target_id="fictional-runtime-remote-actor",
-                display_name="Fictional Runtime Remote Actor",
-            )
-            with patch(
-                "src.services.gale_mirror_service.selectable_target_definitions",
-                return_value=(dynamic_actor,),
-            ):
-                export_gale_mirror(
-                    source_database=self.source,
-                    output_path=dynamic_mirror,
-                    redaction_rules_path=self.rules,
-                    generator_app_version="fictional-dynamic-actor-test",
+            dynamic_source = self.root / "fictional-dynamic-source.db"
+            source_connection = sqlite3.connect(self.source)
+            dynamic_connection = sqlite3.connect(dynamic_source)
+            try:
+                source_connection.backup(dynamic_connection)
+            finally:
+                dynamic_connection.close()
+                source_connection.close()
+            with _connect(dynamic_source) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO ai_targets (
+                        target_id, display_name, slug, is_system, is_enabled,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, 0, 1, ?, ?)
+                    """,
+                    (
+                        "fictional-runtime-remote-actor",
+                        "Fictional Runtime Remote Actor",
+                        "fictional_runtime_remote_actor",
+                        now_shanghai_iso(),
+                        now_shanghai_iso(),
+                    ),
                 )
+            export_gale_mirror(
+                source_database=dynamic_source,
+                output_path=dynamic_mirror,
+                redaction_rules_path=self.rules,
+                generator_app_version="fictional-dynamic-actor-test",
+            )
             dynamic_server = build_server(
                 replace(
                     self.config,
@@ -440,14 +456,12 @@ class GaleRemoteMcpTest(unittest.IsolatedAsyncioTestCase):
                     "list_ai_metadata_options",
                     {},
                 )
-            self.assertEqual(
+            self.assertIn(
+                {
+                    "target_id": "fictional-runtime-remote-actor",
+                    "display_name": "Fictional Runtime Remote Actor",
+                },
                 dynamic_options.structured_content["ai_targets"],
-                [
-                    {
-                        "target_id": "fictional-runtime-remote-actor",
-                        "display_name": "Fictional Runtime Remote Actor",
-                    }
-                ],
             )
 
             for term in (

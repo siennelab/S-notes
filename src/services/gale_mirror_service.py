@@ -11,10 +11,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from src.ai_targets import AI_VISIBILITY_FULL, AI_VISIBILITY_REDACTED
-from src.snotes.application.ai_actor_registry import selectable_target_definitions
-from src.snotes.application.ai_safe_read_service import (
-    AI_VISIBILITY_VALUES,
+from src.ai_targets import (
+    AI_VISIBILITY_FULL,
+    AI_VISIBILITY_LABELS,
+    AI_VISIBILITY_REDACTED,
     visibility_display,
 )
 from src.search_query import (
@@ -801,13 +801,29 @@ def _metadata_catalog(source: Path) -> dict:
         "tags": tags,
         "visibility_options": tuple(
             (visibility, visibility_display(visibility))
-            for visibility in AI_VISIBILITY_VALUES
+            for visibility in AI_VISIBILITY_LABELS
         ),
-        "ai_targets": tuple(
-            (target.target_id, target.display_name)
-            for target in selectable_target_definitions()
-        ),
+        "ai_targets": _ai_target_catalog(source),
     }
+
+
+def _ai_target_catalog(source: Path) -> tuple[tuple[str, str], ...]:
+    connection = sqlite3.connect(source)
+    connection.row_factory = sqlite3.Row
+    try:
+        return tuple(
+            (str(row["target_id"]), str(row["display_name"]))
+            for row in connection.execute(
+                """
+                SELECT target_id, display_name
+                FROM ai_targets
+                WHERE COALESCE(is_enabled, 1) = 1
+                ORDER BY rowid
+                """
+            ).fetchall()
+        )
+    finally:
+        connection.close()
 
 
 def _directory_catalog(connection: sqlite3.Connection) -> list[dict]:
