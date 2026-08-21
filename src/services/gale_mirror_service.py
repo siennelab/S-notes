@@ -726,9 +726,18 @@ def _record_with_formal_metadata(
     connection = sqlite3.connect(source)
     connection.row_factory = sqlite3.Row
     try:
+        note_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(notes)").fetchall()
+        }
+        sub_sub_expression = (
+            "sub_sub_category"
+            if "sub_sub_category" in note_columns
+            else "'' AS sub_sub_category"
+        )
         note = connection.execute(
-            """
-            SELECT main_category, sub_category, sub_sub_category, ai_visibility
+            f"""
+            SELECT main_category, sub_category, {sub_sub_expression}, ai_visibility
             FROM notes
             WHERE id = ?
             """,
