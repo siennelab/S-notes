@@ -283,6 +283,8 @@ class AiMcpOperationRepository(Protocol):
         location: NoteLocation,
         tags: Sequence[str],
         body: str,
+        visibility: str,
+        target_ids: Sequence[str],
     ) -> dict: ...
 
 

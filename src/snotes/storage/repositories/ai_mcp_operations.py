@@ -421,6 +421,8 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         location: NoteLocation,
         tags: Sequence[str],
         body: str,
+        visibility: str,
+        target_ids: Sequence[str],
     ) -> dict:
         timestamp = timestamp_seconds()
         action = {
@@ -444,7 +446,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     operation_type, target_note_id, expected_updated_at,
                     operation_payload, result_status
                 ) VALUES (
-                    '', 'parsed', 'pending', ?, ?, ?, ?, ?, ?, 'full', ?, ?,
+                    '', 'parsed', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     NULL, ?, ?, '', ?, ?, ?, ?, ?, ?, 'pending_confirmation'
                 )
                 """,
@@ -455,7 +457,8 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     main,
                     sub,
                     ", ".join(tags),
-                    actor_display,
+                    visibility,
+                    ", ".join(target_ids),
                     body,
                     timestamp,
                     timestamp,

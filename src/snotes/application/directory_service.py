@@ -6,7 +6,9 @@ from collections.abc import Sequence
 
 from src.snotes.application.ports import DirectoriesRepository, NotesRepository
 from src.snotes.domain.models import (
+    DEFAULT_SUB_CATEGORY,
     Directory,
+    NoteLocation,
     TrashResult,
     TrashSelectionResult,
     TrashSnapshot,
@@ -32,6 +34,32 @@ class DirectoryService:
 
     def get_directory_path(self, directory_id: int) -> tuple[str, ...]:
         return self._directories.get_path(directory_id)
+
+    def find_active_location_id(self, location: NoteLocation) -> int | None:
+        directories = self._directories.list_active()
+        main, sub = location.values()
+        main_directory = next(
+            (
+                directory
+                for directory in directories
+                if directory.parent_id is None and directory.name == main
+            ),
+            None,
+        )
+        if main_directory is None:
+            return None
+        if sub == DEFAULT_SUB_CATEGORY:
+            return main_directory.id
+        child = next(
+            (
+                directory
+                for directory in directories
+                if directory.parent_id == main_directory.id
+                and directory.name == sub
+            ),
+            None,
+        )
+        return child.id if child is not None else None
 
     def rename_directory(self, directory_id: int, name: str) -> None:
         self._directories.rename(directory_id, name)

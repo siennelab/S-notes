@@ -35,6 +35,7 @@ NORMAL_TOOLS = {
     "get_note",
     "list_directories",
     "list_tags",
+    "list_ai_metadata_options",
     "create_note",
     "prepend_note",
     "append_note",
@@ -45,6 +46,9 @@ READ_ONLY_TOOLS = {"search_notes", "get_note"}
 CLAWDE_TOOLS = {
     "search_notes",
     "get_note",
+    "list_directories",
+    "list_tags",
+    "list_ai_metadata_options",
     "create_note",
     "append_note",
 }
@@ -200,7 +204,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with self.session(read_only=False) as session:
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, NORMAL_TOOLS)
-            self.assertEqual(len(tools), 9)
+            self.assertEqual(len(tools), 10)
             self.assertEqual((await session.list_resources()).resources, [])
             self.assertEqual((await session.list_prompts()).prompts, [])
             by_name = {tool.name: tool for tool in tools}
@@ -215,6 +219,15 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 by_name["get_note"].inputSchema["properties"]["max_chars"]["maximum"],
                 12_000,
             )
+            create_properties = by_name["create_note"].inputSchema["properties"]
+            for name in (
+                "main_category",
+                "sub_category",
+                "ai_visibility",
+                "ai_targets",
+                "tags",
+            ):
+                self.assertIn(name, create_properties)
             for name in ("prepend_note", "append_note", "update_note_metadata"):
                 self.assertEqual(
                     by_name[name].inputSchema["anyOf"],
@@ -232,6 +245,21 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("HiddenVisible", navigation)
             self.assertNotIn("clawbot-tag", navigation)
             self.assertNotIn("hidden-tag", navigation)
+            self.assertIn("main_category", directories["directories"][0])
+            self.assertIn("sub_category", directories["directories"][0])
+            options = await self.call(session, "list_ai_metadata_options", {})
+            self.assertEqual(options["status"], "ok")
+            self.assertIn(
+                "redacted",
+                [item["value"] for item in options["ai_visibility_options"]],
+            )
+            self.assertIn(
+                ("antigravity", "Antigravity"),
+                [
+                    (item["target_id"], item["display_name"])
+                    for item in options["ai_targets"]
+                ],
+            )
 
     async def test_read_only_catalog_is_only_two_and_write_is_unknown(self) -> None:
         async with self.session(read_only=True) as session:
@@ -250,6 +278,130 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     ensure_ascii=False,
                 ).lower(),
             )
+
+    async def test_create_note_accepts_complete_dynamic_metadata(self) -> None:
+        dynamic_main = self.directories_repository.create("运行时主分类")
+        self.directories_repository.create("运行时子分类", dynamic_main.id)
+
+        async with self.session(read_only=False) as session:
+            options = await self.call(session, "list_ai_metadata_options", {})
+            target_id = next(
+                item["target_id"]
+                for item in options["ai_targets"]
+                if item["target_id"] == "antigravity"
+            )
+            created = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "normal-complete-metadata",
+                    "title": "Runtime metadata create",
+                    "content": "complete metadata body",
+                    "main_category": "运行时主分类",
+                    "sub_category": "运行时子分类",
+                    "tags": ["RuntimeTag", "#runtimeTag", "second"],
+                    "ai_visibility": "redacted",
+                    "ai_targets": ["gale", target_id],
+                },
+            )
+            readback = await self.call(
+                session,
+                "get_note",
+                {"note_id": created["note_id"]},
+            )
+
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(readback["status"], "ok")
+        self.assertEqual(readback["main_category"], "运行时主分类")
+        self.assertEqual(readback["sub_category"], "运行时子分类")
+        self.assertEqual(readback["tags"], ["runtimetag", "second"])
+        self.assertEqual(readback["ai_visibility"], "redacted")
+        self.assertEqual(readback["ai_targets"], ["gale", "antigravity"])
+        note = self.notes.get_note(created["note_id"])
+        self.assertEqual(note.location, NoteLocation("运行时主分类", "运行时子分类"))
+        self.assertEqual(self.tags.get_note_tags(note.id), ["runtimetag", "second"])
+        metadata = self.metadata.get_note_metadata(note.id)
+        self.assertEqual(metadata.visibility, "redacted")
+        self.assertEqual(metadata.target_ids, ("gale", "antigravity"))
+
+    async def test_create_note_rejects_deleted_or_mismatched_category(self) -> None:
+        deleted_main = self.directories_repository.create("已删除测试主分类")
+        self.directories_repository.create("已删除测试子分类", deleted_main.id)
+        self.directories_repository.soft_delete_tree(deleted_main.id)
+
+        async with self.session(read_only=False) as session:
+            deleted = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "normal-deleted-category",
+                    "title": "Deleted category create",
+                    "content": "body",
+                    "main_category": "已删除测试主分类",
+                    "sub_category": "已删除测试子分类",
+                },
+            )
+            mismatched = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "normal-mismatched-category",
+                    "title": "Mismatch category create",
+                    "content": "body",
+                    "main_category": "项目",
+                    "sub_category": "GaleVisible",
+                    "directory_id": self.notes.get_note(
+                        self.ids["common"]
+                    ).directory_id,
+                },
+            )
+
+        self.assertEqual(deleted["status"], "rejected")
+        self.assertEqual(mismatched["status"], "rejected")
+
+    async def test_antigravity_can_query_create_and_readback_metadata(self) -> None:
+        dynamic_main = self.directories_repository.create("Antigravity 运行时主分类")
+        self.directories_repository.create("Antigravity 运行时子分类", dynamic_main.id)
+
+        async with self.session(read_only=False, actor="antigravity") as session:
+            directories = await self.call(session, "list_directories", {})
+            tags = await self.call(session, "list_tags", {})
+            options = await self.call(session, "list_ai_metadata_options", {})
+            self.assertIn(
+                "CommonVisible",
+                json.dumps(directories, ensure_ascii=False),
+            )
+            self.assertIn("common-tag", json.dumps(tags, ensure_ascii=False))
+            self.assertIn(
+                "antigravity",
+                [item["target_id"] for item in options["ai_targets"]],
+            )
+            created = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "antigravity-complete-metadata",
+                    "title": "Antigravity metadata create",
+                    "content": "antigravity metadata body",
+                    "main_category": "Antigravity 运行时主分类",
+                    "sub_category": "Antigravity 运行时子分类",
+                    "tags": ["antigravity-runtime"],
+                    "ai_visibility": "full",
+                    "ai_targets": ["antigravity"],
+                },
+            )
+            readback = await self.call(
+                session,
+                "get_note",
+                {"note_id": created["note_id"]},
+            )
+
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(readback["main_category"], "Antigravity 运行时主分类")
+        self.assertEqual(readback["sub_category"], "Antigravity 运行时子分类")
+        self.assertEqual(readback["tags"], ["antigravity-runtime"])
+        self.assertEqual(readback["ai_visibility"], "full")
+        self.assertEqual(readback["ai_targets"], ["antigravity"])
 
     async def test_clawbot_permissions_redaction_and_unified_search(self) -> None:
         async with self.session(read_only=True) as session:
@@ -297,6 +449,8 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(clawbot_note["status"], "ok")
             self.assertEqual(gale_note["status"], "not_found")
             self.assertEqual(hidden_note["status"], "not_found")
+            self.assertEqual(hidden_note["ai_visibility"], "")
+            self.assertEqual(hidden_note["ai_targets"], [])
             text = json.dumps(redacted, ensure_ascii=False)
             self.assertNotIn("FictionalSecret", text)
             self.assertIn("[MASKED]", text)
@@ -331,7 +485,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         ) as session:
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, CLAWDE_TOOLS)
-            self.assertEqual(len(tools), 4)
+            self.assertEqual(len(tools), len(CLAWDE_TOOLS))
             for name in CLAWDE_DISALLOWED_TOOLS:
                 blocked = await session.call_tool(name, {})
                 self.assertTrue(blocked.isError)
@@ -342,6 +496,24 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                         ensure_ascii=False,
                     ).lower(),
                 )
+
+            clawde_directories = await self.call(session, "list_directories", {})
+            clawde_tags = await self.call(session, "list_tags", {})
+            clawde_options = await self.call(
+                session, "list_ai_metadata_options", {}
+            )
+            self.assertIn(
+                "ClawbotVisible",
+                json.dumps(clawde_directories, ensure_ascii=False),
+            )
+            self.assertIn(
+                "clawbot-tag",
+                json.dumps(clawde_tags, ensure_ascii=False),
+            )
+            self.assertIn(
+                "clawbot",
+                [item["target_id"] for item in clawde_options["ai_targets"]],
+            )
 
             pending_create = await self.call(
                 session,
@@ -397,6 +569,11 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 session, "get_note", {"note_id": accepted.note.id}
             )
             self.assertEqual(initial["content"], "fictional base body")
+            self.assertEqual(initial["main_category"], pending[0].main_category)
+            self.assertEqual(initial["sub_category"], pending[0].sub_category)
+            self.assertEqual(initial["tags"], ["fictional-clawde"])
+            self.assertEqual(initial["ai_visibility"], "full")
+            self.assertEqual(initial["ai_targets"], ["clawbot"])
 
             pending_discard = await self.call(
                 session,
@@ -589,6 +766,91 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             {row["operation_type"] for row in audit_rows}, {"create", "append"}
         )
         self.assertEqual({row["summary"] for row in audit_rows}, {""})
+
+    async def test_pending_create_preserves_ai_proposal_but_accept_uses_s_fields(self) -> None:
+        proposal_main = self.directories_repository.create("AI 提议主分类")
+        self.directories_repository.create("AI 提议子分类", proposal_main.id)
+        final_main = self.directories_repository.create("S 最终主分类")
+        self.directories_repository.create("S 最终子分类", final_main.id)
+        receipt_service = AiReceiptInboxService(
+            SQLiteAiReceiptInboxRepository(
+                self.connections,
+                self.directories_repository,
+                self.tags_repository,
+            ),
+            notes=self.notes,
+            tags=self.tags,
+            ai_metadata=self.metadata,
+            mcp_operations=SQLiteAiMcpOperationRepository(
+                self.connections, self.tags_repository
+            ),
+        )
+
+        async with self.session(
+            read_only=False,
+            actor="clawbot",
+            tool_allowlist=CLAWDE_TOOLS,
+        ) as session:
+            pending_create = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "clawde-complete-metadata-pending",
+                    "title": "AI proposal title",
+                    "content": "AI proposal body",
+                    "main_category": "AI 提议主分类",
+                    "sub_category": "AI 提议子分类",
+                    "tags": ["ai-proposal"],
+                    "ai_visibility": "full",
+                    "ai_targets": ["clawbot"],
+                },
+            )
+
+        self.assertEqual(pending_create["status"], "pending_confirmation")
+        receipt = receipt_service.get_receipt(pending_create["proposal_id"])
+        self.assertEqual(receipt.main_category, "AI 提议主分类")
+        self.assertEqual(receipt.sub_category, "AI 提议子分类")
+        self.assertEqual(receipt.tags, "ai-proposal")
+        self.assertEqual(receipt.ai_visibility, "full")
+        self.assertEqual(receipt.ai_targets, "clawbot")
+
+        accepted = receipt_service.accept_receipt(
+            receipt.id,
+            AiReceiptAcceptFields(
+                title="S final title",
+                body="S final body",
+                main_category="S 最终主分类",
+                sub_category="S 最终子分类",
+                tags="s-final",
+                visibility="redacted",
+                target_ids=("antigravity",),
+            ),
+        )
+
+        self.assertEqual(accepted.note.title, "S final title")
+        self.assertEqual(
+            accepted.note.location,
+            NoteLocation("S 最终主分类", "S 最终子分类"),
+        )
+        self.assertEqual(self.tags.get_note_tags(accepted.note.id), ["s-final"])
+        metadata = self.metadata.get_note_metadata(accepted.note.id)
+        self.assertEqual(metadata.visibility, "redacted")
+        self.assertEqual(metadata.target_ids, ("antigravity",))
+        async with self.session(
+            read_only=False,
+            actor="antigravity",
+        ) as session:
+            readback = await self.call(
+                session,
+                "get_note",
+                {"note_id": accepted.note.id},
+            )
+        self.assertEqual(readback["title"], "S final title")
+        self.assertEqual(readback["main_category"], "S 最终主分类")
+        self.assertEqual(readback["sub_category"], "S 最终子分类")
+        self.assertEqual(readback["tags"], ["s-final"])
+        self.assertEqual(readback["ai_visibility"], "redacted")
+        self.assertEqual(readback["ai_targets"], ["antigravity"])
 
     async def test_missing_rules_skip_only_redacted_and_audit_is_metadata_only(self) -> None:
         self.rules_path.unlink()

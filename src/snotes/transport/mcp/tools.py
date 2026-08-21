@@ -9,8 +9,11 @@ from mcp.types import ToolAnnotations
 
 from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.transport.mcp.schemas import (
+    AiTargetList,
+    CategoryText,
     ContentText,
     GetNoteResponse,
+    ListAiMetadataOptionsResponse,
     ListDirectoriesResponse,
     ListTagsResponse,
     MaxChars,
@@ -36,6 +39,7 @@ WRITE_TOOL_NAMES = frozenset(
     {
         "list_directories",
         "list_tags",
+        "list_ai_metadata_options",
         "create_note",
         "prepend_note",
         "append_note",
@@ -134,13 +138,31 @@ class LocalMcpToolAdapter:
                 reason="本地数据库暂时不可用。",
             )
 
+    def list_ai_metadata_options(self) -> ListAiMetadataOptionsResponse:
+        try:
+            return ListAiMetadataOptionsResponse.model_validate(
+                self.service.list_ai_metadata_options()
+            )
+        except Exception as error:
+            _log_safe_failure("list_ai_metadata_options", error)
+            return ListAiMetadataOptionsResponse(
+                status="failed",
+                ai_visibility_options=[],
+                ai_targets=[],
+                reason="本地数据库暂时不可用。",
+            )
+
     def create_note(
         self,
         request_id: RequestId,
         title: TitleText,
         content: ContentText,
         directory_id: PositiveId | None = None,
+        main_category: CategoryText | None = None,
+        sub_category: CategoryText | None = None,
         tags: TagList | None = None,
+        ai_visibility: str | None = None,
+        ai_targets: AiTargetList | None = None,
     ) -> WriteReceipt:
         return self._write(
             "create_note",
@@ -150,7 +172,11 @@ class LocalMcpToolAdapter:
                 title,
                 content,
                 directory_id=directory_id,
+                main_category=main_category,
+                sub_category=sub_category,
                 tags=tags,
+                ai_visibility=ai_visibility,
+                ai_targets=ai_targets,
             ),
         )
 
@@ -332,9 +358,16 @@ def register_tools(
             read_annotations,
         ),
         (
+            adapter.list_ai_metadata_options,
+            "list_ai_metadata_options",
+            "List current AI visibility options and selectable AI target stable IDs.",
+            read_annotations,
+        ),
+        (
             adapter.create_note,
             "create_note",
-            "Request a plain-text note with full visibility for only the fixed actor. "
+            "Request a plain-text note with optional AI visibility, AI targets, category, "
+            "subcategory, and tags metadata. "
             "A restricted server profile may place the request in AI Center for human "
             "confirmation before the formal note is created. "
             + WRITE_RULES,

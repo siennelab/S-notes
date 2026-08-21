@@ -21,7 +21,7 @@ from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.ports import TagRecord
 from src.snotes.application.tag_service import TagService
-from src.snotes.domain.models import Note, NoteLocation
+from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, Note, NoteLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,14 +62,44 @@ class LocalMcpWriteService:
         title: str,
         content: str,
         directory_id: int | None = None,
+        main_category: str | None = None,
+        sub_category: str | None = None,
         tags: list[str] | None = None,
+        ai_visibility: object | None = None,
+        ai_targets: list[str] | None = None,
     ) -> dict:
         duplicate = self._duplicate(request_id, "create")
         if duplicate is not None:
             return duplicate
         clean_title = title.strip() or "未命名 AI 笔记"
         clean_tags = self._normalize_tags(tags or [])
-        selected = self._create_location(directory_id)
+        if main_category is None and sub_category is not None:
+            return self._terminal(
+                "create",
+                _result(
+                    "rejected", request_id, None, "", "none", False, False,
+                    "提供子分类时必须同时提供主分类。",
+                ),
+            )
+        if main_category is not None and not str(main_category).strip():
+            return self._terminal(
+                "create",
+                _result(
+                    "rejected", request_id, None, "", "none", False, False,
+                    "主分类不能为空。",
+                ),
+            )
+        prepared_metadata = self._prepare_create_metadata(
+            request_id, ai_visibility, ai_targets
+        )
+        if isinstance(prepared_metadata, dict):
+            return self._terminal("create", prepared_metadata)
+        visibility, targets = prepared_metadata
+        selected = self._create_location(
+            directory_id,
+            main_category=main_category,
+            sub_category=sub_category,
+        )
         if selected is None:
             return self._terminal(
                 "create",
@@ -101,11 +131,10 @@ class LocalMcpWriteService:
                 location=location,
                 tags=clean_tags,
                 body=content,
+                visibility=visibility,
+                target_ids=targets,
             )
         else:
-            visibility, targets = self._ai_metadata.prepare_values(
-                "full", (self.actor_target_id,)
-            )
             result = self._receipt_inbox.mcp_create_direct(
                 actor_target_id=self.actor_target_id,
                 request_id=request_id,
@@ -264,6 +293,7 @@ class LocalMcpWriteService:
                 payload["tags"] = desired_tags
 
         if self._receipt_inbox.mcp_confirmation_required(operation_type):
+            metadata = self._ai_metadata.get_note_metadata(note.id)
             result = self._receipt_inbox.mcp_create_pending(
                 actor_target_id=self.actor_target_id,
                 actor_display=self._actor_display(),
@@ -276,6 +306,8 @@ class LocalMcpWriteService:
                 location=desired_location or note.location,
                 tags=desired_tags or [name for _tag_id, name in context.tag_records],
                 body=content,
+                visibility=metadata.visibility,
+                target_ids=metadata.target_ids,
             )
         else:
             result = self._receipt_inbox.mcp_modify_direct(
@@ -321,10 +353,29 @@ class LocalMcpWriteService:
         return WritableNoteContext(note, tag_records) if safe is not None else None
 
     def _create_location(
-        self, directory_id: int | None
+        self,
+        directory_id: int | None,
+        *,
+        main_category: str | None = None,
+        sub_category: str | None = None,
     ) -> tuple[int, NoteLocation] | None:
+        requested_location = self._requested_location(main_category, sub_category)
         if directory_id is not None:
-            return self._visible_location(directory_id)
+            selected = self._visible_location(directory_id)
+            if selected is None:
+                return None
+            if requested_location is not None and selected[1] != requested_location:
+                return None
+            return selected
+        if requested_location is not None:
+            directory_id = self._directories.find_active_location_id(
+                requested_location
+            )
+            return (
+                (directory_id, requested_location)
+                if directory_id is not None
+                else None
+            )
         directory = next(
             (
                 item
@@ -334,6 +385,35 @@ class LocalMcpWriteService:
             None,
         )
         return (directory.id, NoteLocation()) if directory is not None else None
+
+    def _requested_location(
+        self,
+        main_category: str | None,
+        sub_category: str | None,
+    ) -> NoteLocation | None:
+        if main_category is None and sub_category is None:
+            return None
+        main = str(main_category or "").strip()
+        sub = str(sub_category or DEFAULT_SUB_CATEGORY).strip() or DEFAULT_SUB_CATEGORY
+        if not main:
+            return None
+        return NoteLocation(main, sub)
+
+    def _prepare_create_metadata(
+        self,
+        request_id: str,
+        visibility: object | None,
+        targets: list[str] | None,
+    ) -> tuple[str, tuple[str, ...]] | dict:
+        try:
+            return self._ai_metadata.prepare_values(
+                "full" if visibility is None else visibility,
+                (self.actor_target_id,) if targets is None else targets,
+            )
+        except ValueError as error:
+            return _result(
+                "rejected", request_id, None, "", "none", False, False, str(error)
+            )
 
     def _visible_location(
         self, directory_id: int | None

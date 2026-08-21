@@ -182,15 +182,20 @@ class LocalMcpService:
                 "note_id": note_id,
                 "reason": "未找到可访问的笔记。",
             }
+        metadata = self._ai_metadata.get_note_metadata(note.id)
         total = len(safe.content)
         start = min(offset, total)
         end = min(start + max_chars, total)
+        directory_fields = _directory_fields(safe.directory)
         return {
             "status": "ok",
             "note_id": note.id,
             "title": safe.title,
             "directory": safe.directory,
+            **directory_fields,
             "tags": list(safe.tags),
+            "ai_visibility": metadata.visibility,
+            "ai_targets": list(metadata.target_ids),
             "updated_at": note.updated_at,
             "version": note_version_token(note.id, note.updated_at),
             "content": safe.content[start:end],
@@ -207,6 +212,7 @@ class LocalMcpService:
             (context.note.directory_id, context.safe.directory): {
                 "directory_id": context.note.directory_id,
                 "directory": context.safe.directory,
+                **_directory_fields(context.safe.directory),
                 "writable": True,
             }
             for context in contexts
@@ -250,6 +256,32 @@ class LocalMcpService:
             failure_reason="redaction_unavailable" if warning else "",
         )
         return {"status": "ok", "tags": result, "reason": warning}
+
+    def list_ai_metadata_options(self) -> dict:
+        request_id = uuid.uuid4().hex
+        result = {
+            "status": "ok",
+            "ai_visibility_options": [
+                {"value": value, "label": label}
+                for value, label in self._ai_metadata.available_visibility_options()
+            ],
+            "ai_targets": [
+                {
+                    "target_id": target.target_id,
+                    "display_name": target.display_name,
+                }
+                for target in self._ai_metadata.available_targets()
+            ],
+            "reason": "",
+        }
+        self._audit.record_event(
+            self.actor_target_id,
+            "list_ai_metadata_options",
+            request_id=request_id,
+            result_count=len(result["ai_targets"]),
+            status="success",
+        )
+        return result
 
     def create_note(self, *arguments, **keywords) -> dict:
         return self._writes.create_note(*arguments, **keywords)
@@ -338,3 +370,11 @@ def _snippet(text: str, needle: str, radius: int = 80) -> str:
     start = max(0, index - radius)
     end = min(len(text), index + max(len(needle), 1) + radius)
     return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+
+def _directory_fields(directory: str) -> dict:
+    parts = [part.strip() for part in str(directory or "").split("/") if part.strip()]
+    return {
+        "main_category": parts[0] if parts else "",
+        "sub_category": parts[1] if len(parts) > 1 else "",
+    }
