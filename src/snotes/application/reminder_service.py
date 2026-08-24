@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import secrets
 import time
 from datetime import date, datetime, timedelta
@@ -138,12 +140,17 @@ class ReminderService:
                 continue
             if filters.ai_visibility == "hidden" and table.ai_visible:
                 continue
-            item = self._list_item(
-                reminder,
-                table,
-                labels.get(table.label_id) or self._repository.default_label(),
-                today,
-            )
+            try:
+                item = self._list_item(
+                    reminder,
+                    table,
+                    labels.get(table.label_id) or self._repository.default_label(),
+                    today,
+                )
+            except ValueError as error:
+                if _is_unsupported_schedule_kind(error):
+                    continue
+                raise
             if filters.lifecycle is not None and item.status != filters.lifecycle and reminder.lifecycle != filters.lifecycle:
                 continue
             if not self._matches_query(item, filters):
@@ -168,12 +175,17 @@ class ReminderService:
         if table is None or (ai_access and not table.ai_visible):
             return None
         label = self._repository.get_label(table.label_id, include_deleted=True)
-        return self._list_item(
-            reminder,
-            table,
-            label or self._repository.default_label(),
-            today_shanghai(self._now_datetime),
-        )
+        try:
+            return self._list_item(
+                reminder,
+                table,
+                label or self._repository.default_label(),
+                today_shanghai(self._now_datetime),
+            )
+        except ValueError as error:
+            if _is_unsupported_schedule_kind(error):
+                return None
+            raise
 
     def list_labels(self, *, include_deleted: bool = False) -> list[ReminderLabel]:
         return self._repository.list_labels(include_deleted=include_deleted)
@@ -454,12 +466,32 @@ class ReminderService:
         table_id: int,
         draft: ReminderDraft,
     ) -> dict:
+        request_fingerprint = _request_fingerprint(
+            {
+                "table_id": table_id,
+                "title": draft.title,
+                "lifecycle": draft.lifecycle,
+                "action_spec": draft.action_spec,
+                "deadline_spec": draft.deadline_spec,
+                "note": draft.note,
+            }
+        )
         existing = self._repository.get_operation(request_id, actor_target_id)
         if existing is not None:
+            if existing.get("request_fingerprint") not in (None, request_fingerprint):
+                return _mcp_result(
+                    "rejected",
+                    request_id,
+                    table_id=table_id,
+                    item_id=existing.get("item_id"),
+                    title="",
+                    reason="request_id 已用于不同参数；请为新的逻辑请求使用新的 request_id。",
+                )
             return {**existing, "status": "already_processed", "previous_status": existing.get("status")}
         table_item = self.get_table(table_id, ai_access=True)
         if table_item is None:
             result = _mcp_result("not_found", request_id, table_id=table_id, item_id=None, title="")
+            result["request_fingerprint"] = request_fingerprint
             return self._repository.store_operation(
                 actor_target_id=actor_target_id,
                 operation_type="create_reminder_item",
@@ -478,6 +510,7 @@ class ReminderService:
         reminder = self.create_reminder(cleaned)
         item = self.get_reminder(reminder.id)
         result = _mcp_result("created", request_id, table_id=table_id, item_id=reminder.id, title=reminder.title)
+        result["request_fingerprint"] = request_fingerprint
         stored = self._repository.store_operation(
             actor_target_id=actor_target_id,
             operation_type="create_reminder_item",
@@ -1069,6 +1102,7 @@ class ReminderService:
             dict(draft.action_spec),
             dict(draft.deadline_spec) if draft.deadline_spec else None,
         )
+        self._validate_schedule(action_spec, deadline_spec)
         return ReminderDraft(
             title,
             lifecycle,
@@ -1077,6 +1111,31 @@ class ReminderService:
             draft.note.strip(),
             table_id,
         )
+
+    def _validate_schedule(self, action_spec: dict, deadline_spec: dict | None) -> None:
+        action_kind = str(action_spec.get("type", ""))
+        if action_kind not in {
+            "one_time",
+            "monthly_day",
+            "yearly_date",
+            "interval_days",
+            "interval_from_completion",
+            "nth_weekday",
+            "lunar_yearly",
+            "cn_a_share_on_or_after",
+        }:
+            raise ValueError(f"unsupported_reminder_schedule:{action_kind}")
+        if not deadline_spec:
+            return
+        deadline_kind = str(deadline_spec.get("type", ""))
+        if deadline_kind not in {
+            "same_day",
+            "offset_days",
+            "one_time",
+            "monthly_day",
+            "yearly_date",
+        }:
+            raise ValueError(f"unsupported_reminder_deadline:{deadline_kind}")
 
     def _normalize_relative_schedule(
         self,
@@ -1141,6 +1200,26 @@ def _mcp_result(
         "entered_confirmation": False,
         "reason": reason,
     }
+
+
+def _request_fingerprint(payload: dict) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _is_unsupported_schedule_kind(error: ValueError) -> bool:
+    message = str(error)
+    return message.startswith(
+        (
+            "unsupported_reminder_schedule:",
+            "unsupported_reminder_deadline:",
+        )
+    )
 
 
 def _item_snapshot(item: ReminderListItem | None) -> dict:

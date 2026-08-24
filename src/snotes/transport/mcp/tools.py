@@ -32,6 +32,8 @@ from src.snotes.transport.mcp.schemas import (
     PageSize,
     PositiveId,
     QueryText,
+    ReminderActionSpec,
+    ReminderDeadlineSpec,
     RequestId,
     ReminderWriteReceipt,
     SearchNotesResponse,
@@ -488,8 +490,8 @@ class LocalMcpToolAdapter:
         request_id: RequestId,
         table_id: PositiveId,
         title: TitleText,
-        action_spec: dict,
-        deadline_spec: dict | None = None,
+        action_spec: ReminderActionSpec,
+        deadline_spec: ReminderDeadlineSpec | None = None,
         note: ContentText | None = None,
         lifecycle: LifecycleText = "active",
     ) -> ReminderWriteReceipt:
@@ -514,8 +516,8 @@ class LocalMcpToolAdapter:
         item_id: PositiveId,
         title: TitleText | None = None,
         note: ContentText | None = None,
-        action_spec: dict | None = None,
-        deadline_spec: dict | None = None,
+        action_spec: ReminderActionSpec | None = None,
+        deadline_spec: ReminderDeadlineSpec | None = None,
         clear_deadline: bool = False,
         lifecycle: LifecycleText | None = None,
     ) -> ReminderWriteReceipt:
@@ -834,6 +836,11 @@ def register_tools(
             adapter.create_reminder_item,
             "create_reminder_item",
             "Create one Reminder Item inside an AI-visible Reminder Table. "
+            "For “10 minutes from now”, set action_spec to "
+            '{"type":"relative","unit":"minutes","amount":10} and leave '
+            "deadline_spec null. For one calendar date, set action_spec to "
+            '{"type":"one_time","date":"YYYY-MM-DD"}. Do not invent schedule '
+            'types such as "notify". '
             + WRITE_RULES,
             write_annotations,
         ),

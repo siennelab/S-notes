@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
 
 
 QueryText = Annotated[str, Field(max_length=500)]
@@ -27,6 +27,221 @@ CategoryText = Annotated[str, Field(min_length=1, max_length=120)]
 AiTargetText = Annotated[str, Field(min_length=1, max_length=80)]
 AiTargetList = Annotated[list[AiTargetText], Field(max_length=32)]
 LifecycleText = Annotated[str, Field(min_length=1, max_length=40)]
+ReminderActionSpec = Annotated[
+    dict,
+    Field(
+        description=(
+            "Reminder schedule. For a one-time reminder, use exactly "
+            '{"type":"one_time","date":"YYYY-MM-DD"}. For “10 minutes from now” '
+            "or other relative one-time requests, use exactly "
+            '{"type":"relative","unit":"minutes","amount":10}; the server converts '
+            "it to the existing date-based Reminder schedule. Do not invent "
+            'types such as "notify" or put relative time in deadline_spec.'
+        ),
+    ),
+    WithJsonSchema(
+        {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "required": ["type", "date"],
+                    "properties": {
+                        "type": {"const": "one_time"},
+                        "date": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                            "description": "Action date in YYYY-MM-DD.",
+                        },
+                    },
+                    "additionalProperties": False,
+                    "description": "One-time reminder on one calendar date.",
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "unit", "amount"],
+                    "properties": {
+                        "type": {"const": "relative"},
+                        "unit": {
+                            "type": "string",
+                            "enum": ["minutes", "hours", "days"],
+                        },
+                        "amount": {"type": "integer", "minimum": 1},
+                    },
+                    "additionalProperties": False,
+                    "description": (
+                        "Relative one-time reminder. Example for “10 minutes "
+                        'from now”: {"type":"relative","unit":"minutes","amount":10}.'
+                    ),
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "day"],
+                    "properties": {
+                        "type": {"const": "monthly_day"},
+                        "day": {"type": "integer", "minimum": 1, "maximum": 31},
+                        "repeat_until": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "month", "day"],
+                    "properties": {
+                        "type": {"const": "yearly_date"},
+                        "month": {"type": "integer", "minimum": 1, "maximum": 12},
+                        "day": {"type": "integer", "minimum": 1, "maximum": 31},
+                        "repeat_until": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "anchor_date", "days"],
+                    "properties": {
+                        "type": {"enum": ["interval_days", "interval_from_completion"]},
+                        "anchor_date": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                        "days": {"type": "integer", "minimum": 1},
+                        "repeat_until": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "nth", "weekday"],
+                    "properties": {
+                        "type": {"const": "nth_weekday"},
+                        "nth": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "weekday": {
+                            "anyOf": [
+                                {
+                                    "type": "string",
+                                    "enum": [
+                                        "monday",
+                                        "tuesday",
+                                        "wednesday",
+                                        "thursday",
+                                        "friday",
+                                        "saturday",
+                                        "sunday",
+                                    ],
+                                },
+                                {"type": "integer", "minimum": 0, "maximum": 6},
+                            ]
+                        },
+                        "month": {"type": "integer", "minimum": 1, "maximum": 12},
+                        "repeat_until": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "month", "day"],
+                    "properties": {
+                        "type": {"const": "lunar_yearly"},
+                        "month": {"type": "integer", "minimum": 1, "maximum": 12},
+                        "day": {"type": "integer", "minimum": 1, "maximum": 30},
+                        "leap_month": {"type": "boolean"},
+                        "repeat_until": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "day"],
+                    "properties": {
+                        "type": {"const": "cn_a_share_on_or_after"},
+                        "day": {"type": "integer", "minimum": 1, "maximum": 31},
+                        "repeat_until": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ]
+        }
+    ),
+]
+ReminderDeadlineSpec = Annotated[
+    dict,
+    Field(
+        description=(
+            "Optional deadline separate from the action date. Leave null unless "
+            "there is a true due date. Do not use this for “10 minutes from now”; "
+            'put relative time in action_spec as {"type":"relative","unit":"minutes","amount":10}.'
+        ),
+    ),
+    WithJsonSchema(
+        {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "required": ["type"],
+                    "properties": {"type": {"const": "same_day"}},
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "days"],
+                    "properties": {
+                        "type": {"const": "offset_days"},
+                        "days": {"type": "integer"},
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "date"],
+                    "properties": {
+                        "type": {"const": "one_time"},
+                        "date": {
+                            "type": "string",
+                            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "day"],
+                    "properties": {
+                        "type": {"const": "monthly_day"},
+                        "day": {"type": "integer", "minimum": 1, "maximum": 31},
+                    },
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "month", "day"],
+                    "properties": {
+                        "type": {"const": "yearly_date"},
+                        "month": {"type": "integer", "minimum": 1, "maximum": 12},
+                        "day": {"type": "integer", "minimum": 1, "maximum": 31},
+                    },
+                    "additionalProperties": False,
+                },
+            ]
+        }
+    ),
+]
 
 
 class StrictModel(BaseModel):

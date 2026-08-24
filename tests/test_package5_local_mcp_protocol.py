@@ -824,6 +824,15 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(
                     "actor_target_id", tool.inputSchema.get("properties", {})
                 )
+            create_reminder_schema = by_name["create_reminder_item"].inputSchema
+            action_schema = create_reminder_schema["properties"]["action_spec"]
+            self.assertIn("relative", json.dumps(action_schema, ensure_ascii=False))
+            self.assertIn("minutes", json.dumps(action_schema, ensure_ascii=False))
+            self.assertIn("one_time", json.dumps(action_schema, ensure_ascii=False))
+            self.assertIn(
+                "10 minutes",
+                by_name["create_reminder_item"].description,
+            )
 
             labels = await self.call(session, "list_reminder_labels", {})
             tables = await self.call(
@@ -914,6 +923,32 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     },
                 },
             )
+            rejected_notify = await self.call(
+                session,
+                "create_reminder_item",
+                {
+                    "request_id": "clawde-rejected-notify-create",
+                    "table_id": self.reminder_ids["visible_table"],
+                    "title": "FICTIONAL_CLAWDE_REJECTED_NOTIFY",
+                    "lifecycle": REMINDER_ACTIVE,
+                    "action_spec": {"type": "notify"},
+                },
+            )
+            labels_after_reject = await self.call(
+                session,
+                "list_reminder_labels",
+                {},
+            )
+            tables_after_reject = await self.call(
+                session,
+                "list_reminder_tables",
+                {"query": "FICTIONAL_GALE"},
+            )
+            items_after_reject = await self.call(
+                session,
+                "list_reminder_items",
+                {"table_id": self.reminder_ids["visible_table"]},
+            )
 
             self.assertEqual(labels["status"], "ok")
             self.assertGreaterEqual(len(labels["labels"]), 1)
@@ -938,6 +973,10 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 created_relative["item_id"],
             )
             self.assertEqual(hidden_relative["status"], "not_found")
+            self.assertEqual(rejected_notify["status"], "rejected")
+            self.assertEqual(labels_after_reject["status"], "ok")
+            self.assertEqual(tables_after_reject["status"], "ok")
+            self.assertEqual(items_after_reject["status"], "ok")
 
             pending_create = await self.call(
                 session,

@@ -897,6 +897,103 @@ class ReminderR1Tests(unittest.TestCase):
             )
         )
 
+    def test_ai_create_validates_schedule_before_insert(self) -> None:
+        table = self.service.create_table("FICTIONAL_VALIDATE_BEFORE_INSERT")
+        before = len(self.service.list_reminders())
+        with self.assertRaisesRegex(ValueError, "unsupported_reminder_schedule:notify"):
+            self.service.ai_create_item(
+                actor_target_id="clawbot",
+                request_id="fictional-invalid-notify-create",
+                table_id=table.id,
+                draft=ReminderDraft(
+                    title="FICTIONAL_INVALID_NOTIFY",
+                    lifecycle=REMINDER_ACTIVE,
+                    action_spec={"type": "notify"},
+                    table_id=table.id,
+                ),
+            )
+        self.assertEqual(len(self.service.list_reminders()), before)
+
+    def test_invalid_historical_schedule_row_does_not_break_reads(self) -> None:
+        table = self.service.create_table("FICTIONAL_POISONED_TABLE")
+        valid = self.create(
+            "FICTIONAL_VALID_AFTER_POISON",
+            {"type": "one_time", "date": "2026-09-10"},
+        )
+        timestamp = "2026-09-10T10:00:00+08:00"
+        with self.connections.write() as connection:
+            connection.execute(
+                """
+                INSERT INTO reminders (
+                    table_id, title, lifecycle, action_spec_json,
+                    deadline_spec_json, note, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    table.id,
+                    "FICTIONAL_POISON_NOTIFY",
+                    REMINDER_ACTIVE,
+                    '{"type":"notify"}',
+                    "",
+                    "",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        items = self.service.list_reminders()
+        self.assertIn(valid.id, {item.reminder.id for item in items})
+        self.assertNotIn(
+            "FICTIONAL_POISON_NOTIFY",
+            {item.reminder.title for item in items},
+        )
+        tables = self.service.list_tables()
+        poisoned = next(item for item in tables if item.table.id == table.id)
+        self.assertEqual(poisoned.item_count, 0)
+
+    def test_ai_create_rejects_same_request_id_with_different_payload(self) -> None:
+        table = self.service.create_table("FICTIONAL_FINGERPRINT_TABLE")
+        created = self.service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-fingerprint-create",
+            table_id=table.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_FINGERPRINT",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=table.id,
+            ),
+        )
+        retry = self.service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-fingerprint-create",
+            table_id=table.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_FINGERPRINT",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=table.id,
+            ),
+        )
+        mismatch = self.service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-fingerprint-create",
+            table_id=table.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_FINGERPRINT",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-11"},
+                table_id=table.id,
+            ),
+        )
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(retry["status"], "already_processed")
+        self.assertEqual(mismatch["status"], "rejected")
+        self.assertIn("request_id", mismatch["reason"])
+        self.assertEqual(
+            len([item for item in self.service.list_reminders() if item.reminder.title == "FICTIONAL_FINGERPRINT"]),
+            1,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
