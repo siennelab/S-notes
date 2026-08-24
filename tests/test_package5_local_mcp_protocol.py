@@ -866,6 +866,54 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "name": "FICTIONAL_CLAWDE_REMINDER_LABEL",
                 },
             )
+            created_relative = await self.call(
+                session,
+                "create_reminder_item",
+                {
+                    "request_id": "clawde-relative-reminder-create",
+                    "table_id": self.reminder_ids["visible_table"],
+                    "title": "FICTIONAL_CLAWDE_RELATIVE_REMINDER",
+                    "lifecycle": REMINDER_ACTIVE,
+                    "action_spec": {"type": "notify"},
+                    "deadline_spec": {
+                        "type": "relative",
+                        "unit": "minutes",
+                        "amount": 10,
+                    },
+                },
+            )
+            retry_relative = await self.call(
+                session,
+                "create_reminder_item",
+                {
+                    "request_id": "clawde-relative-reminder-create",
+                    "table_id": self.reminder_ids["visible_table"],
+                    "title": "FICTIONAL_CLAWDE_RELATIVE_REMINDER",
+                    "lifecycle": REMINDER_ACTIVE,
+                    "action_spec": {"type": "notify"},
+                    "deadline_spec": {
+                        "type": "relative",
+                        "unit": "minutes",
+                        "amount": 10,
+                    },
+                },
+            )
+            hidden_relative = await self.call(
+                session,
+                "create_reminder_item",
+                {
+                    "request_id": "clawde-relative-hidden-reminder-create",
+                    "table_id": self.reminder_ids["hidden_table"],
+                    "title": "FICTIONAL_CLAWDE_HIDDEN_RELATIVE_REMINDER",
+                    "lifecycle": REMINDER_ACTIVE,
+                    "action_spec": {"type": "notify"},
+                    "deadline_spec": {
+                        "type": "relative",
+                        "unit": "minutes",
+                        "amount": 10,
+                    },
+                },
+            )
 
             self.assertEqual(labels["status"], "ok")
             self.assertGreaterEqual(len(labels["labels"]), 1)
@@ -883,6 +931,13 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(visible_items["status"], "ok")
             self.assertEqual(visible_items["total_visible_matches"], 1)
             self.assertEqual(created_label["status"], "created")
+            self.assertEqual(created_relative["status"], "created")
+            self.assertEqual(retry_relative["status"], "already_processed")
+            self.assertEqual(
+                retry_relative["item_id"],
+                created_relative["item_id"],
+            )
+            self.assertEqual(hidden_relative["status"], "not_found")
 
             pending_create = await self.call(
                 session,
@@ -1140,8 +1195,24 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT actor_target_id FROM ai_operations WHERE request_id = ?",
                 ("clawde-create-reminder-label",),
             ).fetchone()
+            relative_operation = connection.execute(
+                """
+                SELECT actor_target_id, action
+                FROM ai_reminder_operations
+                WHERE request_id = ?
+                """,
+                ("clawde-relative-reminder-create",),
+            ).fetchone()
+            relative_operation_count = connection.execute(
+                "SELECT COUNT(*) FROM ai_reminder_operations WHERE request_id = ?",
+                ("clawde-relative-reminder-create",),
+            ).fetchone()[0]
         self.assertIsNotNone(reminder_operation)
         self.assertEqual(reminder_operation["actor_target_id"], "clawbot")
+        self.assertIsNotNone(relative_operation)
+        self.assertEqual(relative_operation["actor_target_id"], "clawbot")
+        self.assertEqual(relative_operation["action"], "create_item")
+        self.assertEqual(relative_operation_count, 1)
 
     async def test_pending_create_preserves_ai_proposal_but_accept_uses_s_fields(self) -> None:
         proposal_main = self.directories_repository.create("AI 提议主分类")

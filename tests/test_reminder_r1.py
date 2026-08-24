@@ -823,6 +823,80 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertEqual(len(page.rows), 2)
         self.assertTrue(page.has_more)
 
+    def test_ai_relative_notify_create_uses_existing_schedule_owner(self) -> None:
+        table = self.service.create_table("FICTIONAL_VISIBLE_RELATIVE_TABLE")
+        result = self.service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-relative-notify-create",
+            table_id=table.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_RELATIVE_NOTIFY",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "notify"},
+                deadline_spec={"type": "relative", "unit": "minutes", "amount": 10},
+                table_id=table.id,
+            ),
+        )
+        retry = self.service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-relative-notify-create",
+            table_id=table.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_RELATIVE_NOTIFY",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "notify"},
+                deadline_spec={"type": "relative", "unit": "minutes", "amount": 10},
+                table_id=table.id,
+            ),
+        )
+        self.assertEqual(result["status"], "created")
+        self.assertEqual(retry["status"], "already_processed")
+        self.assertEqual(
+            len(
+                [
+                    item
+                    for item in self.service.list_reminders()
+                    if item.reminder.title == "FICTIONAL_RELATIVE_NOTIFY"
+                ]
+            ),
+            1,
+        )
+        item = self.service.get_reminder(int(result["item_id"]))
+        self.assertIsNotNone(item)
+        self.assertEqual(
+            item.reminder.action_spec,
+            {"type": "one_time", "date": "2026-09-10"},
+        )
+        self.assertIsNone(item.reminder.deadline_spec)
+
+        hidden = self.service.create_table(
+            "FICTIONAL_HIDDEN_RELATIVE_TABLE",
+            ai_visible=False,
+        )
+        hidden_result = self.service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-relative-hidden-create",
+            table_id=hidden.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_HIDDEN_RELATIVE_NOTIFY",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "notify"},
+                deadline_spec={"type": "relative", "unit": "minutes", "amount": 10},
+                table_id=hidden.id,
+            ),
+        )
+        self.assertEqual(hidden_result["status"], "not_found")
+        self.assertIsNone(
+            next(
+                (
+                    item
+                    for item in self.service.list_reminders()
+                    if item.reminder.title == "FICTIONAL_HIDDEN_RELATIVE_NOTIFY"
+                ),
+                None,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

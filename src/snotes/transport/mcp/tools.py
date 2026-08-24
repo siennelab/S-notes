@@ -607,6 +607,19 @@ class LocalMcpToolAdapter:
     ) -> ReminderWriteReceipt:
         try:
             return _reminder_write_response(call())
+        except ValueError as error:
+            _log_safe_failure(tool_name, error)
+            return ReminderWriteReceipt(
+                status="rejected",
+                request_id=request_id,
+                table_id=table_id,
+                item_id=item_id,
+                reminder_id=item_id,
+                processing_mode="none",
+                changed_formal_reminder=False,
+                pending_confirmation=False,
+                failure_or_conflict_reason="提醒请求格式不支持；操作没有执行。",
+            )
         except Exception as error:
             _log_safe_failure(tool_name, error)
             return ReminderWriteReceipt(

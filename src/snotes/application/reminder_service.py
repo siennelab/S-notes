@@ -1065,14 +1065,59 @@ class ReminderService:
         table_id = draft.table_id
         if table_id is None:
             table_id = existing.table_id if existing is not None else self.default_table().id
+        action_spec, deadline_spec = self._normalize_relative_schedule(
+            dict(draft.action_spec),
+            dict(draft.deadline_spec) if draft.deadline_spec else None,
+        )
         return ReminderDraft(
             title,
             lifecycle,
-            dict(draft.action_spec),
-            dict(draft.deadline_spec) if draft.deadline_spec else None,
+            action_spec,
+            deadline_spec,
             draft.note.strip(),
             table_id,
         )
+
+    def _normalize_relative_schedule(
+        self,
+        action_spec: dict,
+        deadline_spec: dict | None,
+    ) -> tuple[dict, dict | None]:
+        action_kind = str(action_spec.get("type", "")).strip().casefold()
+        deadline_kind = (
+            str(deadline_spec.get("type", "")).strip().casefold()
+            if deadline_spec
+            else ""
+        )
+        if action_kind == "relative":
+            return self._one_time_after(action_spec), deadline_spec
+        if action_kind in {"notify", "reminder"} and deadline_kind == "relative":
+            return self._one_time_after(deadline_spec or {}), None
+        if deadline_kind == "relative":
+            return action_spec, self._one_time_after(deadline_spec or {})
+        return action_spec, deadline_spec
+
+    def _one_time_after(self, spec: dict) -> dict:
+        target_date = self._now_datetime() + self._relative_delta(spec)
+        return {
+            "type": "one_time",
+            "date": target_date.date().isoformat(),
+        }
+
+    @staticmethod
+    def _relative_delta(spec: dict) -> timedelta:
+        raw_amount = spec.get("amount", spec.get("value"))
+        amount = int(raw_amount)
+        if amount <= 0:
+            raise ValueError("relative_reminder_amount_must_be_positive")
+        unit = str(spec.get("unit", "")).strip().casefold()
+        if unit in {"minute", "minutes", "min", "mins"}:
+            return timedelta(minutes=amount)
+        if unit in {"hour", "hours", "hr", "hrs"}:
+            return timedelta(hours=amount)
+        if unit in {"day", "days"}:
+            return timedelta(days=amount)
+        raise ValueError(f"unsupported_relative_reminder_unit:{unit}")
 
 
 def _mcp_result(
