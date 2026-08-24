@@ -15,8 +15,10 @@ from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptInboxService,
 )
 from src.snotes.application.note_service import NoteService
+from src.snotes.application.reminder_service import ReminderService
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import NoteLocation
+from src.snotes.domain.reminders import REMINDER_ACTIVE, ReminderDraft
 from src.snotes.storage.repositories.ai_mcp_operations import (
     SQLiteAiMcpOperationRepository,
 )
@@ -25,6 +27,7 @@ from src.snotes.storage.repositories.ai_receipts import (
 )
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
+from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 
@@ -81,6 +84,19 @@ GALE_TUNNEL_TOOLS = {
     "list_tags",
     "list_ai_metadata_options",
     "create_note_submission",
+    "list_reminder_labels",
+    "list_reminder_tables",
+    "get_reminder_table",
+    "list_reminder_items",
+    "get_reminder_item",
+    "create_reminder_label",
+    "create_reminder_table",
+    "update_reminder_table",
+    "create_reminder_item",
+    "update_reminder_item",
+    "complete_reminder_item",
+    "pause_reminder_item",
+    "resume_reminder_item",
 }
 
 
@@ -107,7 +123,9 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(self.tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.reminders = ReminderService(SQLiteReminderRepository(self.connections))
         self.ids: dict[str, int] = {}
+        self.reminder_ids: dict[str, int] = {}
         self._seed_fixture()
 
     def _seed_note(
@@ -180,6 +198,35 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             targets=("clawbot",),
             tags=("FictionalSecret-tag",),
             location=NoteLocation("项目", "FictionalSecretDirectory"),
+        )
+        visible_table = self.reminders.create_table("FICTIONAL_GALE_VISIBLE_TABLE")
+        hidden_table = self.reminders.create_table(
+            "FICTIONAL_GALE_HIDDEN_TABLE",
+            ai_visible=False,
+        )
+        visible_reminder = self.reminders.create_reminder(
+            ReminderDraft(
+                title="FICTIONAL_GALE_VISIBLE_REMINDER",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=visible_table.id,
+            )
+        )
+        hidden_reminder = self.reminders.create_reminder(
+            ReminderDraft(
+                title="FICTIONAL_GALE_HIDDEN_REMINDER",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=hidden_table.id,
+            )
+        )
+        self.reminder_ids.update(
+            {
+                "visible_table": visible_table.id,
+                "hidden_table": hidden_table.id,
+                "visible_reminder": visible_reminder.id,
+                "hidden_reminder": hidden_reminder.id,
+            }
         )
 
     def _env(
@@ -315,13 +362,16 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         ) as session:
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, GALE_TUNNEL_TOOLS)
-            self.assertEqual(len(tools), 6)
+            self.assertEqual(len(tools), len(GALE_TUNNEL_TOOLS))
             by_name = {tool.name: tool for tool in tools}
             for tool in tools:
                 self.assertNotIn(
                     "actor_target_id", tool.inputSchema.get("properties", {})
                 )
             self.assertNotIn("create_note", by_name)
+            self.assertNotIn("append_note", by_name)
+            self.assertNotIn("update_note_metadata", by_name)
+            self.assertNotIn("get_operation_status", by_name)
             self.assertIn(
                 "idempotency_key",
                 by_name["create_note_submission"].inputSchema["properties"],
@@ -333,6 +383,65 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(gale["total_visible_matches"], 1)
             self.assertEqual(clawbot["total_visible_matches"], 0)
+
+            labels = await self.call(session, "list_reminder_labels", {})
+            tables = await self.call(
+                session, "list_reminder_tables", {"query": "FICTIONAL_GALE"}
+            )
+            hidden_table = await self.call(
+                session,
+                "get_reminder_table",
+                {"table_id": self.reminder_ids["hidden_table"]},
+            )
+            hidden_items = await self.call(
+                session,
+                "list_reminder_items",
+                {"table_id": self.reminder_ids["hidden_table"]},
+            )
+            hidden_item = await self.call(
+                session,
+                "get_reminder_item",
+                {"item_id": self.reminder_ids["hidden_reminder"]},
+            )
+            hidden_update = await self.call(
+                session,
+                "update_reminder_table",
+                {
+                    "request_id": "gale-tunnel-hidden-table-update",
+                    "table_id": self.reminder_ids["hidden_table"],
+                    "title": "FICTIONAL_SHOULD_NOT_WRITE",
+                },
+            )
+            visible_items = await self.call(
+                session,
+                "list_reminder_items",
+                {"table_id": self.reminder_ids["visible_table"]},
+            )
+            created_label = await self.call(
+                session,
+                "create_reminder_label",
+                {
+                    "request_id": "gale-tunnel-create-reminder-label",
+                    "name": "FICTIONAL_GALE_TUNNEL_LABEL",
+                },
+            )
+
+            self.assertEqual(labels["status"], "ok")
+            self.assertGreaterEqual(len(labels["labels"]), 1)
+            self.assertEqual(tables["status"], "ok")
+            self.assertEqual(tables["total_visible_matches"], 1)
+            self.assertEqual(
+                tables["results"][0]["table_id"],
+                self.reminder_ids["visible_table"],
+            )
+            self.assertEqual(hidden_table["status"], "not_found")
+            self.assertEqual(hidden_items["status"], "ok")
+            self.assertEqual(hidden_items["total_visible_matches"], 0)
+            self.assertEqual(hidden_item["status"], "not_found")
+            self.assertEqual(hidden_update["status"], "not_found")
+            self.assertEqual(visible_items["status"], "ok")
+            self.assertEqual(visible_items["total_visible_matches"], 1)
+            self.assertEqual(created_label["status"], "created")
 
             created = await self.call(
                 session,
@@ -378,6 +487,13 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending[0].id, created["proposal_id"])
         self.assertEqual(pending[0].source, "Gale")
         self.assertEqual(pending[0].actor_target_id, "gale")
+        with self.connections.read() as connection:
+            actor_row = connection.execute(
+                "SELECT actor_target_id FROM ai_operations WHERE request_id = ?",
+                ("gale-tunnel-create-reminder-label",),
+            ).fetchone()
+        self.assertIsNotNone(actor_row)
+        self.assertEqual(actor_row["actor_target_id"], "gale")
         self.assertEqual(pending[0].title, "Gale Tunnel fictional pending")
         self.assertEqual(pending[0].body, "fictional tunnel body")
         self.assertEqual(pending[0].tags, "")
