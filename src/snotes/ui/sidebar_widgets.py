@@ -130,6 +130,17 @@ class NoteListWidget(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setItemDelegate(NoteListDelegate(self))
 
+    def clear_for_rebuild(self) -> None:
+        """Clear current/selection while items are still valid, then rebuild."""
+        if self.count():
+            selection_model = self.selectionModel()
+            if selection_model is not None:
+                selection_model.clear()
+            else:
+                self.clearSelection()
+                self.setCurrentRow(-1)
+        self.clear()
+
     def selected_note_ids(self) -> list[int]:
         return [int(item.data(Qt.UserRole)) for item in self.selectedItems()]
 

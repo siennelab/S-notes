@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -23,6 +23,7 @@ from src.snotes.domain.reminders import (
     REMINDER_ACTIVE,
     REMINDER_PAUSED,
     ReminderDraft,
+    ReminderQuery,
 )
 from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.schema import initialize_database
@@ -262,6 +263,113 @@ class ReminderR1Tests(unittest.TestCase):
         item = self.service.list_reminders()[0]
         self.assertEqual(item.next_action_date, "2026-12-03")
         self.assertIsNone(item.next_deadline_date)
+
+    def test_offset_deadline_applies_to_every_supported_recurrence_occurrence(self) -> None:
+        one_time = self.create(
+            "FICTIONAL_ONE_TIME_WINDOW",
+            {"type": "one_time", "date": "2026-09-10"},
+            {"type": "one_time", "date": "2026-09-12"},
+        )
+        item = self.service.get_reminder(one_time.id)
+        self.assertEqual(item.next_action_date, "2026-09-10")
+        self.assertEqual(item.next_deadline_date, "2026-09-12")
+
+        cases = [
+            (
+                "FICTIONAL_MONTHLY_WINDOW",
+                {"type": "monthly_day", "day": 10},
+                "2026-09-10",
+                "2026-10-10",
+            ),
+            (
+                "FICTIONAL_YEARLY_WINDOW",
+                {"type": "yearly_date", "month": 9, "day": 10},
+                "2026-09-10",
+                "2027-09-10",
+            ),
+            (
+                "FICTIONAL_INTERVAL_WINDOW",
+                {"type": "interval_days", "anchor_date": "2026-09-10", "days": 5},
+                "2026-09-10",
+                "2026-09-15",
+            ),
+            (
+                "FICTIONAL_COMPLETION_WINDOW",
+                {"type": "interval_from_completion", "anchor_date": "2026-09-05", "days": 5},
+                "2026-09-10",
+                "2026-09-15",
+            ),
+            (
+                "FICTIONAL_NTH_WEEKDAY_WINDOW",
+                {"type": "nth_weekday", "nth": 2, "weekday": 3},
+                "2026-09-10",
+                "2026-10-08",
+            ),
+            (
+                "FICTIONAL_YEARLY_NTH_WEEKDAY_WINDOW",
+                {"type": "nth_weekday", "month": 9, "nth": 2, "weekday": 3},
+                "2026-09-10",
+                "2027-09-09",
+            ),
+            (
+                "FICTIONAL_LUNAR_WINDOW",
+                {"type": "lunar_yearly", "month": 9, "day": 2, "leap_month": False},
+                "2026-10-11",
+                lunar_to_solar(2027, 9, 2).isoformat(),
+            ),
+            (
+                "FICTIONAL_A_SHARE_WINDOW",
+                {"type": "cn_a_share_on_or_after", "day": 5},
+                "2026-10-08",
+                "2026-11-05",
+            ),
+        ]
+        for title, action_spec, first_action, next_action in cases:
+            with self.subTest(reminder=title):
+                reminder = self.create(title, action_spec, {"type": "offset_days", "days": 2})
+                item = self.service.get_reminder(reminder.id)
+                self.assertEqual(item.next_action_date, first_action)
+                self.assertEqual(
+                    item.next_deadline_date,
+                    (date.fromisoformat(first_action) + timedelta(days=2)).isoformat(),
+                )
+                self.service.complete_occurrence(reminder.id)
+                item = self.service.get_reminder(reminder.id)
+                self.assertEqual(item.next_action_date, next_action)
+                self.assertEqual(
+                    item.next_deadline_date,
+                    (date.fromisoformat(next_action) + timedelta(days=2)).isoformat(),
+                )
+                self.assertNotEqual(item.next_deadline_date, "2026-09-12")
+
+    def test_label_management_rules_and_table_trash_semantics(self) -> None:
+        default = self.service.default_label()
+        renamed_default = self.service.rename_label(default.id, "默认提醒")
+        self.assertEqual(renamed_default.id, default.id)
+        custom = self.service.create_label("网络维护")
+        other = self.service.create_label("订阅续费")
+        table = self.service.create_table("FICTIONAL_LABEL_TABLE", label_id=custom.id)
+        self.service.create_reminder(
+            ReminderDraft(
+                title="FICTIONAL_LABEL_ITEM",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=table.id,
+            )
+        )
+        labels = self.service.reorder_labels([other.id, renamed_default.id, custom.id])
+        self.assertEqual([label.id for label in labels], [other.id, renamed_default.id, custom.id])
+        renamed = self.service.rename_label(custom.id, "网络维护改名")
+        self.assertEqual(renamed.name, "网络维护改名")
+        with self.assertRaisesRegex(ValueError, "default_reminder_label_cannot_be_deleted"):
+            self.service.delete_label(renamed_default.id)
+        self.service.delete_label(custom.id)
+        self.assertNotIn(custom.id, [label.id for label in self.service.list_labels()])
+        self.assertIsNone(self.service.get_table(table.id))
+        trash = self.service.list_trash()
+        self.assertIn(table.id, [item.table.id for item in trash.tables])
+        trashed_table = next(item for item in trash.tables if item.table.id == table.id)
+        self.assertEqual(trashed_table.item_count, 1)
 
     def test_no_deadline_reminder_still_notifies_and_completes(self) -> None:
         reminder = self.create(
@@ -531,6 +639,189 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertEqual(title, "FICTIONAL_EXISTING_NOTE")
         self.assertIn("reminders", tables)
         self.assertIn("reminder_occurrences", tables)
+
+    def test_reminder_v1_migration_assigns_default_table_and_preserves_items(self) -> None:
+        old_path = Path(self.temporary.name) / "old-reminder.db"
+        with closing(sqlite3.connect(old_path)) as connection:
+            connection.execute("CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)")
+            connection.execute("CREATE TABLE app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            connection.execute(
+                """
+                CREATE TABLE reminders (
+                    id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    lifecycle TEXT NOT NULL DEFAULT 'active',
+                    action_spec_json TEXT NOT NULL,
+                    deadline_spec_json TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE reminder_occurrences (
+                    id INTEGER PRIMARY KEY,
+                    reminder_id INTEGER NOT NULL,
+                    occurrence_key TEXT NOT NULL,
+                    action_date TEXT NOT NULL,
+                    deadline_date TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    completed_at TEXT,
+                    action_notified_at TEXT,
+                    deadline_notified_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(reminder_id, occurrence_key)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO reminders (
+                    id, title, lifecycle, action_spec_json, deadline_spec_json,
+                    note, created_at, updated_at
+                ) VALUES (
+                    42, 'FICTIONAL_OLD', 'active',
+                    '{"date":"2026-09-10","type":"one_time"}',
+                    '', 'FICTIONAL_NOTE', '2026-09-01T10:00:00+08:00',
+                    '2026-09-01T10:00:00+08:00'
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO reminder_occurrences (
+                    id, reminder_id, occurrence_key, action_date, status,
+                    action_notified_at, created_at, updated_at
+                ) VALUES (
+                    99, 42, '2026-09-10', '2026-09-10', 'pending',
+                    '2026-09-10T10:00:00+08:00',
+                    '2026-09-01T10:00:00+08:00',
+                    '2026-09-01T10:00:00+08:00'
+                )
+                """
+            )
+            connection.commit()
+
+        connections = initialize_database(old_path)
+        repository = SQLiteReminderRepository(
+            connections,
+            clock=lambda: datetime.fromtimestamp(self.clock(), SHANGHAI),
+        )
+        service = ReminderService(repository, transport=self.transport, clock=self.clock)
+        item = service.list_reminders()[0]
+        self.assertEqual(item.reminder.id, 42)
+        self.assertEqual(item.table.title, "原有提醒")
+        self.assertEqual(item.label.name, "未归类")
+        self.assertTrue(item.table.ai_visible)
+        self.assertEqual(item.reminder.table_id, item.table.id)
+        occurrences = service.history(42)
+        self.assertEqual(occurrences[0].id, 99)
+        self.assertEqual(occurrences[0].action_notified_at, "2026-09-10T10:00:00+08:00")
+
+    def test_tables_visibility_and_ai_boundaries(self) -> None:
+        default_label = self.service.default_label()
+        renamed = self.service.rename_label(default_label.id, "默认提醒")
+        self.assertEqual(renamed.id, default_label.id)
+        custom = self.service.create_label("网络维护")
+        table = self.service.create_table(
+            "FICTIONAL_PRIVATE_TABLE",
+            label_id=custom.id,
+            ai_visible=False,
+        )
+        reminder = self.service.create_reminder(
+            ReminderDraft(
+                title="FICTIONAL_HIDDEN",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=table.id,
+            )
+        )
+        self.assertEqual(self.service.list_reminders(ReminderQuery(ai_access=True)), [])
+        self.assertIsNone(self.service.get_reminder(reminder.id, ai_access=True))
+        result = self.service.ai_update_item(
+            actor_target_id="gale",
+            request_id="fictional-hidden-update",
+            item_id=reminder.id,
+            title="FICTIONAL_SHOULD_NOT_WRITE",
+        )
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(
+            self.service.get_reminder(reminder.id).reminder.title,
+            "FICTIONAL_HIDDEN",
+        )
+
+    def test_ai_create_and_complete_are_idempotent_and_logged(self) -> None:
+        label_result = self.service.ai_create_label(
+            actor_target_id="gale",
+            request_id="fictional-label-request",
+            name="订阅续费",
+        )
+        self.assertEqual(label_result["status"], "created")
+        retry_label = self.service.ai_create_label(
+            actor_target_id="gale",
+            request_id="fictional-label-request",
+            name="订阅续费",
+        )
+        self.assertEqual(retry_label["status"], "already_processed")
+        label = next(row for row in self.service.list_labels() if row.name == "订阅续费")
+        table_result = self.service.ai_create_table(
+            actor_target_id="gale",
+            request_id="fictional-create-table",
+            title="FICTIONAL_AI_TABLE",
+            label_id=label.id,
+        )
+        table_id = int(table_result["table_id"])
+        create_result = self.service.ai_create_item(
+            actor_target_id="gale",
+            request_id="fictional-create-reminder",
+            table_id=table_id,
+            draft=ReminderDraft(
+                title="FICTIONAL_RETRY_SAFE",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "monthly_day", "day": 10},
+                table_id=table_id,
+            ),
+        )
+        retry_create = self.service.ai_create_item(
+            actor_target_id="gale",
+            request_id="fictional-create-reminder",
+            table_id=table_id,
+            draft=ReminderDraft(
+                title="FICTIONAL_RETRY_SAFE",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "monthly_day", "day": 10},
+                table_id=table_id,
+            ),
+        )
+        self.assertEqual(create_result["status"], "created")
+        self.assertEqual(retry_create["status"], "already_processed")
+        self.assertEqual(
+            len([item for item in self.service.list_reminders() if item.reminder.title == "FICTIONAL_RETRY_SAFE"]),
+            1,
+        )
+        reminder_id = int(create_result["item_id"])
+        complete = self.service.ai_complete_item(
+            actor_target_id="gale",
+            request_id="fictional-complete-occurrence",
+            item_id=reminder_id,
+        )
+        first_next = self.service.get_reminder(reminder_id).next_action_date
+        retry_complete = self.service.ai_complete_item(
+            actor_target_id="gale",
+            request_id="fictional-complete-occurrence",
+            item_id=reminder_id,
+        )
+        second_next = self.service.get_reminder(reminder_id).next_action_date
+        self.assertEqual(complete["status"], "updated")
+        self.assertEqual(retry_complete["status"], "already_processed")
+        self.assertEqual(first_next, second_next)
+        page = self.service.list_ai_operation_logs(offset=0, limit=2)
+        self.assertEqual(len(page.rows), 2)
+        self.assertTrue(page.has_more)
 
 
 if __name__ == "__main__":

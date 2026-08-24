@@ -19,6 +19,15 @@ from src.snotes.transport.mcp.runtime import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+READ_ONLY_MCP_TOOLS = [
+    "search_notes",
+    "get_note",
+    "list_reminder_labels",
+    "list_reminder_tables",
+    "get_reminder_table",
+    "list_reminder_items",
+    "get_reminder_item",
+]
 
 
 class Package8ProductionBootstrapTest(unittest.TestCase):
@@ -67,7 +76,7 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
             server = build_server(config)
             self.assertEqual(
                 [tool.name for tool in server._tool_manager.list_tools()],
-                ["search_notes", "get_note"],
+                READ_ONLY_MCP_TOOLS,
             )
 
     def test_mcp_explicit_isolated_override_builds_server(self) -> None:
@@ -85,7 +94,7 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
             self.assertEqual(config.data_root, isolated)
             self.assertEqual(
                 [tool.name for tool in server._tool_manager.list_tools()],
-                ["search_notes", "get_note"],
+                READ_ONLY_MCP_TOOLS,
             )
 
     def test_mcp_explicit_formal_override_is_rejected(self) -> None:

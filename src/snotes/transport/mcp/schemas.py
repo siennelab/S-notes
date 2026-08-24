@@ -26,6 +26,7 @@ TagList = Annotated[list[TagName], Field(min_length=1, max_length=32)]
 CategoryText = Annotated[str, Field(min_length=1, max_length=120)]
 AiTargetText = Annotated[str, Field(min_length=1, max_length=80)]
 AiTargetList = Annotated[list[AiTargetText], Field(max_length=32)]
+LifecycleText = Annotated[str, Field(min_length=1, max_length=40)]
 
 
 class StrictModel(BaseModel):
@@ -165,4 +166,111 @@ class OperationStatusResponse(StrictModel):
     created_at: str = ""
     updated_at: str = ""
     proposal_id: int | None = None
+    previous_status: str | None = None
+
+
+class ReminderLabelRecord(StrictModel):
+    label_id: int
+    name: str
+    is_default: bool
+    sort_order: int
+
+
+class ListReminderLabelsResponse(StrictModel):
+    status: Literal["ok", "failed"]
+    labels: list[ReminderLabelRecord]
+    reason: str = ""
+
+
+class ReminderLabelPayload(StrictModel):
+    label_id: int
+    name: str
+
+
+class ReminderTableRecord(StrictModel):
+    table_id: int
+    title: str
+    label: ReminderLabelPayload
+    ai_visible: bool
+    item_count: int
+    matching_item_id: int | None = None
+    match_count: int = 0
+    updated_at: str
+
+
+class ReminderOccurrencePayload(StrictModel):
+    occurrence_id: int
+    occurrence_key: str
+    action_date: str
+    deadline_date: str | None = None
+    status: str
+    completed_at: str | None = None
+
+
+class ReminderRecord(StrictModel):
+    item_id: int
+    reminder_id: int
+    table_id: int
+    table_title: str
+    title: str
+    note: str = ""
+    label: ReminderLabelPayload
+    lifecycle: str
+    status: str
+    status_label: str
+    action_spec: dict
+    deadline_spec: dict | None = None
+    schedule: str | None = None
+    next_action_date: str | None = None
+    next_deadline_date: str | None = None
+    updated_at: str
+    occurrence: ReminderOccurrencePayload | None = None
+
+
+class ListReminderTablesResponse(StrictModel):
+    status: Literal["ok", "failed"]
+    page: int
+    page_size: int
+    total_visible_matches: int
+    has_more: bool
+    results: list[ReminderTableRecord]
+    reason: str = ""
+
+
+class GetReminderTableResponse(StrictModel):
+    status: Literal["ok", "not_found", "failed"]
+    table_id: int | None = None
+    table: ReminderTableRecord | None = None
+    reason: str = ""
+
+
+class ListReminderItemsResponse(StrictModel):
+    status: Literal["ok", "failed"]
+    table_id: int | None = None
+    page: int
+    page_size: int
+    total_visible_matches: int
+    has_more: bool
+    results: list[ReminderRecord]
+    reason: str = ""
+
+
+class GetReminderItemResponse(StrictModel):
+    status: Literal["ok", "not_found", "failed"]
+    item_id: int | None = None
+    item: ReminderRecord | None = None
+    reason: str = ""
+
+
+class ReminderWriteReceipt(StrictModel):
+    status: WriteStatus
+    request_id: str
+    table_id: int | None = None
+    item_id: int | None = None
+    reminder_id: int | None = None
+    title: str = ""
+    processing_mode: str
+    changed_formal_reminder: bool
+    pending_confirmation: bool
+    failure_or_conflict_reason: str = ""
     previous_status: str | None = None

@@ -32,7 +32,12 @@ from src.snotes.domain.models import (
 from src.snotes.domain.reminders import (
     Reminder,
     ReminderDraft,
+    ReminderLabel,
+    ReminderOperationPage,
     ReminderOccurrence,
+    ReminderQuery,
+    ReminderTable,
+    ReminderTrashSnapshot,
     ReminderSettings,
 )
 
@@ -164,9 +169,67 @@ class ReminderRepository(Protocol):
 
     def update(self, reminder_id: int, draft: ReminderDraft) -> Reminder: ...
 
-    def get(self, reminder_id: int) -> Reminder | None: ...
+    def get(self, reminder_id: int, *, include_deleted: bool = False) -> Reminder | None: ...
 
-    def list_active_records(self) -> list[Reminder]: ...
+    def list_active_records(self, table_id: int | None = None) -> list[Reminder]: ...
+
+    def list_records(
+        self,
+        *,
+        include_deleted: bool = False,
+        table_id: int | None = None,
+    ) -> list[Reminder]: ...
+
+    def list_labels(self, *, include_deleted: bool = False) -> list[ReminderLabel]: ...
+
+    def get_label(self, label_id: int, *, include_deleted: bool = False) -> ReminderLabel | None: ...
+
+    def default_label(self) -> ReminderLabel: ...
+
+    def create_label(self, name: str) -> ReminderLabel: ...
+
+    def rename_label(self, label_id: int, name: str) -> ReminderLabel: ...
+
+    def reorder_labels(self, label_ids: Sequence[int]) -> list[ReminderLabel]: ...
+
+    def soft_delete_label_with_tables(self, label_id: int) -> None: ...
+
+    def list_tables(self, *, include_deleted: bool = False) -> list[ReminderTable]: ...
+
+    def get_table(
+        self,
+        table_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> ReminderTable | None: ...
+
+    def default_table(self) -> ReminderTable: ...
+
+    def create_table(
+        self,
+        *,
+        title: str,
+        label_id: int | None = None,
+        ai_visible: bool = True,
+    ) -> ReminderTable: ...
+
+    def update_table_metadata(
+        self,
+        table_id: int,
+        *,
+        title: str | None = None,
+        label_id: int | None = None,
+    ) -> ReminderTable: ...
+
+    def set_table_ai_visible(self, table_id: int, ai_visible: bool) -> ReminderTable: ...
+
+    def soft_delete_table(self, table_id: int) -> None: ...
+
+    def restore_table(self, table_id: int) -> ReminderTable: ...
+
+    def permanently_delete_table(self, table_id: int) -> None: ...
+
+    def count_items_by_table(self, table_id: int, *, include_deleted: bool = False) -> int: ...
 
     def set_lifecycle(
         self,
@@ -174,6 +237,10 @@ class ReminderRepository(Protocol):
         lifecycle: str,
         completed_at: str | None = None,
     ) -> None: ...
+
+    def permanently_delete_trashed(self, reminder_id: int) -> None: ...
+
+    def list_trash(self) -> ReminderTrashSnapshot: ...
 
     def delete(self, reminder_id: int) -> None: ...
 
@@ -206,6 +273,35 @@ class ReminderRepository(Protocol):
     def get_text_setting(self, key: str, default: str = "") -> str: ...
 
     def set_text_setting(self, key: str, value: str) -> None: ...
+
+    def get_operation(self, request_id: str, actor_target_id: str | None = None) -> dict | None: ...
+
+    def store_operation(
+        self,
+        *,
+        actor_target_id: str,
+        operation_type: str,
+        result: dict,
+    ) -> dict: ...
+
+    def record_ai_operation(
+        self,
+        *,
+        actor_target_id: str,
+        action: str,
+        table_id: int | None,
+        table_title: str,
+        item_id: int | None,
+        item_title: str,
+        label_id: int | None,
+        label_name: str,
+        request_id: str,
+        changed_fields: Sequence[str],
+        before: dict,
+        after: dict,
+    ) -> None: ...
+
+    def list_ai_operation_logs(self, *, offset: int = 0, limit: int = 50) -> ReminderOperationPage: ...
 
 
 class ReminderNotificationTransport(Protocol):

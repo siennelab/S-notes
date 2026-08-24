@@ -110,9 +110,15 @@ class SnotesShell(QWidget):
     def show_notes_surface(self) -> None:
         self.content_stack.setCurrentWidget(self.main_content)
 
-    def show_reminder_surface(self) -> None:
+    def show_reminder_surface(self, *, reset_filters: bool = False) -> None:
         if self.reminder_center is not None:
-            self.reminder_center.refresh()
+            if reset_filters:
+                self.reminder_center.enter_default()
+            else:
+                self.reminder_center.refresh()
+            self.link_drawer.setVisible(False)
+            self.links_button.setProperty("active", False)
+            self.repolish_action(self.links_button)
             self.content_stack.setCurrentWidget(self.reminder_center)
 
     def _build_title(self, layout: QVBoxLayout) -> None:

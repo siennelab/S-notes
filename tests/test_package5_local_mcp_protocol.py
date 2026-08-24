@@ -33,6 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 NORMAL_TOOLS = {
     "search_notes",
     "get_note",
+    "list_reminder_labels",
+    "list_reminder_tables",
+    "get_reminder_table",
+    "list_reminder_items",
+    "get_reminder_item",
     "list_directories",
     "list_tags",
     "list_ai_metadata_options",
@@ -41,8 +46,24 @@ NORMAL_TOOLS = {
     "append_note",
     "update_note_metadata",
     "get_operation_status",
+    "create_reminder_label",
+    "create_reminder_table",
+    "update_reminder_table",
+    "create_reminder_item",
+    "update_reminder_item",
+    "complete_reminder_item",
+    "pause_reminder_item",
+    "resume_reminder_item",
 }
-READ_ONLY_TOOLS = {"search_notes", "get_note"}
+READ_ONLY_TOOLS = {
+    "search_notes",
+    "get_note",
+    "list_reminder_labels",
+    "list_reminder_tables",
+    "get_reminder_table",
+    "list_reminder_items",
+    "get_reminder_item",
+}
 CLAWDE_TOOLS = {
     "search_notes",
     "get_note",
@@ -214,7 +235,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with self.session(read_only=False) as session:
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, NORMAL_TOOLS)
-            self.assertEqual(len(tools), 10)
+            self.assertEqual(len(tools), len(NORMAL_TOOLS))
             self.assertEqual((await session.list_resources()).resources, [])
             self.assertEqual((await session.list_prompts()).prompts, [])
             by_name = {tool.name: tool for tool in tools}
@@ -418,7 +439,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with self.session(read_only=True) as session:
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, READ_ONLY_TOOLS)
-            self.assertEqual(len(tools), 2)
+            self.assertEqual(len(tools), len(READ_ONLY_TOOLS))
             blocked = await session.call_tool(
                 "create_note",
                 {"request_id": "blocked", "title": "No", "content": "No"},

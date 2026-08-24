@@ -22,8 +22,10 @@ from src.snotes.application.local_mcp_write_service import (
 )
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.ports import TagRecord
+from src.snotes.application.reminder_service import ReminderService
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import Note
+from src.snotes.domain.reminders import REMINDER_ACTIVE, ReminderDraft, ReminderListItem, ReminderQuery, ReminderTableListItem
 from src.snotes.domain.search_query import match_search_fields, parse_search_query
 
 
@@ -48,6 +50,7 @@ class LocalMcpService:
         safe_reads: AiSafeReadService,
         audit: AiAuditService,
         receipt_inbox: AiReceiptInboxService,
+        reminders: ReminderService | None = None,
         create_confirmation_required: bool = False,
     ) -> None:
         if actor_target_id not in AI_ACTOR_IDS:
@@ -58,6 +61,7 @@ class LocalMcpService:
         self._ai_metadata = ai_metadata
         self._safe_reads = safe_reads
         self._audit = audit
+        self._reminders = reminders
         self._writes = LocalMcpWriteService(
             actor_target_id=actor_target_id,
             notes=notes,
@@ -298,6 +302,256 @@ class LocalMcpService:
     def get_operation_status(self, request_id: str) -> dict:
         return self._writes.get_operation_status(request_id)
 
+    def list_reminder_labels(self) -> dict:
+        if self._reminders is None:
+            return {"status": "failed", "labels": [], "reason": "Reminder 服务不可用。"}
+        labels = self._reminders.list_labels()
+        return {
+            "status": "ok",
+            "labels": [
+                {
+                    "label_id": label.id,
+                    "name": label.name,
+                    "is_default": label.is_default,
+                    "sort_order": label.sort_order,
+                }
+                for label in labels
+            ],
+            "reason": "",
+        }
+
+    def create_reminder_label(self, request_id: str, name: str) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_create_label(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            name=name,
+        )
+
+    def list_reminder_tables(
+        self,
+        query: str = "",
+        page: int = 1,
+        page_size: int = 10,
+        label_id: int | None = None,
+        ai_visibility: str = "all",
+    ) -> dict:
+        if self._reminders is None:
+            return {
+                "status": "failed",
+                "page": page,
+                "page_size": page_size,
+                "total_visible_matches": 0,
+                "has_more": False,
+                "results": [],
+                "reason": "Reminder 服务不可用。",
+            }
+        items = self._reminders.list_tables(
+            ReminderQuery(
+                query=query,
+                label_id=label_id,
+                ai_visibility=ai_visibility,
+                ai_access=True,
+            )
+        )
+        offset = (page - 1) * page_size
+        selected = items[offset : offset + page_size]
+        return {
+            "status": "ok",
+            "page": page,
+            "page_size": page_size,
+            "total_visible_matches": len(items),
+            "has_more": offset + len(selected) < len(items),
+            "results": [_reminder_table_payload(item) for item in selected],
+            "reason": "",
+        }
+
+    def get_reminder_table(self, table_id: int) -> dict:
+        if self._reminders is None:
+            return {"status": "failed", "table_id": table_id, "reason": "Reminder 服务不可用。"}
+        item = self._reminders.get_table(table_id, ai_access=True)
+        if item is None:
+            return {"status": "not_found", "table_id": table_id, "reason": "未找到可访问的提醒 Table。"}
+        return {
+            "status": "ok",
+            "table_id": table_id,
+            "table": _reminder_table_payload(item),
+            "reason": "",
+        }
+
+    def create_reminder_table(
+        self,
+        request_id: str,
+        title: str | None = None,
+        label_id: int | None = None,
+    ) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_create_table(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            title=title,
+            label_id=label_id,
+        )
+
+    def update_reminder_table(
+        self,
+        request_id: str,
+        table_id: int,
+        title: str | None = None,
+        label_id: int | None = None,
+    ) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, table_id=table_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_update_table_metadata(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            table_id=table_id,
+            title=title,
+            label_id=label_id,
+        )
+
+    def list_reminder_items(
+        self,
+        table_id: int,
+        query: str = "",
+        page: int = 1,
+        page_size: int = 10,
+        lifecycle: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict:
+        if self._reminders is None:
+            return {
+                "status": "failed",
+                "page": page,
+                "page_size": page_size,
+                "total_visible_matches": 0,
+                "has_more": False,
+                "results": [],
+                "reason": "Reminder 服务不可用。",
+            }
+        items = self._reminders.list_reminders(
+            ReminderQuery(
+                query=query,
+                table_id=table_id,
+                lifecycle=lifecycle,
+                date_from=date_from,
+                date_to=date_to,
+                ai_access=True,
+            )
+        )
+        offset = (page - 1) * page_size
+        selected = items[offset : offset + page_size]
+        return {
+            "status": "ok",
+            "table_id": table_id,
+            "page": page,
+            "page_size": page_size,
+            "total_visible_matches": len(items),
+            "has_more": offset + len(selected) < len(items),
+            "results": [_reminder_item_payload(item) for item in selected],
+            "reason": "",
+        }
+
+    def get_reminder_item(self, item_id: int) -> dict:
+        if self._reminders is None:
+            return {"status": "failed", "item_id": item_id, "reason": "Reminder 服务不可用。"}
+        item = self._reminders.get_reminder(item_id, ai_access=True)
+        if item is None:
+            return {"status": "not_found", "item_id": item_id, "reason": "未找到可访问的提醒事项。"}
+        return {
+            "status": "ok",
+            "item_id": item_id,
+            "item": _reminder_item_payload(item),
+            "reason": "",
+        }
+
+    def create_reminder_item(
+        self,
+        request_id: str,
+        table_id: int,
+        title: str,
+        action_spec: dict,
+        deadline_spec: dict | None = None,
+        note: str = "",
+        lifecycle: str = REMINDER_ACTIVE,
+    ) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_create_item(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            table_id=table_id,
+            draft=ReminderDraft(
+                title=title,
+                lifecycle=lifecycle,
+                action_spec=action_spec,
+                deadline_spec=deadline_spec,
+                note=note,
+                table_id=table_id,
+            ),
+        )
+
+    def update_reminder_item(
+        self,
+        request_id: str,
+        item_id: int,
+        title: str | None = None,
+        note: str | None = None,
+        action_spec: dict | None = None,
+        deadline_spec: dict | None = None,
+        clear_deadline: bool = False,
+        lifecycle: str | None = None,
+    ) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_update_item(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            item_id=item_id,
+            title=title,
+            note=note,
+            action_spec=action_spec,
+            deadline_spec=deadline_spec,
+            clear_deadline=clear_deadline,
+            lifecycle=lifecycle,
+        )
+
+    def complete_reminder_item(
+        self,
+        request_id: str,
+        item_id: int,
+        current_occurrence_only: bool = True,
+    ) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_complete_item(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            item_id=item_id,
+            current_occurrence_only=current_occurrence_only,
+        )
+
+    def pause_reminder_item(self, request_id: str, item_id: int) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_pause_item(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            item_id=item_id,
+        )
+
+    def resume_reminder_item(self, request_id: str, item_id: int) -> dict:
+        if self._reminders is None:
+            return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
+        return self._reminders.ai_resume_item(
+            actor_target_id=self.actor_target_id,
+            request_id=request_id,
+            item_id=item_id,
+        )
+
     def _safe_contexts(self) -> tuple[list[SafeNoteContext], str]:
         contexts: list[SafeNoteContext] = []
         warning = ""
@@ -377,4 +631,73 @@ def _directory_fields(directory: str) -> dict:
     return {
         "main_category": parts[0] if parts else "",
         "sub_category": parts[1] if len(parts) > 1 else "",
+    }
+
+
+def _reminder_item_payload(item: ReminderListItem) -> dict:
+    occurrence = item.occurrence
+    return {
+        "item_id": item.reminder.id,
+        "reminder_id": item.reminder.id,
+        "table_id": item.table.id,
+        "table_title": item.table.title,
+        "title": item.reminder.title,
+        "note": item.reminder.note,
+        "label": {"label_id": item.label.id, "name": item.label.name},
+        "lifecycle": item.reminder.lifecycle,
+        "status": item.status,
+        "status_label": item.status_label,
+        "action_spec": item.reminder.action_spec,
+        "deadline_spec": item.reminder.deadline_spec,
+        "schedule": item.next_action_date,
+        "next_action_date": item.next_action_date,
+        "next_deadline_date": item.next_deadline_date,
+        "updated_at": item.reminder.updated_at,
+        "occurrence": (
+            {
+                "occurrence_id": occurrence.id,
+                "occurrence_key": occurrence.occurrence_key,
+                "action_date": occurrence.action_date,
+                "deadline_date": occurrence.deadline_date,
+                "status": occurrence.status,
+                "completed_at": occurrence.completed_at,
+            }
+            if occurrence is not None
+            else None
+        ),
+    }
+
+
+def _reminder_table_payload(item: ReminderTableListItem) -> dict:
+    return {
+        "table_id": item.table.id,
+        "title": item.table.title,
+        "label": {"label_id": item.label.id, "name": item.label.name},
+        "ai_visible": item.table.ai_visible,
+        "item_count": item.item_count,
+        "matching_item_id": item.matching_item_id,
+        "match_count": item.match_count,
+        "updated_at": item.table.updated_at,
+    }
+
+
+def _reminder_write_result(
+    status: str,
+    request_id: str,
+    *,
+    table_id: int | None = None,
+    item_id: int | None = None,
+    reason: str = "",
+) -> dict:
+    return {
+        "status": status,
+        "request_id": request_id,
+        "table_id": table_id,
+        "item_id": item_id,
+        "reminder_id": item_id,
+        "title": "",
+        "handling_mode": "none",
+        "modified_formal_reminder": False,
+        "entered_confirmation": False,
+        "reason": reason,
     }

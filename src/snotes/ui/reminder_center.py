@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QDate, QLocale, Qt, QTime, Signal
+from PySide6.QtCore import QDate, QLocale, QSize, Qt, QTime, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -35,6 +37,7 @@ from PySide6.QtWidgets import (
 from src.snotes.application.reminder_service import ReminderService
 from src.snotes.domain.reminder_schedule import (
     SHANGHAI,
+    deadline_for,
     describe_schedule,
     is_recurring,
     next_action_date,
@@ -45,25 +48,77 @@ from src.snotes.domain.reminders import (
     REMINDER_PAUSED,
     Reminder,
     ReminderDraft,
+    ReminderLabel,
     ReminderListItem,
+    ReminderQuery,
     ReminderSettings,
+    ReminderTableListItem,
 )
 from src.snotes.ui.floating_combo import FloatingComboBox
-from src.snotes.ui.theme import apply_selection_palette, current_theme
+from src.snotes.ui.theme import apply_selection_palette, current_theme, repolish, themed_icon
 
 
 class ReminderCenter(QWidget):
     changed = Signal()
     testNotificationRequested = Signal()
+    filterChanged = Signal(object, str)
 
     def __init__(self, service: ReminderService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
         self.items: list[ReminderListItem] = []
+        self.trash_tables: list[ReminderTableListItem] = []
+        self.selected_table_id: int | None = None
+        self.pending_highlight_item_id: int | None = None
+        self.label_id: int | None = None
+        self.ai_visibility = "all"
+        self.search_query = ""
+        self.trash_mode = False
         self.setObjectName("reminderCenter")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 16, 24, 12)
         layout.setSpacing(10)
+
+        self.table_meta = QWidget()
+        self.table_meta.setObjectName("reminderTableMeta")
+        meta_layout = QVBoxLayout(self.table_meta)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(6)
+        self.table_title_input = QLineEdit()
+        self.table_title_input.setObjectName("reminderTableTitleInput")
+        self.table_title_input.setPlaceholderText("Reminder Table")
+        meta_layout.addWidget(self.table_title_input)
+        self.title_separator = QWidget()
+        self.title_separator.setObjectName("reminderTitleSeparator")
+        meta_layout.addWidget(self.title_separator)
+        self.meta_toggle = QToolButton()
+        self.meta_toggle.setObjectName("reminderMetaSummaryButton")
+        self.meta_toggle.setCheckable(True)
+        self.meta_toggle.setChecked(False)
+        self.meta_toggle.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.meta_summary = self.meta_toggle
+        meta_layout.addWidget(self.meta_toggle)
+        self.meta_panel = QWidget()
+        self.meta_panel.setObjectName("reminderMetaPanel")
+        panel_row = QHBoxLayout(self.meta_panel)
+        panel_row.setContentsMargins(0, 0, 0, 0)
+        panel_row.setSpacing(6)
+        self.table_label_combo = FloatingComboBox()
+        self.table_label_combo.setObjectName("reminderTableLabelCombo")
+        self.table_label_combo.configure_popup(220)
+        self.table_ai_combo = FloatingComboBox()
+        self.table_ai_combo.setObjectName("reminderTableAiVisibleCombo")
+        self.table_ai_combo.configure_popup(160)
+        self.table_ai_combo.addItem("AI 可见", True)
+        self.table_ai_combo.addItem("AI 不可见", False)
+        panel_row.addWidget(_settings_label("所属标签"))
+        panel_row.addWidget(self.table_label_combo)
+        panel_row.addWidget(_settings_label("AI 可见性"))
+        panel_row.addWidget(self.table_ai_combo)
+        panel_row.addStretch(1)
+        meta_layout.addWidget(self.meta_panel)
+        self.meta_panel.setVisible(False)
+        layout.addWidget(self.table_meta)
 
         self.toolbar = QWidget()
         self.toolbar.setObjectName("reminderToolbar")
@@ -73,6 +128,8 @@ class ReminderCenter(QWidget):
         self.new_button = QPushButton("新建")
         self.edit_button = QPushButton("编辑")
         self.delete_button = QPushButton("删除")
+        self.restore_button = QPushButton("恢复")
+        self.permanent_delete_button = QPushButton("永久删除")
         self.pause_button = QPushButton("暂停")
         self.resume_button = QPushButton("恢复")
         self.complete_occurrence_button = QPushButton("完成本次")
@@ -81,6 +138,8 @@ class ReminderCenter(QWidget):
             self.new_button,
             self.edit_button,
             self.delete_button,
+            self.restore_button,
+            self.permanent_delete_button,
             self.pause_button,
             self.resume_button,
             self.complete_occurrence_button,
@@ -128,21 +187,34 @@ class ReminderCenter(QWidget):
         self.topic_input.setReadOnly(True)
         self.topic_input.setMinimumWidth(420)
         self.copy_topic_button = QPushButton("复制 Topic")
+        self.delete_table_button = QToolButton()
+        self.delete_table_button.setObjectName("reminderDeleteTableButton")
+        self.delete_table_button.setToolTip("删除表格")
+        self.delete_table_button.setFixedSize(QSize(28, 28))
+        self.delete_table_button.setIconSize(QSize(14, 14))
         settings.addWidget(self.enabled_check)
         settings.addWidget(_settings_label("时间"))
         settings.addWidget(self.time_edit)
         settings.addWidget(_settings_label("Topic"))
         settings.addWidget(self.topic_input, stretch=1)
         settings.addWidget(self.copy_topic_button)
+        settings.addWidget(self.delete_table_button)
         layout.addWidget(self.settings_widget)
 
         self.new_button.clicked.connect(self._new)
         self.edit_button.clicked.connect(self._edit)
         self.delete_button.clicked.connect(self._delete)
+        self.restore_button.clicked.connect(self._restore)
+        self.permanent_delete_button.clicked.connect(self._permanently_delete)
         self.pause_button.clicked.connect(self._pause)
         self.resume_button.clicked.connect(self._resume)
         self.complete_occurrence_button.clicked.connect(self._complete_occurrence)
         self.complete_button.clicked.connect(self._complete)
+        self.meta_toggle.toggled.connect(self.meta_panel.setVisible)
+        self.table_title_input.editingFinished.connect(self._save_table_title)
+        self.table_label_combo.currentIndexChanged.connect(self._table_label_changed)
+        self.table_ai_combo.currentIndexChanged.connect(self._table_ai_changed)
+        self.delete_table_button.clicked.connect(self._delete_current_table)
         self.enabled_check.stateChanged.connect(self._save_settings)
         self.time_edit.timeChanged.connect(self._save_settings)
         self.copy_topic_button.clicked.connect(self._copy_topic)
@@ -154,26 +226,115 @@ class ReminderCenter(QWidget):
         self._apply_table_widths()
 
     def refresh(self) -> None:
-        self.items = self.service.list_reminders()
-        self.table.setRowCount(len(self.items))
-        for row, item in enumerate(self.items):
-            reminder = item.reminder
-            values = [
-                reminder.title,
-                _status_text(item),
-                item.next_action_date or "",
-                describe_schedule(reminder.action_spec),
-                item.next_deadline_date or "",
-                reminder.note,
-            ]
-            for column, value in enumerate(values):
-                cell = QTableWidgetItem(str(value))
-                cell.setData(Qt.UserRole, reminder.id)
-                cell.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                self.table.setItem(row, column, cell)
+        if self.trash_mode:
+            snapshot = self.service.list_trash()
+            self.items = []
+            self.trash_tables = list(snapshot.tables)
+            self.table_meta.setVisible(False)
+            self.delete_table_button.setVisible(False)
+            self.table.setColumnCount(6)
+            self.table.setHorizontalHeaderLabels(
+                ["Table", "标签", "AI 权限", "事项数", "删除时间", ""]
+            )
+            self.table.setRowCount(len(self.trash_tables))
+            for row, item in enumerate(self.trash_tables):
+                table = item.table
+                values = [
+                    table.title,
+                    item.label.name,
+                    "AI 可见" if table.ai_visible else "AI 不可见",
+                    item.item_count,
+                    table.deleted_at or "",
+                    "",
+                ]
+                for column, value in enumerate(values):
+                    cell = QTableWidgetItem(str(value))
+                    cell.setData(Qt.UserRole, table.id)
+                    cell.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    self.table.setItem(row, column, cell)
+        else:
+            self.table_meta.setVisible(True)
+            self.delete_table_button.setVisible(True)
+            if self.selected_table_id is None:
+                tables = self.service.list_tables(
+                    ReminderQuery(
+                        label_id=self.label_id,
+                        ai_visibility=self.ai_visibility,
+                    )
+                )
+                if tables:
+                    self.selected_table_id = tables[0].table.id
+                else:
+                    self.selected_table_id = self.service.default_table().id
+            self._load_table_metadata()
+            self.items = self.service.list_reminders(
+                ReminderQuery(
+                    table_id=self.selected_table_id,
+                )
+            )
+            self.table.setColumnCount(6)
+            self.table.setHorizontalHeaderLabels(
+                ["事项", "状态", "开始处理日", "重复", "最晚处理日", "备注"]
+            )
+            self.table.setRowCount(len(self.items))
+            highlight_row = -1
+            for row, item in enumerate(self.items):
+                reminder = item.reminder
+                if self.pending_highlight_item_id == reminder.id:
+                    highlight_row = row
+                values = [
+                    reminder.title,
+                    _status_text(item),
+                    item.next_action_date or "",
+                    describe_schedule(reminder.action_spec),
+                    item.next_deadline_date or "",
+                    reminder.note,
+                ]
+                for column, value in enumerate(values):
+                    cell = QTableWidgetItem(str(value))
+                    cell.setData(Qt.UserRole, reminder.id)
+                    cell.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    self.table.setItem(row, column, cell)
+            if highlight_row >= 0:
+                self.table.setCurrentCell(highlight_row, 0)
+                self.pending_highlight_item_id = None
         self._load_settings()
         self._apply_table_widths()
         self._update_action_states()
+
+    def enter_default(self) -> None:
+        self.trash_mode = False
+        self.label_id = None
+        self.ai_visibility = "all"
+        self.search_query = ""
+        self.selected_table_id = None
+        self.refresh()
+        self.filterChanged.emit(self.label_id, self.ai_visibility)
+
+    def set_filter(self, label_id: int | None, ai_visibility: str) -> None:
+        self.trash_mode = False
+        self.label_id = label_id
+        self.ai_visibility = ai_visibility if ai_visibility in {"all", "visible", "hidden"} else "all"
+        self.selected_table_id = None
+        self.refresh()
+
+    def set_search(self, query: str) -> None:
+        self.search_query = query
+        if not self.trash_mode:
+            self.refresh()
+
+    def show_trash(self) -> None:
+        self.trash_mode = True
+        self.refresh()
+
+    def select_table(self, table_id: int, matching_item_id: int | None = None) -> None:
+        self.trash_mode = False
+        self.selected_table_id = table_id
+        self.pending_highlight_item_id = matching_item_id
+        self.refresh()
+
+    def labels(self) -> list[ReminderLabel]:
+        return self.service.list_labels()
 
     def refresh_theme(self) -> None:
         tokens = current_theme()
@@ -188,10 +349,15 @@ class ReminderCenter(QWidget):
         self.table.viewport().setPalette(palette)
         apply_selection_palette(self.table)
         apply_selection_palette(self.table.viewport())
+        self.delete_table_button.setIcon(themed_icon("trash.svg"))
         self.table.viewport().update()
 
     def _selected_id(self) -> int | None:
         row = self.table.currentRow()
+        if self.trash_mode:
+            if row < 0 or row >= len(self.trash_tables):
+                return None
+            return self.trash_tables[row].table.id
         if row < 0 or row >= len(self.items):
             return None
         return self.items[row].reminder.id
@@ -215,7 +381,11 @@ class ReminderCenter(QWidget):
         )
 
     def _new(self) -> None:
-        dialog = ReminderDialog(parent=self)
+        table_id = self.selected_table_id or self.service.default_table().id
+        dialog = ReminderDialog(
+            parent=self,
+            table_id=table_id,
+        )
         if dialog.exec() != QDialog.Accepted:
             return
         self.service.create_reminder(dialog.draft())
@@ -225,7 +395,7 @@ class ReminderCenter(QWidget):
         reminder = self._selected_reminder()
         if reminder is None:
             return
-        dialog = ReminderDialog(reminder, self)
+        dialog = ReminderDialog(reminder, self, table_id=reminder.table_id)
         if dialog.exec() != QDialog.Accepted:
             return
         self.service.update_reminder(reminder.id, dialog.draft())
@@ -235,9 +405,22 @@ class ReminderCenter(QWidget):
         reminder_id = self._selected_id()
         if reminder_id is None:
             return
-        if QMessageBox.question(self, "删除提醒", "删除这条提醒及其历史记录？") != QMessageBox.Yes:
-            return
         self.service.delete_reminder(reminder_id)
+        self._after_change()
+
+    def _restore(self) -> None:
+        table_id = self._selected_id()
+        if table_id is not None:
+            self.service.restore_table(table_id)
+            self._after_change()
+
+    def _permanently_delete(self) -> None:
+        table_id = self._selected_id()
+        if table_id is None:
+            return
+        if QMessageBox.question(self, "永久删除 Table", "确定永久删除这个 Reminder Table 及其中所有事项吗？此操作无法撤销。") != QMessageBox.Yes:
+            return
+        self.service.permanently_delete_table(table_id)
         self._after_change()
 
     def _pause(self) -> None:
@@ -267,6 +450,67 @@ class ReminderCenter(QWidget):
     def _after_change(self) -> None:
         self.refresh()
         self.changed.emit()
+
+    def _load_table_metadata(self) -> None:
+        if self.selected_table_id is None:
+            return
+        item = self.service.get_table(self.selected_table_id)
+        if item is None:
+            self.table_title_input.setText("")
+            self.meta_summary.setText("")
+            return
+        self.table_title_input.blockSignals(True)
+        self.table_label_combo.blockSignals(True)
+        self.table_ai_combo.blockSignals(True)
+        self.table_title_input.setText(item.table.title)
+        self.table_label_combo.clear()
+        for label in self.service.list_labels():
+            self.table_label_combo.addItem(label.name, label.id)
+        label_index = self.table_label_combo.findData(item.label.id)
+        self.table_label_combo.setCurrentIndex(max(0, label_index))
+        ai_index = self.table_ai_combo.findData(item.table.ai_visible)
+        self.table_ai_combo.setCurrentIndex(max(0, ai_index))
+        self.meta_summary.setText(
+            f"{item.label.name} · {'AI 可见' if item.table.ai_visible else 'AI 不可见'}"
+        )
+        self.table_title_input.blockSignals(False)
+        self.table_label_combo.blockSignals(False)
+        self.table_ai_combo.blockSignals(False)
+
+    def _save_table_title(self) -> None:
+        if self.trash_mode or self.selected_table_id is None:
+            return
+        title = self.table_title_input.text().strip()
+        if not title:
+            self._load_table_metadata()
+            return
+        self.service.update_table_metadata(self.selected_table_id, title=title)
+        self._after_change()
+
+    def _table_label_changed(self, _index: int = -1) -> None:
+        if self.trash_mode or self.selected_table_id is None or self.table_label_combo.signalsBlocked():
+            return
+        label_id = self.table_label_combo.currentData()
+        if label_id is None:
+            return
+        self.service.update_table_metadata(self.selected_table_id, label_id=int(label_id))
+        self._after_change()
+
+    def _table_ai_changed(self, _index: int = -1) -> None:
+        if self.trash_mode or self.selected_table_id is None or self.table_ai_combo.signalsBlocked():
+            return
+        self.service.set_table_ai_visible(
+            self.selected_table_id,
+            bool(self.table_ai_combo.currentData()),
+        )
+        self._after_change()
+
+    def _delete_current_table(self) -> None:
+        if self.trash_mode or self.selected_table_id is None:
+            return
+        self.service.delete_table(self.selected_table_id)
+        self.selected_table_id = None
+        self._after_change()
 
     def _load_settings(self) -> None:
         settings = self.service.settings()
@@ -306,8 +550,8 @@ class ReminderCenter(QWidget):
 
     def _apply_table_widths(self) -> None:
         width = max(1, self.table.viewport().width())
-        proportions = (0.16, 0.20, 0.12, 0.20, 0.11, 0.25)
-        minimums = (132, 260, 112, 220, 112, 360)
+        proportions = (0.24, 0.16, 0.14, 0.20, 0.12, 0.22)
+        minimums = (160, 160, 112, 180, 112, 240)
         for column, proportion in enumerate(proportions):
             self.table.setColumnWidth(
                 column,
@@ -317,6 +561,7 @@ class ReminderCenter(QWidget):
     def _update_action_states(self) -> None:
         item = self._selected_item()
         selected = item is not None
+        table_selected = self.trash_mode and self._selected_id() is not None
         lifecycle = item.reminder.lifecycle if item is not None else ""
         active = lifecycle == REMINDER_ACTIVE
         paused = lifecycle == REMINDER_PAUSED
@@ -335,12 +580,179 @@ class ReminderCenter(QWidget):
         self.complete_button.setEnabled(
             selected and active and not recurring and not completed
         )
+        self.restore_button.setVisible(self.trash_mode)
+        self.permanent_delete_button.setVisible(self.trash_mode)
+        self.new_button.setVisible(not self.trash_mode)
+        for button in (
+            self.edit_button,
+            self.delete_button,
+            self.pause_button,
+            self.resume_button,
+            self.complete_occurrence_button,
+            self.complete_button,
+        ):
+            button.setVisible(not self.trash_mode)
+        self.restore_button.setEnabled(table_selected)
+        self.permanent_delete_button.setEnabled(table_selected)
+
+
+class ReminderLabelManagerDialog(QDialog):
+    def __init__(self, service: ReminderService, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.labels: list[ReminderLabel] = []
+        self.setObjectName("reminderLabelManagerDialog")
+        self.setWindowTitle("Reminder 标签管理")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        title = QLabel("Reminder 标签")
+        title.setObjectName("categoryManagerTitle")
+        layout.addWidget(title)
+
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        self.label_list = QListWidget()
+        self.label_list.setObjectName("reminderLabelManagerList")
+        self.label_list.setMinimumHeight(260)
+        body.addWidget(self.label_list, stretch=1)
+
+        controls = QVBoxLayout()
+        controls.setSpacing(8)
+        self.name_input = QLineEdit()
+        self.name_input.setObjectName("reminderLabelNameInput")
+        self.name_input.setPlaceholderText("标签名称")
+        controls.addWidget(self.name_input)
+        self.create_button = QPushButton("新增")
+        self.rename_button = QPushButton("重命名")
+        self.delete_button = QPushButton("删除")
+        self.move_up_button = QPushButton("上移")
+        self.move_down_button = QPushButton("下移")
+        for button in (
+            self.create_button,
+            self.rename_button,
+            self.delete_button,
+            self.move_up_button,
+            self.move_down_button,
+        ):
+            controls.addWidget(button)
+        controls.addStretch(1)
+        body.addLayout(controls)
+        layout.addLayout(body)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("reminderLabelManagerStatus")
+        layout.addWidget(self.status_label)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.label_list.currentItemChanged.connect(lambda *_args: self._selection_changed())
+        self.create_button.clicked.connect(self._create_label)
+        self.rename_button.clicked.connect(self._rename_label)
+        self.delete_button.clicked.connect(self._delete_label)
+        self.move_up_button.clicked.connect(lambda: self._move_selected(-1))
+        self.move_down_button.clicked.connect(lambda: self._move_selected(1))
+        self.refresh()
+
+    def refresh(self, selected_id: int | None = None) -> None:
+        previous = selected_id if selected_id is not None else self._selected_label_id()
+        self.labels = self.service.list_labels()
+        self.label_list.blockSignals(True)
+        self.label_list.clear()
+        selected_row = 0
+        for row, label in enumerate(self.labels):
+            suffix = "  默认" if label.is_default else ""
+            item = QListWidgetItem(f"{label.name}{suffix}")
+            item.setData(Qt.UserRole, label.id)
+            self.label_list.addItem(item)
+            if label.id == previous:
+                selected_row = row
+        if self.labels:
+            self.label_list.setCurrentRow(selected_row)
+        self.label_list.blockSignals(False)
+        self._selection_changed()
+
+    def _selection_changed(self) -> None:
+        label = self._selected_label()
+        selected = label is not None
+        self.name_input.setText(label.name if label else "")
+        self.rename_button.setEnabled(selected)
+        self.delete_button.setEnabled(selected and not label.is_default)
+        row = self.label_list.currentRow()
+        self.move_up_button.setEnabled(selected and row > 0)
+        self.move_down_button.setEnabled(selected and row < len(self.labels) - 1)
+
+    def _selected_label_id(self) -> int | None:
+        item = self.label_list.currentItem()
+        return int(item.data(Qt.UserRole)) if item is not None else None
+
+    def _selected_label(self) -> ReminderLabel | None:
+        label_id = self._selected_label_id()
+        if label_id is None:
+            return None
+        return next((label for label in self.labels if label.id == label_id), None)
+
+    def _clean_name(self) -> str:
+        return self.name_input.text().strip()
+
+    def _create_label(self) -> None:
+        name = self._clean_name()
+        if not name:
+            self.status_label.setText("请输入标签名称")
+            return
+        label = self.service.create_label(name)
+        self.status_label.setText("已新增标签")
+        self.refresh(label.id)
+
+    def _rename_label(self) -> None:
+        label = self._selected_label()
+        name = self._clean_name()
+        if label is None or not name:
+            self.status_label.setText("请选择标签并输入名称")
+            return
+        self.service.rename_label(label.id, name)
+        self.status_label.setText("已重命名标签")
+        self.refresh(label.id)
+
+    def _delete_label(self) -> None:
+        label = self._selected_label()
+        if label is None:
+            return
+        if label.is_default:
+            self.status_label.setText("默认标签不可删除")
+            return
+        self.service.delete_label(label.id)
+        self.status_label.setText("标签及其表格已移入 Reminder 回收站")
+        self.refresh()
+
+    def _move_selected(self, direction: int) -> None:
+        label = self._selected_label()
+        if label is None:
+            return
+        ids = [item.id for item in self.labels]
+        index = ids.index(label.id)
+        target = index + direction
+        if target < 0 or target >= len(ids):
+            return
+        ids[index], ids[target] = ids[target], ids[index]
+        self.service.reorder_labels(ids)
+        self.status_label.setText("已更新排序")
+        self.refresh(label.id)
 
 
 class ReminderDialog(QDialog):
-    def __init__(self, reminder: Reminder | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        reminder: Reminder | None = None,
+        parent: QWidget | None = None,
+        *,
+        table_id: int | None = None,
+    ) -> None:
         super().__init__(parent)
         self.reminder = reminder
+        self.table_id = table_id if table_id is not None else (reminder.table_id if reminder else None)
         self.setObjectName("reminderDialog")
         self.setWindowTitle("编辑提醒" if reminder else "新建提醒")
         self.setMinimumWidth(620)
@@ -461,6 +873,7 @@ class ReminderDialog(QDialog):
         self.repeat_combo.currentIndexChanged.connect(self._update_repeat_parameter)
         self.repeat_combo.currentIndexChanged.connect(self._update_deadline_controls)
         self.repeat_combo.currentIndexChanged.connect(self._update_repeat_until_controls)
+        self.action_date.dateChanged.connect(self._update_deadline_controls)
         self.deadline_combo.currentIndexChanged.connect(self._update_deadline_controls)
         self.repeat_until_combo.currentIndexChanged.connect(self._update_repeat_until_controls)
         if reminder is not None:
@@ -481,6 +894,7 @@ class ReminderDialog(QDialog):
             action_spec=action_spec,
             deadline_spec=self._deadline_spec(action_spec),
             note=self.note_input.toPlainText(),
+            table_id=self.table_id,
         )
 
     def _action_spec(self, action: date) -> dict:
@@ -576,13 +990,15 @@ class ReminderDialog(QDialog):
     def _deadline_spec(self, action_spec: dict) -> dict | None:
         if str(self.deadline_combo.currentData()) != "set":
             return None
+        action = self._pydate(self.action_date.date())
+        deadline = self._pydate(self.deadline_date.date())
+        offset_days = max(0, (deadline - action).days)
         mode = str(self.repeat_combo.currentData())
         if mode == "one_time":
-            deadline = self._pydate(self.deadline_date.date())
             return {"type": "one_time", "date": deadline.isoformat()}
-        if mode == "monthly_day":
-            return {"type": "monthly_day", "day": int(self.deadline_day.value())}
-        return None
+        if offset_days == 0:
+            return {"type": "same_day"}
+        return {"type": "offset_days", "days": offset_days}
 
     def _repeat_until(self) -> date | None:
         if str(self.repeat_until_combo.currentData()) != "date":
@@ -602,29 +1018,28 @@ class ReminderDialog(QDialog):
             )
             deadline = _date_from_spec(spec)
             self.deadline_date.setDate(QDate(deadline.year, deadline.month, deadline.day))
-        elif kind == "monthly_day":
+        elif kind in {"same_day", "offset_days", "monthly_day", "yearly_date"}:
             self.deadline_combo.setCurrentIndex(
                 max(0, self.deadline_combo.findData("set"))
             )
-            self.deadline_day.setValue(int(spec.get("day", action.day)))
+            deadline = deadline_for(action, spec) or action
+            self.deadline_date.setDate(QDate(deadline.year, deadline.month, deadline.day))
         else:
             self.deadline_combo.setCurrentIndex(
                 max(0, self.deadline_combo.findData("none"))
             )
 
     def _update_deadline_controls(self) -> None:
-        mode = str(self.repeat_combo.currentData())
-        supported = mode in {"one_time", "monthly_day"}
-        if not supported and str(self.deadline_combo.currentData()) != "none":
-            self.deadline_combo.blockSignals(True)
-            self.deadline_combo.setCurrentIndex(max(0, self.deadline_combo.findData("none")))
-            self.deadline_combo.blockSignals(False)
-        self.deadline_combo.setEnabled(supported)
-        setting = supported and str(self.deadline_combo.currentData()) == "set"
-        one_time = mode == "one_time" and setting
-        self.deadline_date_label.setVisible(one_time)
-        self.deadline_date.setVisible(one_time)
-        monthly = mode == "monthly_day" and setting
+        action = self._pydate(self.action_date.date())
+        q_action = QDate(action.year, action.month, action.day)
+        self.deadline_date.setMinimumDate(q_action)
+        if self.deadline_date.date() < q_action:
+            self.deadline_date.setDate(q_action)
+        setting = str(self.deadline_combo.currentData()) == "set"
+        self.deadline_combo.setEnabled(True)
+        self.deadline_date_label.setVisible(setting)
+        self.deadline_date.setVisible(setting)
+        monthly = False
         self.deadline_prefix.setVisible(monthly)
         self.deadline_day.setVisible(monthly)
         self.deadline_unit.setVisible(monthly)

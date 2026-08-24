@@ -36,6 +36,7 @@ from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptInboxService,
 )
 from src.snotes.application.gale_service import GaleControlService
+from src.snotes.application.reminder_service import ReminderService
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.floating_combo import FloatingComboBox
@@ -575,6 +576,7 @@ class AiCenterDialog(QWidget):
         service: AiReceiptInboxService,
         metadata: AiAccessMetadataService,
         audit: AiAuditService | None = None,
+        reminders: ReminderService | None = None,
         parent: QWidget | None = None,
         *,
         gale: GaleControlService | None = None,
@@ -590,6 +592,9 @@ class AiCenterDialog(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         self.audit = audit
+        self.reminders = reminders
+        self.reminder_log_offset = 0
+        self.reminder_log_limit = 50
         self.gale = gale
         self._gale_threads: list[QThread] = []
         self._gale_workers: list[_GaleWorker] = []
@@ -603,7 +608,9 @@ class AiCenterDialog(QWidget):
         self.receipt_view.pendingCountChanged.connect(self.pendingCountChanged)
         self.tabs.addTab(self.receipt_view, "待确认 / 已处理")
         self.log_page = self._build_log_page()
-        self.tabs.addTab(self.log_page, "调用记录")
+        self.tabs.addTab(self.log_page, "笔记调用记录")
+        self.reminder_log_page = self._build_reminder_log_page()
+        self.tabs.addTab(self.reminder_log_page, "提醒操作记录")
         self.gale_page = None
         self.tabs.currentChanged.connect(self._tab_changed)
         layout.addWidget(self.tabs, stretch=1)
@@ -829,6 +836,8 @@ class AiCenterDialog(QWidget):
     def _tab_changed(self, index: int) -> None:
         if index == self.tabs.indexOf(self.log_page):
             self.refresh_logs()
+        elif index == self.tabs.indexOf(self.reminder_log_page):
+            self.refresh_reminder_logs(reset=True)
         else:
             self.receipt_view.refresh_receipts()
 
@@ -878,6 +887,78 @@ class AiCenterDialog(QWidget):
                     QTableWidgetItem(str(value)),
                 )
         self.log_table.resizeColumnsToContents()
+
+    def _build_reminder_log_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("aiReminderLogPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(10)
+        toolbar = QHBoxLayout()
+        refresh_button = QPushButton("刷新")
+        refresh_button.clicked.connect(lambda: self.refresh_reminder_logs(reset=True))
+        toolbar.addWidget(refresh_button)
+        self.reminder_log_more_button = QPushButton("加载更多")
+        self.reminder_log_more_button.clicked.connect(lambda: self.refresh_reminder_logs(reset=False))
+        toolbar.addWidget(self.reminder_log_more_button)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+        self.reminder_log_empty = QLabel("暂无 Reminder 操作记录")
+        self.reminder_log_empty.setObjectName("aiReminderLogEmpty")
+        layout.addWidget(self.reminder_log_empty)
+        self.reminder_log_table = QTableWidget(0, 10)
+        self.reminder_log_table.setObjectName("aiReminderLogTable")
+        self.reminder_log_table.setHorizontalHeaderLabels(
+            ["时间", "来源", "动作", "Table ID", "Table", "Item ID", "Item", "标签", "变化字段", "请求 ID"]
+        )
+        self.reminder_log_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.reminder_log_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.reminder_log_table.setAlternatingRowColors(False)
+        self.reminder_log_table.verticalHeader().setVisible(False)
+        self.reminder_log_table.horizontalHeader().setStretchLastSection(True)
+        self.reminder_log_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Interactive
+        )
+        layout.addWidget(self.reminder_log_table, stretch=1)
+        self.refresh_reminder_logs(reset=True)
+        return page
+
+    def refresh_reminder_logs(self, *, reset: bool) -> None:
+        if reset:
+            self.reminder_log_offset = 0
+            self.reminder_log_table.setRowCount(0)
+        if self.reminders is None:
+            self.reminder_log_more_button.setEnabled(False)
+            return
+        page = self.reminders.list_ai_operation_logs(
+            offset=self.reminder_log_offset,
+            limit=self.reminder_log_limit,
+        )
+        start = self.reminder_log_table.rowCount()
+        self.reminder_log_table.setRowCount(start + len(page.rows))
+        for index, row in enumerate(page.rows, start=start):
+            values = (
+                row.happened_at.replace("T", " ")[:19],
+                row.actor_target_id,
+                row.action,
+                row.table_id or "",
+                row.table_title,
+                row.item_id or "",
+                row.item_title,
+                row.label_name,
+                ", ".join(row.changed_fields),
+                row.request_id,
+            )
+            for column, value in enumerate(values):
+                self.reminder_log_table.setItem(
+                    index,
+                    column,
+                    QTableWidgetItem(str(value)),
+                )
+        self.reminder_log_offset += len(page.rows)
+        self.reminder_log_more_button.setEnabled(page.has_more)
+        self.reminder_log_empty.setVisible(self.reminder_log_table.rowCount() == 0)
+        self.reminder_log_table.setVisible(self.reminder_log_table.rowCount() > 0)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.finished.emit(0)

@@ -22,6 +22,7 @@ from src.snotes.application.reminder_service import ReminderService
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.errors import NoteRevisionConflictError
 from src.snotes.domain.models import Note, NoteLocation
+from src.snotes.domain.reminders import ReminderQuery
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.directory_dialog import DirectoryUiWorkflow
 from src.snotes.ui.ai_center_dialog import AiCenterDialog
@@ -33,6 +34,7 @@ from src.snotes.ui.location_controls import (
     populate_location_controls,
     selected_location,
 )
+from src.snotes.ui.reminder_center import ReminderLabelManagerDialog
 from src.snotes.ui.shell import SnotesShell
 from src.snotes.ui.theme import (
     apply_theme,
@@ -148,6 +150,7 @@ class MainWindow(QMainWindow):
     def _connect_ui(self) -> None:
         sidebar = self.shell.sidebar
         sidebar.newNoteRequested.connect(self.create_note)
+        sidebar.newReminderRequested.connect(self.create_reminder)
         sidebar.noteSelected.connect(self.switch_note)
         sidebar.themeSelected.connect(self.set_theme)
         sidebar.searchRequested.connect(self.show_search)
@@ -166,8 +169,22 @@ class MainWindow(QMainWindow):
         sidebar.emptyTrashRequested.connect(self.empty_trash)
         sidebar.aiCenterRequested.connect(self.open_ai_center)
         sidebar.aiActorFilterRequested.connect(self.set_ai_materials_actor_filter)
+        sidebar.reminderTableSelected.connect(self.select_reminder_table)
+        sidebar.reminderFilterRequested.connect(self.set_reminder_filter)
+        sidebar.manageReminderLabelsRequested.connect(self.manage_reminder_labels)
+        sidebar.reminderTrashRequested.connect(self.show_reminder_trash)
+        sidebar.exitReminderTrashRequested.connect(self.show_reminder_default)
+        sidebar.reminderTableRenameRequested.connect(self.rename_reminder_table)
+        sidebar.reminderTableMoveRequested.connect(self.move_reminder_table)
+        sidebar.reminderTableDeleteRequested.connect(self.delete_reminder_table)
         if self.shell.reminder_center is not None:
             self.shell.reminder_center.changed.connect(self.refresh_reminder_badge)
+            self.shell.reminder_center.changed.connect(
+                self._sync_sidebar_reminder_filters
+            )
+            self.shell.reminder_center.filterChanged.connect(
+                self._sync_sidebar_reminder_filters
+            )
             self.shell.reminder_center.testNotificationRequested.connect(
                 self.send_reminder_test_notification
             )
@@ -206,6 +223,7 @@ class MainWindow(QMainWindow):
             self.receipt_inbox_service,
             self.ai_access_metadata_service,
             self.ai_audit_service,
+            self.reminder_service,
             self,
             gale=self.gale_control_service,
         )
@@ -284,6 +302,7 @@ class MainWindow(QMainWindow):
             self.visible_notes = []
             self.shell.sidebar.set_active_smart_view("reminder")
             self.shell.show_reminder_surface()
+            self._sync_sidebar_reminder_filters()
         elif self.current_mode == "smart_view":
             self.shell.show_notes_surface()
             _title, self.visible_notes = self.note_service.smart_view(
@@ -327,6 +346,108 @@ class MainWindow(QMainWindow):
         self.refresh_note_list(note.id)
         self.title_input.setFocus()
         self.title_input.selectAll()
+
+    def create_reminder(self) -> None:
+        if self.shell.reminder_center is None:
+            return
+        self.current_mode = "smart_view"
+        self.current_filter = "reminder"
+        self.shell.show_reminder_surface()
+        table = self.shell.reminder_center.service.create_table()
+        self.shell.reminder_center.select_table(table.id)
+        self._sync_sidebar_reminder_filters()
+
+    def select_reminder_table(self, table_id: int, matching_item_id: object = None) -> None:
+        if self.shell.reminder_center is None:
+            return
+        self.current_mode = "smart_view"
+        self.current_filter = "reminder"
+        self.shell.show_reminder_surface()
+        item_id = int(matching_item_id) if matching_item_id is not None else None
+        self.shell.reminder_center.select_table(int(table_id), item_id)
+        self._sync_sidebar_reminder_filters()
+
+    def set_reminder_filter(self, label_id: object, ai_visibility: str) -> None:
+        if self.shell.reminder_center is None:
+            return
+        self.current_mode = "smart_view"
+        self.current_filter = "reminder"
+        self.shell.show_reminder_surface()
+        selected_label = int(label_id) if label_id is not None else None
+        self.shell.reminder_center.set_filter(selected_label, ai_visibility)
+        self._sync_sidebar_reminder_filters()
+
+    def show_reminder_default(self) -> None:
+        if self.shell.reminder_center is None:
+            return
+        self.current_mode = "smart_view"
+        self.current_filter = "reminder"
+        self.shell.show_reminder_surface(reset_filters=True)
+        self._sync_sidebar_reminder_filters()
+
+    def show_reminder_trash(self) -> None:
+        if self.shell.reminder_center is None:
+            return
+        self.current_mode = "smart_view"
+        self.current_filter = "reminder"
+        self.shell.sidebar.show_reminder_trash_mode()
+        self.shell.show_reminder_surface()
+        self.shell.reminder_center.show_trash()
+
+    def manage_reminder_labels(self) -> None:
+        if self.reminder_service is None:
+            return
+        dialog = ReminderLabelManagerDialog(self.reminder_service, self)
+        dialog.exec()
+        self._sync_sidebar_reminder_filters()
+        if self.shell.reminder_center is not None:
+            self.shell.reminder_center.refresh()
+
+    def rename_reminder_table(self, table_id: int) -> None:
+        center = self.shell.reminder_center
+        if center is None:
+            return
+        if center.selected_table_id != table_id:
+            center.select_table(table_id)
+            self._sync_sidebar_reminder_filters()
+        center.table_title_input.setFocus()
+        center.table_title_input.selectAll()
+
+    def move_reminder_table(self, table_id: int, label_id: int) -> None:
+        if self.reminder_service is None:
+            return
+        self.reminder_service.update_table_metadata(table_id, label_id=label_id)
+        if self.shell.reminder_center is not None:
+            self.shell.reminder_center.select_table(table_id)
+        self._sync_sidebar_reminder_filters()
+
+    def delete_reminder_table(self, table_id: int) -> None:
+        if self.reminder_service is None:
+            return
+        self.reminder_service.delete_table(table_id)
+        center = self.shell.reminder_center
+        if center is not None and center.selected_table_id == table_id:
+            center.selected_table_id = None
+            center.refresh()
+        self._sync_sidebar_reminder_filters()
+
+    def _sync_sidebar_reminder_filters(self, *_args) -> None:
+        center = self.shell.reminder_center
+        if center is None:
+            return
+        self.shell.sidebar.set_reminder_filters(
+            center.labels(),
+            center.service.list_tables(
+                ReminderQuery(
+                    query=center.search_query,
+                    label_id=center.label_id,
+                    ai_visibility=center.ai_visibility,
+                )
+            ),
+            center.label_id,
+            center.ai_visibility,
+            center.selected_table_id,
+        )
 
     def switch_note(self, note_id: int) -> None:
         if self.current_note is not None and note_id == self.current_note.id:
@@ -578,6 +699,11 @@ class MainWindow(QMainWindow):
         self.show_directory()
 
     def show_search(self, query: str) -> None:
+        if self.current_mode == "smart_view" and self.current_filter == "reminder":
+            if self.shell.reminder_center is not None:
+                self.shell.reminder_center.set_search(query)
+                self._sync_sidebar_reminder_filters()
+            return
         if self.current_mode == "smart_view" and self.current_filter == "ai":
             self.ai_materials_query = query
             self.refresh_note_list()
@@ -596,7 +722,7 @@ class MainWindow(QMainWindow):
     def show_smart_view(self, name: str) -> None:
         self.shell.sidebar.clear_search()
         self.ai_materials_query = ""
-        if self.current_mode == "smart_view" and self.current_filter == name:
+        if name != "reminder" and self.current_mode == "smart_view" and self.current_filter == name:
             self.current_directory_path = ()
             self.show_directory()
             return
@@ -605,6 +731,12 @@ class MainWindow(QMainWindow):
         self.current_mode = "smart_view"
         self.current_filter = name
         self.shell.sidebar.set_active_smart_view(name)
+        if name == "reminder":
+            self.current_note = None
+            self.shell.link_drawer.set_results([])
+            self.shell.show_reminder_surface(reset_filters=True)
+            self._sync_sidebar_reminder_filters()
+            return
         self.refresh_note_list()
 
     def set_ai_materials_actor_filter(self, actor_target_id: object) -> None:

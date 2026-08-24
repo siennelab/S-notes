@@ -372,6 +372,43 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #reminderToolbar, #reminderSettings {{
     background: transparent; color: {t.text};
 }}
+#reminderTableTitleInput {{
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    background: {t.editor};
+    color: {t.text};
+    font-size: 26px;
+    font-weight: 600;
+}}
+#reminderTableTitleInput:focus {{ border: 0; background: {t.editor}; }}
+#reminderTitleSeparator {{
+    border: 0;
+    min-height: 2px;
+    max-height: 2px;
+    background: {t.title_separator};
+}}
+#reminderMetaSummaryButton {{
+    padding: 8px 0;
+    background: {t.editor};
+    color: {t.text_muted};
+    font-size: 12.5px;
+    text-align: left;
+}}
+#reminderMetaSummaryButton:hover {{ background: {t.editor}; color: {t.text}; }}
+#reminderMetaSummaryButton:pressed, #reminderMetaSummaryButton:checked {{
+    background: {t.editor};
+    color: {t.text};
+}}
+#reminderMetaPanel {{
+    background: {t.surface};
+    color: {t.text};
+    border-radius: 8px;
+}}
+#reminderMetaPanel QComboBox {{
+    background: {t.editor_paper};
+    color: {t.text};
+}}
 #reminderSettingsHint, #reminderSettingsLabel {{
     color: {t.text_muted}; font-size: 12.5px;
 }}
@@ -382,7 +419,7 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
     alternate-background-color: {t.surface_hover};
     color: {t.text};
     gridline-color: {t.editor_border};
-    selection-background-color: {t.surface_selected};
+    selection-background-color: {t.accent_soft};
     selection-color: {t.text};
     outline: 0;
 }}
@@ -399,8 +436,9 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
     color: {t.text};
 }}
 #reminderTable::item:selected {{
-    background: {t.surface_selected};
+    background: {t.accent_soft};
     color: {t.text};
+    border-left: 3px solid {t.accent};
 }}
 #reminderTable QHeaderView {{
     background: {t.surface};
@@ -418,6 +456,18 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
     border: 0;
     border-bottom: 1px solid {t.editor_border};
     background: {t.surface};
+}}
+#reminderDeleteTableButton {{
+    padding: 0;
+    color: {t.text_muted};
+}}
+#reminderDeleteTableButton:hover {{
+    background: {t.surface_hover};
+    color: {t.text};
+}}
+#reminderDeleteTableButton:pressed {{
+    background: {t.surface_selected};
+    color: {t.text};
 }}
 #reminderDialog {{
     background: {t.window}; color: {t.text};
@@ -557,6 +607,34 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #categoryManagerList::item:selected {{ background: {t.surface_selected}; color: {t.text}; }}
 #categoryNewButton {{ color: {t.text_muted}; text-align: left; padding: 4px 8px; }}
 #categoryNewButton:hover {{ background: {t.surface_hover}; color: {t.text}; }}
+#reminderLabelManagerDialog {{ background: {t.window}; color: {t.text}; }}
+#reminderLabelManagerList {{
+    border: 0;
+    border-radius: 8px;
+    background: {t.surface};
+    color: {t.text};
+    outline: 0;
+}}
+#reminderLabelManagerList::item {{
+    min-height: 30px;
+    padding: 4px 8px;
+    border-radius: 6px;
+}}
+#reminderLabelManagerList::item:hover {{ background: {t.surface_hover}; }}
+#reminderLabelManagerList::item:selected {{
+    background: {t.surface_selected};
+    color: {t.text};
+}}
+#reminderLabelNameInput {{
+    border: 1px solid {t.editor_border};
+    border-radius: 6px;
+    padding: 5px 8px;
+    background: {t.surface};
+    color: {t.text};
+}}
+#reminderLabelNameInput:hover {{ background: {t.surface_hover}; }}
+#reminderLabelNameInput:focus {{ border-color: {t.focus}; background: {t.surface}; }}
+#reminderLabelManagerStatus {{ color: {t.text_muted}; font-size: 12.5px; }}
 QMenu {{ background-color: {t.sidebar}; color: {t.sidebar_text}; border: 1px solid {t.sidebar_separator}; border-radius: 10px; padding: 8px; }}
 QMenu::item {{ background-color: transparent; color: {t.sidebar_text}; border-radius: 6px; padding: 8px 24px 8px 12px; }}
 QMenu::item:disabled {{ color: {t.sidebar_text_subtle}; }}

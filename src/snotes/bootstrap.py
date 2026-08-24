@@ -158,6 +158,8 @@ def build_local_mcp_service(
             connections, tags_repository
         ),
     )
+    reminder_repository = SQLiteReminderRepository(connections)
+    reminder_service = ReminderService(reminder_repository)
     return LocalMcpService(
         actor_target_id=actor_target_id,
         notes=notes,
@@ -170,6 +172,7 @@ def build_local_mcp_service(
         ),
         audit=audit,
         receipt_inbox=receipt_inbox,
+        reminders=reminder_service,
         create_confirmation_required=create_confirmation_required,
     )
 

@@ -20,11 +20,11 @@ from PySide6.QtWidgets import (
 from src.snotes.bootstrap import build_application
 from src.snotes.domain.reminders import REMINDER_ACTIVE, ReminderDraft
 from src.snotes.domain.models import NoteLocation
-from src.snotes.ui.reminder_center import ReminderDialog
+from src.snotes.ui.reminder_center import ReminderDialog, ReminderLabelManagerDialog
 from src.snotes.ui.sidebar import PAYLOAD_ROLE
 from src.snotes.ui.directory_dialog import DirectoryManagerDialog
 from src.snotes.ui.floating_combo import FloatingComboBox
-from src.snotes.ui.sidebar_widgets import sidebar_clock_time_width
+from src.snotes.ui.sidebar_widgets import NOTE_TITLE_ROLE, sidebar_clock_time_width
 from src.snotes.ui.theme import (
     THEMES,
     THEME_SWATCH_COLORS,
@@ -80,6 +80,15 @@ class Package3UiTests(unittest.TestCase):
             if int(item.data(Qt.UserRole)) == note_id:
                 return item
         raise AssertionError(f"note item not found: {note_id}")
+
+    def reminder_table_sidebar_item(self, table_id: int):
+        note_list = self.window.shell.sidebar.note_list
+        for row in range(note_list.count()):
+            item = note_list.item(row)
+            payload = item.data(PAYLOAD_ROLE) or {}
+            if payload.get("type") == "reminder_table" and int(payload["id"]) == table_id:
+                return item
+        raise AssertionError(f"reminder table item not found: {table_id}")
 
     def test_search_tag_smart_views_and_multi_selection_are_operable(self) -> None:
         first = self.create_note("Alpha 中文", "<p>正文</p>", tags=("todo",))
@@ -211,15 +220,16 @@ class Package3UiTests(unittest.TestCase):
         self.create_note("导航 B", "<p>其他正文</p>")
         self.window.refresh_note_list(note.id)
         self.window.load_note(note.id)
-        item = self.note_list_item(note.id)
-
         self.window.show_smart_view("reminder")
         self.app.processEvents()
         self.assertIs(
             self.window.shell.content_stack.currentWidget(),
             self.window.shell.reminder_center,
         )
+        self.assertEqual(self.window.shell.sidebar.mode, "reminder")
 
+        self.window.show_directory()
+        self.app.processEvents()
         item = self.note_list_item(note.id)
         self.window.shell.sidebar.note_list.itemClicked.emit(item)
         self.app.processEvents()
@@ -244,6 +254,8 @@ class Package3UiTests(unittest.TestCase):
             self.window.shell.reminder_center,
         )
 
+        self.window.show_directory()
+        self.app.processEvents()
         item = self.note_list_item(note.id)
         self.window.shell.sidebar.note_list.itemClicked.emit(item)
         self.app.processEvents()
@@ -259,12 +271,139 @@ class Package3UiTests(unittest.TestCase):
             self.window.shell.reminder_center,
         )
 
+        self.window.show_directory()
+        self.app.processEvents()
         self.window.shell.sidebar.note_list.itemClicked.emit(item)
         self.app.processEvents()
         self.assertIs(
             self.window.shell.content_stack.currentWidget(),
             self.window.shell.main_content,
         )
+
+    def test_note_selection_to_reminder_click_rebuilds_sidebar_without_crash(self) -> None:
+        note_a = self.create_note("Reminder 切换 A", "<p>虚构正文 A</p>")
+        note_b = self.create_note("Reminder 切换 B", "<p>虚构正文 B</p>")
+        sidebar = self.window.shell.sidebar
+        reminder_button = sidebar.smart_buttons["reminder"]
+
+        self.window.refresh_note_list(note_a.id)
+        self.window.load_note(note_a.id)
+        self.window.show()
+        self.app.processEvents()
+        self.assertIsNotNone(sidebar.note_list.currentItem())
+
+        reminder_button.click()
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+        self.assertEqual(sidebar.mode, "reminder")
+        self.assertTrue(self.window.shell.reminder_center.isVisible())
+
+        self.window.show_directory()
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+
+        item_b = self.note_list_item(note_b.id)
+        sidebar.note_list.itemClicked.emit(item_b)
+        self.app.processEvents()
+        self.assertEqual(self.window.current_note.id, note_b.id)
+
+        reminder_button.click()
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+
+        for _index in range(5):
+            self.window.show_directory()
+            self.app.processEvents()
+            item_a = self.note_list_item(note_a.id)
+            sidebar.note_list.itemClicked.emit(item_a)
+            self.app.processEvents()
+            reminder_button.click()
+            self.app.processEvents()
+            self.assertIs(
+                self.window.shell.content_stack.currentWidget(),
+                self.window.shell.reminder_center,
+            )
+
+    def test_reminder_sidebar_table_title_rename_and_delete_stay_synced(self) -> None:
+        note = self.create_note("已有 Note selection", "<p>虚构正文</p>")
+        self.window.refresh_note_list(note.id)
+        self.window.load_note(note.id)
+        self.app.processEvents()
+
+        service = self.window.reminder_service
+        table_a = service.create_table("新提醒表 08-24 15:00")
+        table_b = service.create_table("备用提醒表")
+        sidebar = self.window.shell.sidebar
+        center = self.window.shell.reminder_center
+
+        self.window.show_smart_view("reminder")
+        self.window.select_reminder_table(table_a.id)
+        self.app.processEvents()
+        item_a = self.reminder_table_sidebar_item(table_a.id)
+        self.assertEqual(item_a.text(), "新提醒表 08-24 15:00")
+        self.assertEqual(item_a.data(NOTE_TITLE_ROLE), "新提醒表 08-24 15:00")
+        self.assertNotIn(
+            "未命名笔记",
+            [sidebar.note_list.item(row).data(NOTE_TITLE_ROLE) for row in range(sidebar.note_list.count())],
+        )
+
+        self.window.create_reminder()
+        self.app.processEvents()
+        created_table = service.get_table(center.selected_table_id).table
+        created_item = self.reminder_table_sidebar_item(created_table.id)
+        self.assertEqual(created_item.data(NOTE_TITLE_ROLE), created_table.title)
+        self.assertNotEqual(created_item.data(NOTE_TITLE_ROLE), "未命名笔记")
+
+        center.table_title_input.setText("重命名提醒表")
+        center._save_table_title()
+        self.app.processEvents()
+        renamed_item = self.reminder_table_sidebar_item(created_table.id)
+        self.assertEqual(renamed_item.text(), "重命名提醒表")
+        self.assertEqual(renamed_item.data(NOTE_TITLE_ROLE), "重命名提醒表")
+
+        deleted_id = center.selected_table_id
+        center.delete_table_button.click()
+        self.app.processEvents()
+        self.assertIsNotNone(center.selected_table_id)
+        self.assertNotEqual(center.selected_table_id, deleted_id)
+        visible_table_ids = [
+            int((sidebar.note_list.item(row).data(PAYLOAD_ROLE) or {})["id"])
+            for row in range(sidebar.note_list.count())
+            if (sidebar.note_list.item(row).data(PAYLOAD_ROLE) or {}).get("type") == "reminder_table"
+        ]
+        self.assertNotIn(deleted_id, visible_table_ids)
+        current_payload = sidebar.note_list.currentItem().data(PAYLOAD_ROLE)
+        self.assertEqual(int(current_payload["id"]), center.selected_table_id)
+
+        self.window.select_reminder_table(table_b.id)
+        self.app.processEvents()
+        self.assertEqual(
+            self.reminder_table_sidebar_item(table_b.id).data(NOTE_TITLE_ROLE),
+            "备用提醒表",
+        )
+
+        for _index in range(3):
+            self.window.show_directory()
+            self.app.processEvents()
+            self.window.show_smart_view("reminder")
+            self.app.processEvents()
+            self.assertIs(
+                self.window.shell.content_stack.currentWidget(),
+                center,
+            )
+            self.assertEqual(
+                sidebar.note_list.currentItem().data(PAYLOAD_ROLE)["type"],
+                "reminder_table",
+            )
 
     def test_frozen_r1_geometry_and_approved_two_level_classification(self) -> None:
         shell = self.window.shell
@@ -371,14 +510,16 @@ class Package3UiTests(unittest.TestCase):
         dialog.repeat_combo.setCurrentIndex(
             dialog.repeat_combo.findData("monthly_day")
         )
+        dialog.action_date.setDate(QDate(2026, 8, 24))
         self.assertTrue(dialog.form.isRowVisible(dialog.repeat_param_label))
         self.assertTrue(dialog.form.isRowVisible(dialog.repeat_until_label))
         self.assertEqual(dialog.repeat_param_label.text(), "每月第")
         self.assertEqual(dialog.repeat_param_unit.text(), "日")
         dialog.repeat_number.setValue(10)
         dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("set"))
-        dialog.deadline_day.setValue(15)
-        self.assertFalse(dialog.deadline_day.isHidden())
+        dialog.deadline_date.setDate(QDate(2026, 8, 29))
+        self.assertTrue(dialog.deadline_day.isHidden())
+        self.assertFalse(dialog.deadline_date.isHidden())
         dialog.repeat_until_combo.setCurrentIndex(
             dialog.repeat_until_combo.findData("date")
         )
@@ -387,7 +528,7 @@ class Package3UiTests(unittest.TestCase):
         self.assertFalse(dialog.repeat_until_date.isHidden())
         monthly_draft = dialog.draft()
         self.assertEqual(monthly_draft.action_spec["day"], 10)
-        self.assertEqual(monthly_draft.deadline_spec, {"type": "monthly_day", "day": 15})
+        self.assertEqual(monthly_draft.deadline_spec, {"type": "offset_days", "days": 5})
         self.assertIn("repeat_until", monthly_draft.action_spec)
         dialog.repeat_until_combo.setCurrentIndex(
             dialog.repeat_until_combo.findData("never")
@@ -398,7 +539,8 @@ class Package3UiTests(unittest.TestCase):
         dialog.repeat_combo.setCurrentIndex(
             dialog.repeat_combo.findData("interval_from_completion")
         )
-        dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("none"))
+        dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("set"))
+        dialog.deadline_date.setDate(dialog.action_date.date().addDays(7))
         dialog.repeat_until_combo.setCurrentIndex(
             dialog.repeat_until_combo.findData("never")
         )
@@ -406,9 +548,25 @@ class Package3UiTests(unittest.TestCase):
         self.assertEqual(dialog.repeat_param_label.text(), "实际完成后再间隔")
         self.assertEqual(dialog.repeat_param_unit.text(), "天")
         self.assertEqual(dialog.draft().action_spec["days"], 90)
-        self.assertIsNone(dialog.draft().deadline_spec)
-        self.assertEqual(dialog.deadline_combo.currentText(), "无")
-        self.assertFalse(dialog.deadline_combo.isEnabled())
+        self.assertEqual(dialog.draft().deadline_spec, {"type": "offset_days", "days": 7})
+        self.assertEqual(dialog.deadline_combo.currentText(), "设置最晚处理日")
+        self.assertTrue(dialog.deadline_combo.isEnabled())
+
+        for mode in (
+            "yearly_date",
+            "interval_days",
+            "nth_weekday_monthly",
+            "nth_weekday_yearly",
+            "lunar_yearly",
+            "cn_a_share_on_or_after",
+        ):
+            with self.subTest(mode=mode):
+                dialog.repeat_combo.setCurrentIndex(dialog.repeat_combo.findData(mode))
+                dialog.action_date.setDate(QDate(2026, 9, 10))
+                dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("set"))
+                dialog.deadline_date.setDate(QDate(2026, 9, 12))
+                self.assertTrue(dialog.deadline_combo.isEnabled())
+                self.assertEqual(dialog.draft().deadline_spec, {"type": "offset_days", "days": 2})
 
     def test_reminder_dialog_nth_weekday_yearly_and_monthly_round_trip(self) -> None:
         dialog = ReminderDialog(parent=self.window)
@@ -446,6 +604,59 @@ class Package3UiTests(unittest.TestCase):
             {"type": "nth_weekday", "nth": 2, "weekday": 0},
         )
 
+    def test_reminder_label_manager_crud_reorder_and_default_guard(self) -> None:
+        service = self.window.reminder_service
+        dialog = ReminderLabelManagerDialog(service, self.window)
+        self.addCleanup(dialog.close)
+
+        default = service.default_label()
+        dialog.label_list.setCurrentRow(0)
+        dialog.name_input.setText("默认提醒")
+        dialog._rename_label()
+        self.assertEqual(service.default_label().name, "默认提醒")
+        dialog._delete_label()
+        self.assertIn(default.id, [label.id for label in service.list_labels()])
+        self.assertIn("不可删除", dialog.status_label.text())
+
+        dialog.name_input.setText("网络维护")
+        dialog._create_label()
+        network = next(label for label in service.list_labels() if label.name == "网络维护")
+        dialog.name_input.setText("订阅续费")
+        dialog._create_label()
+        renewal = next(label for label in service.list_labels() if label.name == "订阅续费")
+        dialog.refresh(network.id)
+        dialog.name_input.setText("网络维护改名")
+        dialog._rename_label()
+        self.assertIn("网络维护改名", [label.name for label in service.list_labels()])
+
+        dialog.refresh(renewal.id)
+        dialog._move_selected(-1)
+        dialog._move_selected(-1)
+        self.assertEqual(service.list_labels()[0].id, renewal.id)
+
+        dialog.refresh(network.id)
+        dialog._delete_label()
+        self.assertNotIn(network.id, [label.id for label in service.list_labels()])
+
+    def test_reminder_table_context_menu_uses_labels_not_note_categories(self) -> None:
+        service = self.window.reminder_service
+        label = service.create_label("订阅续费")
+        table = service.create_table("FICTIONAL_CONTEXT_TABLE", label_id=label.id)
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        sidebar = self.window.shell.sidebar
+        menu = sidebar._build_reminder_table_context_menu(table.id)
+        self.addCleanup(menu.deleteLater)
+        action_texts = [action.text() for action in menu.actions()]
+        self.assertEqual(action_texts, ["重命名", "移动到", "移入回收站"])
+        move_menu = next(action.menu() for action in menu.actions() if action.text() == "移动到")
+        move_labels = [action.text() for action in move_menu.actions()]
+        self.assertIn("未归类", move_labels)
+        self.assertIn("订阅续费", move_labels)
+        self.assertNotIn("固定笔记", action_texts)
+        self.assertNotIn("临时", move_labels)
+        self.assertNotIn("S-notes", move_labels)
+
     def test_reminder_dialog_calendar_and_combo_follow_themes(self) -> None:
         for theme_name, tokens in THEMES.items():
             with self.subTest(theme=theme_name):
@@ -482,7 +693,10 @@ class Package3UiTests(unittest.TestCase):
             )
         )
         center = self.window.shell.reminder_center
+        self.window.set_theme("light-slate")
         center.refresh()
+        self.window.show()
+        self.app.processEvents()
         self.assertIsInstance(center.topic_input, QLineEdit)
         self.assertTrue(center.topic_input.isReadOnly())
         self.assertTrue(center.topic_input.text().startswith("snotes-reminder-"))
@@ -491,8 +705,26 @@ class Package3UiTests(unittest.TestCase):
             center.topic_input.fontMetrics().horizontalAdvance(center.topic_input.text()),
         )
         self.assertEqual(center.copy_topic_button.text(), "复制 Topic")
+        self.assertEqual(center.table_title_input.objectName(), "reminderTableTitleInput")
+        self.assertEqual(center.title_separator.height(), 2)
+        self.assertNotEqual(center.table_title_input.palette().color(QPalette.Text), QColor())
+        self.assertEqual(center.meta_summary.text(), "未归类 · AI 可见")
+        self.assertTrue(center.meta_panel.isHidden())
+        center.meta_summary.click()
+        self.app.processEvents()
+        self.assertFalse(center.meta_panel.isHidden())
+        self.assertFalse(any(label.text() == "元数据" for label in center.findChildren(QLabel)))
+        self.assertIsInstance(center.table_label_combo, FloatingComboBox)
+        self.assertIsInstance(center.table_ai_combo, FloatingComboBox)
+        self.assertIsInstance(center.delete_table_button, QToolButton)
+        self.assertEqual(center.delete_table_button.text(), "")
+        self.assertEqual(center.delete_table_button.toolTip(), "删除表格")
         self.assertNotIn(
             "发送测试通知",
+            [button.text() for button in center.findChildren(QPushButton)],
+        )
+        self.assertNotIn(
+            "删除当前 Table",
             [button.text() for button in center.findChildren(QPushButton)],
         )
         self.assertFalse(
@@ -503,15 +735,17 @@ class Package3UiTests(unittest.TestCase):
             [center.table.horizontalHeaderItem(i).text() for i in range(6)],
             ["事项", "状态", "开始处理日", "重复", "最晚处理日", "备注"],
         )
+        self.assertEqual(center.table_title_input.text(), "原有提醒")
+        self.assertIn("AI 可见", center.meta_summary.text())
         self.assertEqual(
             center.table.horizontalHeader().defaultAlignment(),
             Qt.AlignLeft | Qt.AlignVCenter,
         )
         center.table.resize(1000, center.table.height())
         center._apply_table_widths()
-        self.assertGreaterEqual(center.table.columnWidth(1), 260)
-        self.assertGreaterEqual(center.table.columnWidth(3), 220)
-        self.assertGreaterEqual(center.table.columnWidth(5), 360)
+        self.assertGreaterEqual(center.table.columnWidth(1), 160)
+        self.assertGreaterEqual(center.table.columnWidth(3), 180)
+        self.assertGreaterEqual(center.table.columnWidth(5), 240)
         self.assertGreater(
             sum(center.table.columnWidth(column) for column in range(6)),
             center.table.viewport().width(),
@@ -522,6 +756,10 @@ class Package3UiTests(unittest.TestCase):
         )
         center.table.setCurrentCell(0, 0)
         self.app.processEvents()
+        self.assertEqual(
+            center.table.palette().color(QPalette.Highlight),
+            QColor(THEMES["light-slate"].accent_soft),
+        )
         self.assertTrue(center.pause_button.isEnabled())
         self.assertFalse(center.resume_button.isEnabled())
         self.assertTrue(center.complete_occurrence_button.isEnabled())

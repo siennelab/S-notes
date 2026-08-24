@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.snotes.domain.reminders import DEFAULT_REMINDER_LABEL_NAME
 from src.snotes.storage.connection import SQLiteConnectionFactory
 from src.snotes.storage.support import timestamp_seconds
 
@@ -12,7 +13,7 @@ INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "�
 CATEGORY_SCHEMA_VERSION_KEY = "category_schema_version"
 CATEGORY_SCHEMA_VERSION = "2"
 REMINDER_SCHEMA_VERSION_KEY = "reminder_schema_version"
-REMINDER_SCHEMA_VERSION = "1"
+REMINDER_SCHEMA_VERSION = "3"
 
 FROZEN_SCHEMA_STATEMENTS = (
     """
@@ -225,8 +226,21 @@ FROZEN_SCHEMA_STATEMENTS = (
 
 REMINDER_SCHEMA_STATEMENTS = (
     """
+    CREATE TABLE IF NOT EXISTS reminder_labels (
+        id INTEGER PRIMARY KEY,
+        label_key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS reminders (
         id INTEGER PRIMARY KEY,
+        table_id INTEGER REFERENCES reminder_tables(id),
         title TEXT NOT NULL,
         lifecycle TEXT NOT NULL DEFAULT 'active',
         action_spec_json TEXT NOT NULL,
@@ -235,6 +249,21 @@ REMINDER_SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reminder_tables (
+        id INTEGER PRIMARY KEY,
+        table_key TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        label_id INTEGER NOT NULL REFERENCES reminder_labels(id),
+        ai_visible INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        trash_group_id TEXT
     )
     """,
     """
@@ -256,6 +285,37 @@ REMINDER_SCHEMA_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_reminder_occurrences_due
     ON reminder_occurrences(status, action_date, deadline_date)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_labels_active_name
+    ON reminder_labels(lower(trim(name)))
+    WHERE is_deleted = 0
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_reminder_tables_label_visible
+    ON reminder_tables(label_id, ai_visible, is_deleted)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_reminder_operations (
+        id INTEGER PRIMARY KEY,
+        happened_at TEXT NOT NULL,
+        actor_target_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        table_id INTEGER,
+        table_title TEXT NOT NULL DEFAULT '',
+        item_id INTEGER,
+        item_title TEXT NOT NULL DEFAULT '',
+        label_id INTEGER,
+        label_name TEXT NOT NULL DEFAULT '',
+        request_id TEXT NOT NULL,
+        changed_fields_json TEXT NOT NULL DEFAULT '[]',
+        before_json TEXT NOT NULL DEFAULT '{}',
+        after_json TEXT NOT NULL DEFAULT '{}'
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ai_reminder_operations_recent
+    ON ai_reminder_operations(id DESC)
     """,
 )
 
@@ -290,6 +350,16 @@ def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
 def _migrate_reminder_schema(connection) -> None:
     for statement in REMINDER_SCHEMA_STATEMENTS:
         connection.execute(statement)
+    _ensure_reminder_columns(connection)
+    _ensure_default_reminder_label(connection)
+    _ensure_default_reminder_table(connection)
+    _ensure_ai_reminder_operation_columns(connection)
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_reminders_table_lifecycle
+        ON reminders(table_id, lifecycle)
+        """
+    )
     connection.execute(
         """
         INSERT INTO schema_meta (meta_key, meta_value)
@@ -298,6 +368,98 @@ def _migrate_reminder_schema(connection) -> None:
         """,
         (REMINDER_SCHEMA_VERSION_KEY, REMINDER_SCHEMA_VERSION),
     )
+
+
+def _ensure_reminder_columns(connection) -> None:
+    reminder_columns = {
+        str(row["name"])
+        for row in connection.execute('PRAGMA table_info("reminders")')
+    }
+    additions = {
+        "table_id": "ALTER TABLE reminders ADD COLUMN table_id INTEGER REFERENCES reminder_tables(id)",
+    }
+    for column, statement in additions.items():
+        if column not in reminder_columns:
+            connection.execute(statement)
+
+
+def _ensure_default_reminder_label(connection) -> None:
+    timestamp = timestamp_seconds()
+    connection.execute(
+        """
+        INSERT INTO reminder_labels (
+            label_key, name, sort_order, is_deleted, created_at, updated_at
+        ) VALUES ('default', '未归类', 0, 0, ?, ?)
+        ON CONFLICT(label_key) DO UPDATE SET
+            is_deleted = 0,
+            deleted_at = NULL,
+            updated_at = excluded.updated_at
+        """,
+        (timestamp, timestamp),
+    )
+    row = connection.execute(
+        "SELECT id FROM reminder_labels WHERE label_key = 'default'"
+    ).fetchone()
+    if row is not None:
+        connection.execute(
+            """
+            UPDATE reminder_labels
+            SET name = COALESCE(NULLIF(trim(name), ''), ?)
+            WHERE id = ?
+            """,
+            (DEFAULT_REMINDER_LABEL_NAME, int(row["id"])),
+        )
+
+
+def _ensure_default_reminder_table(connection) -> None:
+    timestamp = timestamp_seconds()
+    label_row = connection.execute(
+        "SELECT id FROM reminder_labels WHERE label_key = 'default'"
+    ).fetchone()
+    if label_row is None:
+        raise RuntimeError("default_reminder_label_missing")
+    default_label_id = int(label_row["id"])
+    connection.execute(
+        """
+        INSERT INTO reminder_tables (
+            table_key, title, label_id, ai_visible, sort_order, is_deleted,
+            created_at, updated_at
+        ) VALUES ('default', '原有提醒', ?, 1, 0, 0, ?, ?)
+        ON CONFLICT(table_key) DO UPDATE SET
+            label_id = COALESCE(reminder_tables.label_id, excluded.label_id),
+            is_deleted = 0,
+            deleted_at = NULL,
+            trash_group_id = NULL,
+            updated_at = excluded.updated_at
+        """,
+        (default_label_id, timestamp, timestamp),
+    )
+    table_row = connection.execute(
+        "SELECT id FROM reminder_tables WHERE table_key = 'default'"
+    ).fetchone()
+    if table_row is not None:
+        connection.execute(
+            "UPDATE reminders SET table_id = ? WHERE table_id IS NULL",
+            (int(table_row["id"]),),
+        )
+
+
+def _ensure_ai_reminder_operation_columns(connection) -> None:
+    columns = {
+        str(row["name"])
+        for row in connection.execute('PRAGMA table_info("ai_reminder_operations")')
+    }
+    additions = {
+        "table_id": "ALTER TABLE ai_reminder_operations ADD COLUMN table_id INTEGER",
+        "table_title": "ALTER TABLE ai_reminder_operations ADD COLUMN table_title TEXT NOT NULL DEFAULT ''",
+        "item_id": "ALTER TABLE ai_reminder_operations ADD COLUMN item_id INTEGER",
+        "item_title": "ALTER TABLE ai_reminder_operations ADD COLUMN item_title TEXT NOT NULL DEFAULT ''",
+        "label_id": "ALTER TABLE ai_reminder_operations ADD COLUMN label_id INTEGER",
+        "label_name": "ALTER TABLE ai_reminder_operations ADD COLUMN label_name TEXT NOT NULL DEFAULT ''",
+    }
+    for column, statement in additions.items():
+        if column not in columns:
+            connection.execute(statement)
 
 
 def _migrate_two_level_category_schema(connection) -> None:

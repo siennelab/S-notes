@@ -16,6 +16,12 @@ from src.snotes.transport.mcp.schemas import (
     CategoryText,
     ContentText,
     GetNoteResponse,
+    GetReminderItemResponse,
+    GetReminderTableResponse,
+    LifecycleText,
+    ListReminderItemsResponse,
+    ListReminderLabelsResponse,
+    ListReminderTablesResponse,
     ListAiMetadataOptionsResponse,
     ListDirectoriesResponse,
     ListTagsResponse,
@@ -27,7 +33,9 @@ from src.snotes.transport.mcp.schemas import (
     PositiveId,
     QueryText,
     RequestId,
+    ReminderWriteReceipt,
     SearchNotesResponse,
+    TagName,
     TagList,
     TitleText,
     VersionText,
@@ -41,7 +49,17 @@ SubmissionDirectoryText = Annotated[str, Field(max_length=200)]
 SubmissionMetadataText = Annotated[str, Field(max_length=200)]
 SubmissionTagList = Annotated[list[str], Field(max_length=32)]
 SubmissionAiTargetList = Annotated[list[str], Field(max_length=32)]
-READ_TOOL_NAMES = frozenset({"search_notes", "get_note"})
+READ_TOOL_NAMES = frozenset(
+    {
+        "search_notes",
+        "get_note",
+        "list_reminder_labels",
+        "list_reminder_tables",
+        "get_reminder_table",
+        "list_reminder_items",
+        "get_reminder_item",
+    }
+)
 WRITE_TOOL_NAMES = frozenset(
     {
         "list_directories",
@@ -52,6 +70,14 @@ WRITE_TOOL_NAMES = frozenset(
         "append_note",
         "update_note_metadata",
         "get_operation_status",
+        "create_reminder_label",
+        "create_reminder_table",
+        "update_reminder_table",
+        "create_reminder_item",
+        "update_reminder_item",
+        "complete_reminder_item",
+        "pause_reminder_item",
+        "resume_reminder_item",
     }
 )
 PROFILE_TOOL_NAMES = frozenset({"create_note_submission"})
@@ -307,6 +333,249 @@ class LocalMcpToolAdapter:
                 failure_or_conflict_reason="本地数据库暂时不可用。",
             )
 
+    def list_reminder_labels(self) -> ListReminderLabelsResponse:
+        try:
+            return ListReminderLabelsResponse.model_validate(
+                self.service.list_reminder_labels()
+            )
+        except Exception as error:
+            _log_safe_failure("list_reminder_labels", error)
+            return ListReminderLabelsResponse(
+                status="failed",
+                labels=[],
+                reason="本地数据库暂时不可用。",
+            )
+
+    def list_reminder_tables(
+        self,
+        query: QueryText = "",
+        page: PageNumber = 1,
+        page_size: PageSize = 10,
+        label_id: PositiveId | None = None,
+        ai_visibility: str = "all",
+    ) -> ListReminderTablesResponse:
+        try:
+            return ListReminderTablesResponse.model_validate(
+                self.service.list_reminder_tables(
+                    query=query,
+                    page=page,
+                    page_size=page_size,
+                    label_id=label_id,
+                    ai_visibility=ai_visibility,
+                )
+            )
+        except Exception as error:
+            _log_safe_failure("list_reminder_tables", error)
+            return ListReminderTablesResponse(
+                status="failed",
+                page=page,
+                page_size=page_size,
+                total_visible_matches=0,
+                has_more=False,
+                results=[],
+                reason="本地数据库暂时不可用；没有返回提醒数据。",
+            )
+
+    def get_reminder_table(self, table_id: PositiveId) -> GetReminderTableResponse:
+        try:
+            return GetReminderTableResponse.model_validate(
+                self.service.get_reminder_table(table_id)
+            )
+        except Exception as error:
+            _log_safe_failure("get_reminder_table", error)
+            return GetReminderTableResponse(
+                status="failed",
+                table_id=table_id,
+                reason="本地数据库暂时不可用；没有返回提醒数据。",
+            )
+
+    def create_reminder_label(
+        self,
+        request_id: RequestId,
+        name: TagName,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "create_reminder_label",
+            request_id,
+            lambda: self.service.create_reminder_label(request_id, name),
+        )
+
+    def create_reminder_table(
+        self,
+        request_id: RequestId,
+        title: TitleText | None = None,
+        label_id: PositiveId | None = None,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "create_reminder_table",
+            request_id,
+            lambda: self.service.create_reminder_table(
+                request_id=request_id,
+                title=title,
+                label_id=label_id,
+            ),
+        )
+
+    def update_reminder_table(
+        self,
+        request_id: RequestId,
+        table_id: PositiveId,
+        title: TitleText | None = None,
+        label_id: PositiveId | None = None,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "update_reminder_table",
+            request_id,
+            lambda: self.service.update_reminder_table(
+                request_id=request_id,
+                table_id=table_id,
+                title=title,
+                label_id=label_id,
+            ),
+            table_id=table_id,
+        )
+
+    def list_reminder_items(
+        self,
+        table_id: PositiveId,
+        query: QueryText = "",
+        page: PageNumber = 1,
+        page_size: PageSize = 10,
+        lifecycle: LifecycleText | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> ListReminderItemsResponse:
+        try:
+            return ListReminderItemsResponse.model_validate(
+                self.service.list_reminder_items(
+                    table_id=table_id,
+                    query=query,
+                    page=page,
+                    page_size=page_size,
+                    lifecycle=lifecycle,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            )
+        except Exception as error:
+            _log_safe_failure("list_reminder_items", error)
+            return ListReminderItemsResponse(
+                status="failed",
+                table_id=table_id,
+                page=page,
+                page_size=page_size,
+                total_visible_matches=0,
+                has_more=False,
+                results=[],
+                reason="本地数据库暂时不可用；没有返回提醒数据。",
+            )
+
+    def get_reminder_item(self, item_id: PositiveId) -> GetReminderItemResponse:
+        try:
+            return GetReminderItemResponse.model_validate(
+                self.service.get_reminder_item(item_id)
+            )
+        except Exception as error:
+            _log_safe_failure("get_reminder_item", error)
+            return GetReminderItemResponse(
+                status="failed",
+                item_id=item_id,
+                reason="本地数据库暂时不可用；没有返回提醒数据。",
+            )
+
+    def create_reminder_item(
+        self,
+        request_id: RequestId,
+        table_id: PositiveId,
+        title: TitleText,
+        action_spec: dict,
+        deadline_spec: dict | None = None,
+        note: ContentText | None = None,
+        lifecycle: LifecycleText = "active",
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "create_reminder_item",
+            request_id,
+            lambda: self.service.create_reminder_item(
+                request_id=request_id,
+                table_id=table_id,
+                title=title,
+                action_spec=action_spec,
+                deadline_spec=deadline_spec,
+                note=note or "",
+                lifecycle=lifecycle,
+            ),
+            table_id=table_id,
+        )
+
+    def update_reminder_item(
+        self,
+        request_id: RequestId,
+        item_id: PositiveId,
+        title: TitleText | None = None,
+        note: ContentText | None = None,
+        action_spec: dict | None = None,
+        deadline_spec: dict | None = None,
+        clear_deadline: bool = False,
+        lifecycle: LifecycleText | None = None,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "update_reminder_item",
+            request_id,
+            lambda: self.service.update_reminder_item(
+                request_id=request_id,
+                item_id=item_id,
+                title=title,
+                note=note,
+                action_spec=action_spec,
+                deadline_spec=deadline_spec,
+                clear_deadline=clear_deadline,
+                lifecycle=lifecycle,
+            ),
+            item_id=item_id,
+        )
+
+    def complete_reminder_item(
+        self,
+        request_id: RequestId,
+        item_id: PositiveId,
+        current_occurrence_only: bool = True,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "complete_reminder_item",
+            request_id,
+            lambda: self.service.complete_reminder_item(
+                request_id=request_id,
+                item_id=item_id,
+                current_occurrence_only=current_occurrence_only,
+            ),
+            item_id=item_id,
+        )
+
+    def pause_reminder_item(
+        self,
+        request_id: RequestId,
+        item_id: PositiveId,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "pause_reminder_item",
+            request_id,
+            lambda: self.service.pause_reminder_item(request_id, item_id),
+            item_id=item_id,
+        )
+
+    def resume_reminder_item(
+        self,
+        request_id: RequestId,
+        item_id: PositiveId,
+    ) -> ReminderWriteReceipt:
+        return self._reminder_write(
+            "resume_reminder_item",
+            request_id,
+            lambda: self.service.resume_reminder_item(request_id, item_id),
+            item_id=item_id,
+        )
+
     @staticmethod
     def _write(
         tool_name: str,
@@ -324,6 +593,30 @@ class LocalMcpToolAdapter:
                 note_id=note_id,
                 processing_mode="none",
                 changed_formal_note=False,
+                pending_confirmation=False,
+                failure_or_conflict_reason="本地数据库暂时不可用；操作没有执行。",
+            )
+
+    @staticmethod
+    def _reminder_write(
+        tool_name: str,
+        request_id: str,
+        call,
+        table_id: int | None = None,
+        item_id: int | None = None,
+    ) -> ReminderWriteReceipt:
+        try:
+            return _reminder_write_response(call())
+        except Exception as error:
+            _log_safe_failure(tool_name, error)
+            return ReminderWriteReceipt(
+                status="failed",
+                request_id=request_id,
+                table_id=table_id,
+                item_id=item_id,
+                reminder_id=item_id,
+                processing_mode="none",
+                changed_formal_reminder=False,
                 pending_confirmation=False,
                 failure_or_conflict_reason="本地数据库暂时不可用；操作没有执行。",
             )
@@ -379,6 +672,51 @@ def register_tools(
             "Read a bounded range of one visible note's safe text. Hidden, deleted, and "
             "unauthorized IDs all return not_found; redacted notes return only redacted text. "
             "Its opaque version is the preferred round-trip credential for a later modification."
+        ),
+        annotations=read_annotations,
+    )
+    add_enabled_tool(
+        adapter.list_reminder_labels,
+        name="list_reminder_labels",
+        description=(
+            "List all Reminder labels. Labels are single-level table categories; AI may create "
+            "labels but cannot rename, delete, or sort them."
+        ),
+        annotations=read_annotations,
+    )
+    add_enabled_tool(
+        adapter.list_reminder_tables,
+        name="list_reminder_tables",
+        description=(
+            "Search and list AI-visible Reminder Tables. Search matches table title, label name, "
+            "item title, and item notes, and returns table context plus first matching item."
+        ),
+        annotations=read_annotations,
+    )
+    add_enabled_tool(
+        adapter.get_reminder_table,
+        name="get_reminder_table",
+        description=(
+            "Read one AI-visible Reminder Table summary. Hidden, deleted, and unknown IDs all "
+            "return not_found without revealing whether a hidden table exists."
+        ),
+        annotations=read_annotations,
+    )
+    add_enabled_tool(
+        adapter.list_reminder_items,
+        name="list_reminder_items",
+        description=(
+            "List items inside one AI-visible Reminder Table. Hidden, deleted, and unknown table "
+            "IDs all return no accessible items."
+        ),
+        annotations=read_annotations,
+    )
+    add_enabled_tool(
+        adapter.get_reminder_item,
+        name="get_reminder_item",
+        description=(
+            "Read one Reminder Item only when its parent table is AI-visible. Hidden table items "
+            "return not_found even when the item ID is known."
         ),
         annotations=read_annotations,
     )
@@ -456,6 +794,65 @@ def register_tools(
             "history text, permission configuration, or another actor's operation.",
             read_annotations,
         ),
+        (
+            adapter.create_reminder_label,
+            "create_reminder_label",
+            "Create one ordinary Reminder label when it is a stable new category. "
+            "AI cannot rename, delete, or sort Reminder labels. " + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.create_reminder_table,
+            "create_reminder_table",
+            "Create one AI-visible Reminder Table. Use an existing label when clearly appropriate; "
+            "the table is always AI-visible because AI cannot change visibility. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.update_reminder_table,
+            "update_reminder_table",
+            "Update title or label on one AI-visible Reminder Table. AI cannot change visibility, "
+            "delete tables, or alter notification settings. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.create_reminder_item,
+            "create_reminder_item",
+            "Create one Reminder Item inside an AI-visible Reminder Table. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.update_reminder_item,
+            "update_reminder_item",
+            "Modify ordinary fields on one Reminder Item inside an AI-visible Reminder Table. "
+            "AI cannot move items between tables, remove items, or change visibility. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.complete_reminder_item,
+            "complete_reminder_item",
+            "Directly complete the current occurrence by default, or the whole one-time Reminder Item when requested. "
+            "Retries with the same request_id never advance a later occurrence. " + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.pause_reminder_item,
+            "pause_reminder_item",
+            "Directly pause one Reminder Item inside an AI-visible Reminder Table. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.resume_reminder_item,
+            "resume_reminder_item",
+            "Directly resume one Reminder Item inside an AI-visible Reminder Table. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
     )
     for function, name, description, annotations in registrations:
         add_enabled_tool(
@@ -491,6 +888,22 @@ def _write_response(result: dict) -> WriteReceipt:
         pending_confirmation=bool(result.get("entered_confirmation")),
         failure_or_conflict_reason=result.get("reason", ""),
         proposal_id=result.get("proposal_id"),
+        previous_status=result.get("previous_status"),
+    )
+
+
+def _reminder_write_response(result: dict) -> ReminderWriteReceipt:
+    return ReminderWriteReceipt(
+        status=result["status"],
+        request_id=result["request_id"],
+        table_id=result.get("table_id"),
+        item_id=result.get("item_id"),
+        reminder_id=result.get("reminder_id"),
+        title=result.get("title", ""),
+        processing_mode=result.get("handling_mode", "none"),
+        changed_formal_reminder=bool(result.get("modified_formal_reminder")),
+        pending_confirmation=bool(result.get("entered_confirmation")),
+        failure_or_conflict_reason=result.get("reason", ""),
         previous_status=result.get("previous_status"),
     )
 

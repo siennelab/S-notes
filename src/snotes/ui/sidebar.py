@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.snotes.domain.models import Directory, Note, TrashSnapshot
+from src.snotes.domain.reminders import ReminderLabel, ReminderTableListItem
 from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.sidebar_widgets import (
     DirectoryFilterCombo,
@@ -64,6 +65,15 @@ class NoteSidebar(QWidget):
     emptyTrashRequested = Signal()
     aiCenterRequested = Signal()
     aiActorFilterRequested = Signal(object)
+    newReminderRequested = Signal()
+    reminderTableSelected = Signal(int, object)
+    reminderFilterRequested = Signal(object, str)
+    manageReminderLabelsRequested = Signal()
+    reminderTrashRequested = Signal()
+    exitReminderTrashRequested = Signal()
+    reminderTableRenameRequested = Signal(int)
+    reminderTableMoveRequested = Signal(int, int)
+    reminderTableDeleteRequested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,6 +85,9 @@ class NoteSidebar(QWidget):
         self._directories_by_id: dict[int, Directory] = {}
         self._children_by_parent: dict[int | None, list[Directory]] = {}
         self._changing_filters = False
+        self._changing_reminder_filters = False
+        self._reminder_label_ids: set[int] = set()
+        self._reminder_labels: list[ReminderLabel] = []
         self.mode = "directory"
 
         layout = QVBoxLayout(self)
@@ -210,7 +223,7 @@ class NoteSidebar(QWidget):
         self.new_note_button.setToolTip("新建笔记")
         self.new_note_button.setFixedSize(28, 28)
         self.new_note_button.setIconSize(QSize(14, 14))
-        self.new_note_button.clicked.connect(self.newNoteRequested.emit)
+        self.new_note_button.clicked.connect(self._new_button_clicked)
         header.addWidget(self.new_note_button)
         layout.addLayout(header)
     def _build_directory_filters(self, layout: QVBoxLayout) -> None:
@@ -227,7 +240,7 @@ class NoteSidebar(QWidget):
         self.category_manager_button.setObjectName("categoryManagerButton")
         self.category_manager_button.setToolTip("分类管理")
         self.category_manager_button.setFixedSize(48, 32)
-        self.category_manager_button.clicked.connect(self.manageDirectoriesRequested.emit)
+        self.category_manager_button.clicked.connect(self._manager_clicked)
         self.category_manager_button.notesDropped.connect(self.moveNotesRequested)
         filters.addWidget(self.main_filter_combo, stretch=1)
         filters.addWidget(self.sub_filter_combo, stretch=1)
@@ -289,6 +302,9 @@ class NoteSidebar(QWidget):
         directories: list[Directory],
         selected_path: tuple[str, ...] = (),
     ) -> None:
+        self.search_input.setPlaceholderText("搜索笔记或 #标签")
+        self.category_manager_button.setText("管理")
+        self.category_manager_button.setToolTip("分类管理")
         self.directories = [
             row for row in directories if len(self._path_in_rows(row, directories)) <= 2
         ]
@@ -313,11 +329,76 @@ class NoteSidebar(QWidget):
         finally:
             self._changing_filters = False
 
+    def set_reminder_filters(
+        self,
+        labels: Sequence[ReminderLabel],
+        tables: Sequence[ReminderTableListItem],
+        selected_label_id: int | None,
+        selected_visibility: str,
+        selected_table_id: int | None = None,
+    ) -> None:
+        self.mode = "reminder"
+        self.sidebar_stack.setCurrentWidget(self.note_list)
+        self._reminder_labels = list(labels)
+        self._reminder_label_ids = {label.id for label in labels}
+        self._changing_reminder_filters = True
+        try:
+            self.main_filter_combo.blockSignals(True)
+            self.main_filter_combo.clear()
+            self.main_filter_combo.addItem("全部", None)
+            for label in labels:
+                self.main_filter_combo.addItem(label.name, label.id)
+            index = self.main_filter_combo.findData(selected_label_id)
+            self.main_filter_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.main_filter_combo.blockSignals(False)
+
+            self.sub_filter_combo.blockSignals(True)
+            self.sub_filter_combo.clear()
+            self.sub_filter_combo.addItem("全部", "all")
+            self.sub_filter_combo.addItem("AI 可见", "visible")
+            self.sub_filter_combo.addItem("AI 不可见", "hidden")
+            visibility_index = self.sub_filter_combo.findData(selected_visibility)
+            self.sub_filter_combo.setCurrentIndex(max(0, visibility_index))
+            self.sub_filter_combo.blockSignals(False)
+            self.category_manager_button.setText("管理")
+            self.category_manager_button.setToolTip("Reminder 标签管理")
+            self.search_input.setPlaceholderText("搜索提醒")
+        finally:
+            self._changing_reminder_filters = False
+        self.note_list.clear_for_rebuild()
+        self.note_list.blockSignals(True)
+        selected_item: QListWidgetItem | None = None
+        for table_item in tables:
+            table = table_item.table
+            title = table.title.strip() or "未命名提醒表"
+            suffix = f"  {table_item.match_count}" if table_item.match_count else ""
+            item = QListWidgetItem(f"{title}{suffix}")
+            item.setData(Qt.UserRole, table.id)
+            item.setData(
+                PAYLOAD_ROLE,
+                {
+                    "type": "reminder_table",
+                    "id": table.id,
+                    "matching_item_id": table_item.matching_item_id,
+                },
+            )
+            item.setData(NOTE_TITLE_ROLE, f"{title}{suffix}")
+            item.setData(NOTE_DATE_ROLE, "")
+            item.setData(NOTE_PINNED_ROLE, False)
+            item.setToolTip(f"{table_item.label.name} · {'AI 可见' if table.ai_visible else 'AI 不可见'}")
+            self.note_list.addItem(item)
+            if table.id == selected_table_id:
+                selected_item = item
+        if selected_item is not None:
+            self.note_list.setCurrentItem(selected_item)
+        self.note_list.blockSignals(False)
+        self.set_active_smart_view("reminder")
+
     def set_notes(self, notes: list[Note], selected_note_id: int | None) -> None:
         self.mode = "directory" if self.mode == "trash" else self.mode
         self.sidebar_stack.setCurrentWidget(self.note_list)
+        self.note_list.clear_for_rebuild()
         self.note_list.blockSignals(True)
-        self.note_list.clear()
         selected_item: QListWidgetItem | None = None
         for note in notes:
             title = note.title.strip() or "未命名笔记"
@@ -341,12 +422,14 @@ class NoteSidebar(QWidget):
 
     def show_flat(self, notes: list[Note], *, mode: str, selected_note_id: int | None) -> None:
         self.mode = mode
+        self.search_input.setPlaceholderText("搜索笔记或 #标签")
         self.set_notes(notes, selected_note_id)
         self.mode = mode
         self._update_mode_states()
 
     def show_trash(self, snapshot: TrashSnapshot, paths: dict[int, tuple[str, ...]]) -> None:
         self.mode = "trash"
+        self.search_input.setPlaceholderText("搜索笔记或 #标签")
         self.sidebar_stack.setCurrentWidget(self.trash_tree)
         self.trash_tree.clear()
         directory_items: dict[int, QTreeWidgetItem] = {}
@@ -452,6 +535,9 @@ class NoteSidebar(QWidget):
         self._select_combo_name(self.sub_filter_combo, selected_path[1] if len(selected_path) > 1 else "")
 
     def _main_filter_changed(self) -> None:
+        if self.mode == "reminder":
+            self._emit_reminder_filter()
+            return
         if self._changing_filters:
             return
         self._changing_filters = True
@@ -462,6 +548,9 @@ class NoteSidebar(QWidget):
         self._emit_directory_filter()
 
     def _sub_filter_changed(self) -> None:
+        if self.mode == "reminder":
+            self._emit_reminder_filter()
+            return
         if self._changing_filters:
             return
         self._emit_directory_filter()
@@ -469,6 +558,13 @@ class NoteSidebar(QWidget):
     def _emit_directory_filter(self) -> None:
         if not self._changing_filters:
             self.directoryFilterRequested.emit(self.current_directory_path())
+
+    def _emit_reminder_filter(self) -> None:
+        if self._changing_reminder_filters:
+            return
+        label_id = self.main_filter_combo.currentData()
+        visibility = str(self.sub_filter_combo.currentData() or "all")
+        self.reminderFilterRequested.emit(label_id, visibility)
 
     def _directory_path(self, directory_id: int) -> tuple[str, ...]:
         names: list[str] = []
@@ -531,14 +627,46 @@ class NoteSidebar(QWidget):
 
     def _emit_selected_note(self, current: QListWidgetItem | None, _previous) -> None:
         if current is not None:
+            payload = current.data(PAYLOAD_ROLE) or {}
+            if payload.get("type") == "reminder_table":
+                self.reminderTableSelected.emit(int(payload["id"]), payload.get("matching_item_id"))
+                return
             self.noteSelected.emit(int(current.data(Qt.UserRole)))
 
     def _emit_clicked_note(self, item: QListWidgetItem | None) -> None:
         if item is not None:
+            payload = item.data(PAYLOAD_ROLE) or {}
+            if payload.get("type") == "reminder_table":
+                self.reminderTableSelected.emit(int(payload["id"]), payload.get("matching_item_id"))
+                return
             self.noteSelected.emit(int(item.data(Qt.UserRole)))
 
     def _toggle_trash(self) -> None:
-        (self.exitTrashRequested if self.mode == "trash" else self.trashRequested).emit()
+        if self.mode == "reminder_trash":
+            self.exitReminderTrashRequested.emit()
+        elif self.mode == "reminder":
+            self.reminderTrashRequested.emit()
+        else:
+            (self.exitTrashRequested if self.mode == "trash" else self.trashRequested).emit()
+
+    def show_reminder_trash_mode(self) -> None:
+        self.mode = "reminder_trash"
+        self.sidebar_stack.setCurrentWidget(self.note_list)
+        self.note_list.clear_for_rebuild()
+        self.search_input.setPlaceholderText("搜索提醒")
+        self._update_mode_states()
+
+    def _new_button_clicked(self) -> None:
+        if self.mode in {"reminder", "reminder_trash"}:
+            self.newReminderRequested.emit()
+        else:
+            self.newNoteRequested.emit()
+
+    def _manager_clicked(self) -> None:
+        if self.mode == "reminder":
+            self.manageReminderLabelsRequested.emit()
+        else:
+            self.manageDirectoriesRequested.emit()
 
     def _open_note_context_menu(self, position) -> None:
         item = self.note_list.itemAt(position)
@@ -547,8 +675,11 @@ class NoteSidebar(QWidget):
         if not item.isSelected():
             self.note_list.clearSelection()
             item.setSelected(True)
-        note_ids = self.selected_note_ids()
         payload = item.data(PAYLOAD_ROLE) or {}
+        if self.mode == "reminder" and payload.get("type") == "reminder_table":
+            self._open_reminder_table_context_menu(item, position)
+            return
+        note_ids = self.selected_note_ids()
         menu = QMenu(self)
         apply_popup_menu_theme(menu)
         if len(note_ids) == 1:
@@ -566,6 +697,32 @@ class NoteSidebar(QWidget):
             )
         menu.addAction("移入回收站", lambda: self.deleteNotesRequested.emit(note_ids))
         menu.exec(self.note_list.viewport().mapToGlobal(position))
+
+    def _open_reminder_table_context_menu(self, item: QListWidgetItem, position) -> None:
+        payload = item.data(PAYLOAD_ROLE) or {}
+        table_id = int(payload["id"])
+        menu = self._build_reminder_table_context_menu(table_id)
+        menu.exec(self.note_list.viewport().mapToGlobal(position))
+
+    def _build_reminder_table_context_menu(self, table_id: int) -> QMenu:
+        menu = QMenu(self)
+        apply_popup_menu_theme(menu)
+        menu.addAction("重命名", lambda: self.reminderTableRenameRequested.emit(table_id))
+        move_menu = QMenu("移动到", menu)
+        menu.addMenu(move_menu)
+        menu._reminder_move_menu = move_menu
+        apply_popup_menu_theme(move_menu)
+        for label in self._reminder_labels:
+            action = move_menu.addAction(
+                label.name,
+                lambda checked=False, target=label.id: self.reminderTableMoveRequested.emit(
+                    table_id,
+                    target,
+                ),
+            )
+            action.setEnabled(label.id != self.main_filter_combo.currentData())
+        menu.addAction("移入回收站", lambda: self.reminderTableDeleteRequested.emit(table_id))
+        return menu
 
     def _selected_trash_ids(self) -> tuple[list[int], list[int]]:
         notes: list[int] = []
