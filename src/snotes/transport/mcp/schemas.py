@@ -31,12 +31,11 @@ ReminderActionSpec = Annotated[
     dict,
     Field(
         description=(
-            "Reminder schedule. For a one-time reminder, use exactly "
-            '{"type":"one_time","date":"YYYY-MM-DD"}. For “10 minutes from now” '
-            "or other relative one-time requests, use exactly "
-            '{"type":"relative","unit":"minutes","amount":10}; the server converts '
-            "it to the existing date-based Reminder schedule. Do not invent "
-            'types such as "notify" or put relative time in deadline_spec.'
+            "Date-level Reminder schedule. For a one-time reminder, use exactly "
+            '{"type":"one_time","date":"YYYY-MM-DD"}. For a relative date-level '
+            'one-time reminder, use {"type":"relative","unit":"days","amount":N}. '
+            "S-notes Reminder does not support hour, minute, or second-level "
+            "scheduling."
         ),
     ),
     WithJsonSchema(
@@ -63,14 +62,14 @@ ReminderActionSpec = Annotated[
                         "type": {"const": "relative"},
                         "unit": {
                             "type": "string",
-                            "enum": ["minutes", "hours", "days"],
+                            "enum": ["days"],
                         },
                         "amount": {"type": "integer", "minimum": 1},
                     },
                     "additionalProperties": False,
                     "description": (
-                        "Relative one-time reminder. Example for “10 minutes "
-                        'from now”: {"type":"relative","unit":"minutes","amount":10}.'
+                        "Relative date-level one-time reminder. Example for "
+                        'three days from today: {"type":"relative","unit":"days","amount":3}.'
                     ),
                 },
                 {
@@ -185,8 +184,8 @@ ReminderDeadlineSpec = Annotated[
     Field(
         description=(
             "Optional deadline separate from the action date. Leave null unless "
-            "there is a true due date. Do not use this for “10 minutes from now”; "
-            'put relative time in action_spec as {"type":"relative","unit":"minutes","amount":10}.'
+            "there is a true date-level due date. S-notes Reminder does not "
+            "support hour, minute, or second-level deadlines."
         ),
     ),
     WithJsonSchema(

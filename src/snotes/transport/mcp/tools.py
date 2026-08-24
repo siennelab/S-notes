@@ -836,11 +836,10 @@ def register_tools(
             adapter.create_reminder_item,
             "create_reminder_item",
             "Create one Reminder Item inside an AI-visible Reminder Table. "
-            "For “10 minutes from now”, set action_spec to "
-            '{"type":"relative","unit":"minutes","amount":10} and leave '
-            "deadline_spec null. For one calendar date, set action_spec to "
-            '{"type":"one_time","date":"YYYY-MM-DD"}. Do not invent schedule '
-            'types such as "notify". '
+            "S-notes Reminder uses date-level scheduling: one-time reminders use "
+            '{"type":"one_time","date":"YYYY-MM-DD"}, and recurring reminders use '
+            "the supported date recurrence rules. It does not support hour, minute, "
+            "or second-level schedules. "
             + WRITE_RULES,
             write_annotations,
         ),

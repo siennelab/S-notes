@@ -823,29 +823,27 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertEqual(len(page.rows), 2)
         self.assertTrue(page.has_more)
 
-    def test_ai_relative_notify_create_uses_existing_schedule_owner(self) -> None:
+    def test_ai_relative_days_create_uses_existing_schedule_owner(self) -> None:
         table = self.service.create_table("FICTIONAL_VISIBLE_RELATIVE_TABLE")
         result = self.service.ai_create_item(
             actor_target_id="clawbot",
-            request_id="fictional-relative-notify-create",
+            request_id="fictional-relative-days-create",
             table_id=table.id,
             draft=ReminderDraft(
-                title="FICTIONAL_RELATIVE_NOTIFY",
+                title="FICTIONAL_RELATIVE_DAYS",
                 lifecycle=REMINDER_ACTIVE,
-                action_spec={"type": "notify"},
-                deadline_spec={"type": "relative", "unit": "minutes", "amount": 10},
+                action_spec={"type": "relative", "unit": "days", "amount": 3},
                 table_id=table.id,
             ),
         )
         retry = self.service.ai_create_item(
             actor_target_id="clawbot",
-            request_id="fictional-relative-notify-create",
+            request_id="fictional-relative-days-create",
             table_id=table.id,
             draft=ReminderDraft(
-                title="FICTIONAL_RELATIVE_NOTIFY",
+                title="FICTIONAL_RELATIVE_DAYS",
                 lifecycle=REMINDER_ACTIVE,
-                action_spec={"type": "notify"},
-                deadline_spec={"type": "relative", "unit": "minutes", "amount": 10},
+                action_spec={"type": "relative", "unit": "days", "amount": 3},
                 table_id=table.id,
             ),
         )
@@ -856,7 +854,7 @@ class ReminderR1Tests(unittest.TestCase):
                 [
                     item
                     for item in self.service.list_reminders()
-                    if item.reminder.title == "FICTIONAL_RELATIVE_NOTIFY"
+                    if item.reminder.title == "FICTIONAL_RELATIVE_DAYS"
                 ]
             ),
             1,
@@ -865,7 +863,7 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertIsNotNone(item)
         self.assertEqual(
             item.reminder.action_spec,
-            {"type": "one_time", "date": "2026-09-10"},
+            {"type": "one_time", "date": "2026-09-13"},
         )
         self.assertIsNone(item.reminder.deadline_spec)
 
@@ -878,10 +876,9 @@ class ReminderR1Tests(unittest.TestCase):
             request_id="fictional-relative-hidden-create",
             table_id=hidden.id,
             draft=ReminderDraft(
-                title="FICTIONAL_HIDDEN_RELATIVE_NOTIFY",
+                title="FICTIONAL_HIDDEN_RELATIVE_DAYS",
                 lifecycle=REMINDER_ACTIVE,
-                action_spec={"type": "notify"},
-                deadline_spec={"type": "relative", "unit": "minutes", "amount": 10},
+                action_spec={"type": "relative", "unit": "days", "amount": 3},
                 table_id=hidden.id,
             ),
         )
@@ -891,11 +888,30 @@ class ReminderR1Tests(unittest.TestCase):
                 (
                     item
                     for item in self.service.list_reminders()
-                    if item.reminder.title == "FICTIONAL_HIDDEN_RELATIVE_NOTIFY"
+                    if item.reminder.title == "FICTIONAL_HIDDEN_RELATIVE_DAYS"
                 ),
                 None,
             )
         )
+
+    def test_ai_subday_relative_create_rejects_before_insert(self) -> None:
+        table = self.service.create_table("FICTIONAL_SUBDAY_REJECT_TABLE")
+        before = len(self.service.list_reminders())
+        for unit in ("minutes", "hours"):
+            with self.subTest(unit=unit):
+                with self.assertRaisesRegex(ValueError, f"unsupported_relative_reminder_unit:{unit}"):
+                    self.service.ai_create_item(
+                        actor_target_id="clawbot",
+                        request_id=f"fictional-subday-{unit}-create",
+                        table_id=table.id,
+                        draft=ReminderDraft(
+                            title=f"FICTIONAL_SUBDAY_{unit.upper()}",
+                            lifecycle=REMINDER_ACTIVE,
+                            action_spec={"type": "relative", "unit": unit, "amount": 2},
+                            table_id=table.id,
+                        ),
+                    )
+                self.assertEqual(len(self.service.list_reminders()), before)
 
     def test_ai_create_validates_schedule_before_insert(self) -> None:
         table = self.service.create_table("FICTIONAL_VALIDATE_BEFORE_INSERT")

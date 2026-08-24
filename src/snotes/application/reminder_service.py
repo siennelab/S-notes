@@ -1150,10 +1150,6 @@ class ReminderService:
         )
         if action_kind == "relative":
             return self._one_time_after(action_spec), deadline_spec
-        if action_kind in {"notify", "reminder"} and deadline_kind == "relative":
-            return self._one_time_after(deadline_spec or {}), None
-        if deadline_kind == "relative":
-            return action_spec, self._one_time_after(deadline_spec or {})
         return action_spec, deadline_spec
 
     def _one_time_after(self, spec: dict) -> dict:
@@ -1170,10 +1166,6 @@ class ReminderService:
         if amount <= 0:
             raise ValueError("relative_reminder_amount_must_be_positive")
         unit = str(spec.get("unit", "")).strip().casefold()
-        if unit in {"minute", "minutes", "min", "mins"}:
-            return timedelta(minutes=amount)
-        if unit in {"hour", "hours", "hr", "hrs"}:
-            return timedelta(hours=amount)
         if unit in {"day", "days"}:
             return timedelta(days=amount)
         raise ValueError(f"unsupported_relative_reminder_unit:{unit}")

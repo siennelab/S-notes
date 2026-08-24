@@ -827,10 +827,12 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             create_reminder_schema = by_name["create_reminder_item"].inputSchema
             action_schema = create_reminder_schema["properties"]["action_spec"]
             self.assertIn("relative", json.dumps(action_schema, ensure_ascii=False))
-            self.assertIn("minutes", json.dumps(action_schema, ensure_ascii=False))
+            self.assertIn("days", json.dumps(action_schema, ensure_ascii=False))
+            self.assertNotIn("minutes", json.dumps(action_schema, ensure_ascii=False))
+            self.assertNotIn("hours", json.dumps(action_schema, ensure_ascii=False))
             self.assertIn("one_time", json.dumps(action_schema, ensure_ascii=False))
             self.assertIn(
-                "10 minutes",
+                "date-level",
                 by_name["create_reminder_item"].description,
             )
 
@@ -883,12 +885,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "table_id": self.reminder_ids["visible_table"],
                     "title": "FICTIONAL_CLAWDE_RELATIVE_REMINDER",
                     "lifecycle": REMINDER_ACTIVE,
-                    "action_spec": {"type": "notify"},
-                    "deadline_spec": {
-                        "type": "relative",
-                        "unit": "minutes",
-                        "amount": 10,
-                    },
+                    "action_spec": {"type": "relative", "unit": "days", "amount": 3},
                 },
             )
             retry_relative = await self.call(
@@ -899,12 +896,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "table_id": self.reminder_ids["visible_table"],
                     "title": "FICTIONAL_CLAWDE_RELATIVE_REMINDER",
                     "lifecycle": REMINDER_ACTIVE,
-                    "action_spec": {"type": "notify"},
-                    "deadline_spec": {
-                        "type": "relative",
-                        "unit": "minutes",
-                        "amount": 10,
-                    },
+                    "action_spec": {"type": "relative", "unit": "days", "amount": 3},
                 },
             )
             hidden_relative = await self.call(
@@ -915,11 +907,36 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "table_id": self.reminder_ids["hidden_table"],
                     "title": "FICTIONAL_CLAWDE_HIDDEN_RELATIVE_REMINDER",
                     "lifecycle": REMINDER_ACTIVE,
-                    "action_spec": {"type": "notify"},
-                    "deadline_spec": {
+                    "action_spec": {"type": "relative", "unit": "days", "amount": 3},
+                },
+            )
+            rejected_minutes = await self.call(
+                session,
+                "create_reminder_item",
+                {
+                    "request_id": "clawde-rejected-minutes-create",
+                    "table_id": self.reminder_ids["visible_table"],
+                    "title": "FICTIONAL_CLAWDE_REJECTED_MINUTES",
+                    "lifecycle": REMINDER_ACTIVE,
+                    "action_spec": {
                         "type": "relative",
                         "unit": "minutes",
                         "amount": 10,
+                    },
+                },
+            )
+            rejected_hours = await self.call(
+                session,
+                "create_reminder_item",
+                {
+                    "request_id": "clawde-rejected-hours-create",
+                    "table_id": self.reminder_ids["visible_table"],
+                    "title": "FICTIONAL_CLAWDE_REJECTED_HOURS",
+                    "lifecycle": REMINDER_ACTIVE,
+                    "action_spec": {
+                        "type": "relative",
+                        "unit": "hours",
+                        "amount": 2,
                     },
                 },
             )
@@ -973,6 +990,8 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 created_relative["item_id"],
             )
             self.assertEqual(hidden_relative["status"], "not_found")
+            self.assertEqual(rejected_minutes["status"], "rejected")
+            self.assertEqual(rejected_hours["status"], "rejected")
             self.assertEqual(rejected_notify["status"], "rejected")
             self.assertEqual(labels_after_reject["status"], "ok")
             self.assertEqual(tables_after_reject["status"], "ok")
@@ -1246,12 +1265,24 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT COUNT(*) FROM ai_reminder_operations WHERE request_id = ?",
                 ("clawde-relative-reminder-create",),
             ).fetchone()[0]
+            rejected_subday_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM reminders
+                WHERE title IN (?, ?)
+                """,
+                (
+                    "FICTIONAL_CLAWDE_REJECTED_MINUTES",
+                    "FICTIONAL_CLAWDE_REJECTED_HOURS",
+                ),
+            ).fetchone()[0]
         self.assertIsNotNone(reminder_operation)
         self.assertEqual(reminder_operation["actor_target_id"], "clawbot")
         self.assertIsNotNone(relative_operation)
         self.assertEqual(relative_operation["actor_target_id"], "clawbot")
         self.assertEqual(relative_operation["action"], "create_item")
         self.assertEqual(relative_operation_count, 1)
+        self.assertEqual(rejected_subday_count, 0)
 
     async def test_pending_create_preserves_ai_proposal_but_accept_uses_s_fields(self) -> None:
         proposal_main = self.directories_repository.create("AI 提议主分类")
