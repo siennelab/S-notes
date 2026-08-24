@@ -67,15 +67,28 @@ READ_ONLY_TOOLS = {
     "list_reminder_items",
     "get_reminder_item",
 }
-CLAWDE_TOOLS = {
+CLAWDE_NOTE_TOOLS = {
     "search_notes",
     "get_note",
-    "list_directories",
-    "list_tags",
-    "list_ai_metadata_options",
     "create_note",
     "append_note",
 }
+CLAWDE_REMINDER_TOOLS = {
+    "list_reminder_labels",
+    "list_reminder_tables",
+    "get_reminder_table",
+    "list_reminder_items",
+    "get_reminder_item",
+    "create_reminder_label",
+    "create_reminder_table",
+    "update_reminder_table",
+    "create_reminder_item",
+    "update_reminder_item",
+    "complete_reminder_item",
+    "pause_reminder_item",
+    "resume_reminder_item",
+}
+CLAWDE_TOOLS = CLAWDE_NOTE_TOOLS | CLAWDE_REMINDER_TOOLS
 CLAWDE_DISALLOWED_TOOLS = NORMAL_TOOLS - CLAWDE_TOOLS
 GALE_TUNNEL_TOOLS = {
     "search_notes",
@@ -776,6 +789,14 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             tools = (await session.list_tools()).tools
             self.assertEqual({tool.name for tool in tools}, CLAWDE_TOOLS)
             self.assertEqual(len(tools), len(CLAWDE_TOOLS))
+            self.assertEqual(
+                {tool.name for tool in tools} & CLAWDE_NOTE_TOOLS,
+                CLAWDE_NOTE_TOOLS,
+            )
+            self.assertEqual(
+                {tool.name for tool in tools} & CLAWDE_REMINDER_TOOLS,
+                CLAWDE_REMINDER_TOOLS,
+            )
             for name in CLAWDE_DISALLOWED_TOOLS:
                 blocked = await session.call_tool(name, {})
                 self.assertTrue(blocked.isError)
@@ -786,24 +807,82 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                         ensure_ascii=False,
                     ).lower(),
                 )
+            by_name = {tool.name: tool for tool in tools}
+            for name in (
+                "list_directories",
+                "list_tags",
+                "list_ai_metadata_options",
+                "create_note_submission",
+                "get_operation_status",
+                "delete_reminder_table",
+                "delete_reminder_item",
+                "set_reminder_table_ai_visible",
+                "list_reminder_operation_logs",
+            ):
+                self.assertNotIn(name, by_name)
+            for tool in tools:
+                self.assertNotIn(
+                    "actor_target_id", tool.inputSchema.get("properties", {})
+                )
 
-            clawde_directories = await self.call(session, "list_directories", {})
-            clawde_tags = await self.call(session, "list_tags", {})
-            clawde_options = await self.call(
-                session, "list_ai_metadata_options", {}
+            labels = await self.call(session, "list_reminder_labels", {})
+            tables = await self.call(
+                session, "list_reminder_tables", {"query": "FICTIONAL_GALE"}
             )
-            self.assertIn(
-                "ClawbotVisible",
-                json.dumps(clawde_directories, ensure_ascii=False),
+            hidden_table = await self.call(
+                session,
+                "get_reminder_table",
+                {"table_id": self.reminder_ids["hidden_table"]},
             )
-            self.assertIn(
-                "clawbot-tag",
-                json.dumps(clawde_tags, ensure_ascii=False),
+            hidden_items = await self.call(
+                session,
+                "list_reminder_items",
+                {"table_id": self.reminder_ids["hidden_table"]},
             )
-            self.assertIn(
-                "clawbot",
-                [item["target_id"] for item in clawde_options["ai_targets"]],
+            hidden_item = await self.call(
+                session,
+                "get_reminder_item",
+                {"item_id": self.reminder_ids["hidden_reminder"]},
             )
+            hidden_update = await self.call(
+                session,
+                "update_reminder_table",
+                {
+                    "request_id": "clawde-hidden-table-update",
+                    "table_id": self.reminder_ids["hidden_table"],
+                    "title": "FICTIONAL_SHOULD_NOT_WRITE",
+                },
+            )
+            visible_items = await self.call(
+                session,
+                "list_reminder_items",
+                {"table_id": self.reminder_ids["visible_table"]},
+            )
+            created_label = await self.call(
+                session,
+                "create_reminder_label",
+                {
+                    "request_id": "clawde-create-reminder-label",
+                    "name": "FICTIONAL_CLAWDE_REMINDER_LABEL",
+                },
+            )
+
+            self.assertEqual(labels["status"], "ok")
+            self.assertGreaterEqual(len(labels["labels"]), 1)
+            self.assertEqual(tables["status"], "ok")
+            self.assertEqual(tables["total_visible_matches"], 1)
+            self.assertEqual(
+                tables["results"][0]["table_id"],
+                self.reminder_ids["visible_table"],
+            )
+            self.assertEqual(hidden_table["status"], "not_found")
+            self.assertEqual(hidden_items["status"], "ok")
+            self.assertEqual(hidden_items["total_visible_matches"], 0)
+            self.assertEqual(hidden_item["status"], "not_found")
+            self.assertEqual(hidden_update["status"], "not_found")
+            self.assertEqual(visible_items["status"], "ok")
+            self.assertEqual(visible_items["total_visible_matches"], 1)
+            self.assertEqual(created_label["status"], "created")
 
             pending_create = await self.call(
                 session,
@@ -1056,6 +1135,13 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             {row["operation_type"] for row in audit_rows}, {"create", "append"}
         )
         self.assertEqual({row["summary"] for row in audit_rows}, {""})
+        with self.connections.read() as connection:
+            reminder_operation = connection.execute(
+                "SELECT actor_target_id FROM ai_operations WHERE request_id = ?",
+                ("clawde-create-reminder-label",),
+            ).fetchone()
+        self.assertIsNotNone(reminder_operation)
+        self.assertEqual(reminder_operation["actor_target_id"], "clawbot")
 
     async def test_pending_create_preserves_ai_proposal_but_accept_uses_s_fields(self) -> None:
         proposal_main = self.directories_repository.create("AI 提议主分类")
