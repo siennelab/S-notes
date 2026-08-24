@@ -914,6 +914,8 @@ class MainWindow(QMainWindow):
         self.shell.editor_toolbar.refresh_theme()
         self.shell.sidebar.set_current_theme(theme_name)
         self.shell.refresh_theme_icons()
+        if self.ai_center_dialog is not None:
+            self.ai_center_dialog.refresh_theme()
         self.shell.restore_sidebar_width(sidebar_width)
         QTimer.singleShot(0, lambda width=sidebar_width: self.shell.restore_sidebar_width(width))
 

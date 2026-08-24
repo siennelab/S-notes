@@ -24,6 +24,7 @@ from src.snotes.domain.reminders import (
     REMINDER_PAUSED,
     ReminderDraft,
     ReminderQuery,
+    ReminderSettings,
 )
 from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.schema import initialize_database
@@ -83,6 +84,17 @@ class ReminderR1Tests(unittest.TestCase):
                 action_spec=action_spec,
                 deadline_spec=deadline_spec,
                 note="FICTIONAL_NOTE",
+            )
+        )
+
+    def enable_notifications(self, daily_time: str = "10:00") -> None:
+        settings = self.service.settings()
+        self.service.save_settings(
+            ReminderSettings(
+                notifications_enabled=True,
+                daily_time=daily_time,
+                ntfy_endpoint=settings.ntfy_endpoint,
+                ntfy_topic=settings.ntfy_topic,
             )
         )
 
@@ -223,6 +235,21 @@ class ReminderR1Tests(unittest.TestCase):
                 "FICTIONAL_DONE_SORT",
             ],
         )
+
+    def test_sorting_status_uses_shanghai_business_day_under_hawaii_host(self) -> None:
+        self.clock.set(datetime(2026, 8, 23, 16, 30, tzinfo=ZoneInfo("Pacific/Honolulu")))
+        self.create("FICTIONAL_SHANGHAI_TODAY", {"type": "one_time", "date": "2026-08-24"})
+        self.create("FICTIONAL_SHANGHAI_FUTURE", {"type": "one_time", "date": "2026-08-25"})
+
+        items = self.service.list_reminders()
+
+        self.assertEqual([item.reminder.title for item in items], [
+            "FICTIONAL_SHANGHAI_TODAY",
+            "FICTIONAL_SHANGHAI_FUTURE",
+        ])
+        self.assertEqual(items[0].status, "due")
+        self.assertEqual(items[0].next_action_date, "2026-08-24")
+        self.assertEqual(items[1].status, "upcoming")
 
     def test_repeat_until(self) -> None:
         self.create(
@@ -592,6 +619,7 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertIn("最晚处理日", self.transport.calls[-1]["message"])
 
     def test_scheduled_window_and_no_real_network_in_unit_tests(self) -> None:
+        self.enable_notifications()
         self.create("FICTIONAL_SCHEDULED", {"type": "one_time", "date": "2026-09-10"})
         self.clock.set(datetime(2026, 9, 10, 9, 59, tzinfo=SHANGHAI))
         self.assertEqual(self.service.run_scheduled_once(), 0)
@@ -599,6 +627,39 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertEqual(self.service.run_scheduled_once(), 1)
         self.assertEqual(self.service.run_scheduled_once(), 0)
         self.assertEqual(len(self.transport.calls), 1)
+
+    def test_scheduled_helper_uses_shanghai_ten_am_with_hawaii_host(self) -> None:
+        self.enable_notifications()
+        self.clock.set(datetime(2026, 8, 23, 15, 59, tzinfo=ZoneInfo("Pacific/Honolulu")))
+        self.create("FICTIONAL_SHANGHAI_WINDOW", {"type": "one_time", "date": "2026-08-24"})
+        self.assertEqual(self.service.run_scheduled_once(), 0)
+        self.assertEqual(self.transport.calls, [])
+
+        self.clock.set(datetime(2026, 8, 23, 16, 0, tzinfo=ZoneInfo("Pacific/Honolulu")))
+        self.assertEqual(self.service.run_scheduled_once(), 1)
+        self.assertEqual(self.service.run_scheduled_once(), 0)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_same_day_created_after_ten_is_eligible_after_prior_poll(self) -> None:
+        self.enable_notifications()
+        self.clock.set(datetime(2026, 8, 23, 16, 30, tzinfo=ZoneInfo("Pacific/Honolulu")))
+        self.repository.set_text_setting(
+            ReminderService.LAST_SCHEDULED_DATE_KEY,
+            "2026-08-24",
+        )
+        self.create("FICTIONAL_AFTER_TEN_SAME_DAY", {"type": "one_time", "date": "2026-08-24"})
+
+        self.assertEqual(self.service.run_scheduled_once(), 1)
+        self.assertEqual(self.service.run_scheduled_once(), 0)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_future_business_date_does_not_send_under_hawaii_host(self) -> None:
+        self.enable_notifications()
+        self.clock.set(datetime(2026, 8, 23, 16, 30, tzinfo=ZoneInfo("Pacific/Honolulu")))
+        self.create("FICTIONAL_SHANGHAI_FUTURE_NOTIFY", {"type": "one_time", "date": "2026-08-25"})
+
+        self.assertEqual(self.service.run_scheduled_once(), 0)
+        self.assertEqual(self.transport.calls, [])
 
     def test_independent_reminder_helper_launch_agent_template(self) -> None:
         helper = Path(self.temporary.name) / "bin" / "snotes-reminder-helper"

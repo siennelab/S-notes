@@ -681,6 +681,48 @@ class Package3UiTests(unittest.TestCase):
                 )
                 self.assertEqual(dialog.repeat_combo.view().objectName(), "comboPopupView")
 
+    def test_ai_center_reminder_operation_log_table_follows_live_theme(self) -> None:
+        service = self.window.reminder_service
+        table = service.create_table("FICTIONAL_LOG_THEME_TABLE")
+        service.ai_create_item(
+            actor_target_id="clawbot",
+            request_id="fictional-ui-reminder-log-theme",
+            table_id=table.id,
+            draft=ReminderDraft(
+                title="FICTIONAL_LOG_THEME_ITEM",
+                lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2026-09-10"},
+                table_id=table.id,
+            ),
+        )
+
+        self.window.set_theme("dark")
+        self.window.open_ai_center()
+        center = self.window.ai_center_dialog
+        center.tabs.setCurrentWidget(center.reminder_log_page)
+        center.refresh_reminder_logs(reset=True)
+        self.app.processEvents()
+        self.assertGreaterEqual(center.reminder_log_table.rowCount(), 1)
+
+        for theme_name, tokens in THEMES.items():
+            with self.subTest(theme=theme_name):
+                self.window.set_theme(theme_name)
+                self.app.processEvents()
+                table_widget = center.reminder_log_table
+                self.assertEqual(
+                    table_widget.viewport().palette().color(QPalette.Base).name().lower(),
+                    QColor(tokens.surface).name().lower(),
+                )
+                self.assertEqual(
+                    table_widget.horizontalHeader().palette().color(QPalette.Window).name().lower(),
+                    QColor(tokens.surface).name().lower(),
+                )
+                self.assertEqual(
+                    table_widget.palette().color(QPalette.Highlight).name().lower(),
+                    QColor(tokens.surface_selected).name().lower(),
+                )
+                self.assertIn("#aiReminderLogTable", build_app_style(theme_name))
+
     def test_reminder_center_button_states_and_completed_occurrence_text(self) -> None:
         service = self.window.reminder_service
         reminder = service.create_reminder(

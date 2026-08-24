@@ -1050,7 +1050,7 @@ class ReminderService:
         hour, minute = [int(part) for part in (daily_time or "10:00").split(":", 1)]
         if (now.hour, now.minute) < (hour, minute):
             return False
-        return self._repository.get_text_setting(self.LAST_SCHEDULED_DATE_KEY) != now.date().isoformat()
+        return True
 
     def _automatic_table_title(self) -> str:
         stamp = self._now_datetime().strftime("%m-%d %H:%M")

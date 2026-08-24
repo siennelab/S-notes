@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QColor, QCloseEvent, QKeyEvent, QMouseEvent, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -40,7 +40,7 @@ from src.snotes.application.reminder_service import ReminderService
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.floating_combo import FloatingComboBox
-from src.snotes.ui.theme import repolish
+from src.snotes.ui.theme import apply_selection_palette, current_theme, repolish
 
 
 def _display_timestamp(value: str, empty_text: str) -> str:
@@ -625,6 +625,7 @@ class AiCenterDialog(QWidget):
         self.close_button.clicked.connect(self.close)
         footer.addWidget(self.close_button)
         layout.addLayout(footer)
+        self.refresh_theme()
 
     def _build_gale_page(self) -> QWidget:
         page = QWidget()
@@ -887,6 +888,30 @@ class AiCenterDialog(QWidget):
                     QTableWidgetItem(str(value)),
                 )
         self.log_table.resizeColumnsToContents()
+
+    def refresh_theme(self) -> None:
+        for table in (self.log_table, self.reminder_log_table):
+            self._refresh_log_table_theme(table)
+        repolish(self)
+
+    @staticmethod
+    def _refresh_log_table_theme(table: QTableWidget) -> None:
+        tokens = current_theme()
+        palette = QPalette(table.palette())
+        for role in (QPalette.Base, QPalette.Window, QPalette.Button):
+            palette.setColor(role, QColor(tokens.surface))
+        for role in (QPalette.Text, QPalette.WindowText, QPalette.ButtonText):
+            palette.setColor(role, QColor(tokens.text))
+        palette.setColor(QPalette.AlternateBase, QColor(tokens.surface_hover))
+        table.setPalette(palette)
+        table.viewport().setAutoFillBackground(True)
+        table.viewport().setPalette(palette)
+        table.horizontalHeader().setPalette(palette)
+        apply_selection_palette(table, tokens)
+        apply_selection_palette(table.viewport(), tokens)
+        repolish(table)
+        repolish(table.viewport())
+        repolish(table.horizontalHeader())
 
     def _build_reminder_log_page(self) -> QWidget:
         page = QWidget()

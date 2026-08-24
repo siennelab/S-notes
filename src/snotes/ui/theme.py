@@ -349,7 +349,8 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 }}
 #aiCenterTabs QTabBar::tab:hover {{ background: {t.surface_hover}; color: {t.text}; }}
 #aiCenterTabs QTabBar::tab:selected {{ background: {t.surface_selected}; color: {t.text}; font-weight: 600; }}
-#aiCallLogPage {{ background: {t.window}; }}
+#aiCallLogPage, #aiReminderLogPage {{ background: {t.window}; }}
+#aiReminderLogEmpty {{ color: {t.text_muted}; }}
 #aiCallLogFilter {{
     border: 1px solid {t.editor_border}; border-radius: 6px;
     padding: 4px 26px 4px 9px; background: {t.surface}; color: {t.text};
@@ -357,14 +358,33 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #aiCallLogFilter:hover {{ background: {t.surface_hover}; }}
 #aiCallLogFilter:focus {{ border-color: {t.focus}; background: {t.surface}; }}
 #aiCallLogFilter:disabled {{ color: {t.disabled}; background: {t.surface}; }}
-#aiCallLogTable {{
+#aiCallLogTable, #aiReminderLogTable {{
     border: 0; border-radius: 8px; background: {t.surface}; color: {t.text};
-    gridline-color: {t.editor_border}; selection-background-color: {t.surface_selected};
+    alternate-background-color: {t.surface_hover};
+    gridline-color: {t.editor_border};
+    selection-background-color: {t.surface_selected};
+    selection-color: {t.text};
+    outline: 0;
 }}
-#aiCallLogTable::item {{ padding: 5px 7px; }}
-#aiCallLogTable QHeaderView::section {{
+#aiCallLogTable QWidget, #aiReminderLogTable QWidget {{
+    background: {t.surface};
+    color: {t.text};
+}}
+#aiCallLogTable::item, #aiReminderLogTable::item {{ padding: 5px 7px; }}
+#aiCallLogTable::item:selected, #aiReminderLogTable::item:selected {{
+    background: {t.surface_selected};
+    color: {t.text};
+}}
+#aiCallLogTable QHeaderView, #aiReminderLogTable QHeaderView {{
+    background: {t.surface};
+}}
+#aiCallLogTable QHeaderView::section, #aiReminderLogTable QHeaderView::section {{
     border: 0; border-bottom: 1px solid {t.editor_border};
     padding: 6px 8px; background: {t.surface}; color: {t.text_muted};
+}}
+#aiCallLogTable QTableCornerButton::section, #aiReminderLogTable QTableCornerButton::section {{
+    border: 0; border-bottom: 1px solid {t.editor_border};
+    background: {t.surface};
 }}
 #reminderCenter {{
     background: {t.editor}; color: {t.text};
