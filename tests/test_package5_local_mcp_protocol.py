@@ -53,6 +53,14 @@ CLAWDE_TOOLS = {
     "append_note",
 }
 CLAWDE_DISALLOWED_TOOLS = NORMAL_TOOLS - CLAWDE_TOOLS
+GALE_TUNNEL_TOOLS = {
+    "search_notes",
+    "get_note",
+    "list_directories",
+    "list_tags",
+    "list_ai_metadata_options",
+    "create_note_submission",
+}
 
 
 class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -166,6 +174,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             "S_NOTES_DATA_ROOT": str(self.root),
             "SNOTES_MCP_READ_ONLY": "1" if read_only else "0",
             "SNOTES_MCP_ACTOR_TARGET_ID": actor,
+            "SNOTES_GALE_TUNNEL_ALLOW_DATA_ROOT_OVERRIDE": "1",
         }
         if tool_allowlist is not None:
             values["SNOTES_MCP_TOOL_ALLOWLIST"] = ",".join(sorted(tool_allowlist))
@@ -178,9 +187,10 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         read_only: bool,
         actor: str = "gale",
         tool_allowlist: set[str] | None = None,
+        script: str = "run_snotes_mcp_stdio.sh",
     ):
         parameters = StdioServerParameters(
-            command=str(ROOT / "scripts" / "run_snotes_mcp_stdio.sh"),
+            command=str(ROOT / "scripts" / script),
             args=[],
             cwd=str(ROOT),
             env=self._env(
@@ -260,6 +270,149 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     for item in options["ai_targets"]
                 ],
             )
+
+    async def test_gale_tunnel_profile_projects_v3_tools_and_pending_create(self) -> None:
+        receipt_service = AiReceiptInboxService(
+            SQLiteAiReceiptInboxRepository(
+                self.connections,
+                self.directories_repository,
+                self.tags_repository,
+            ),
+            notes=self.notes,
+            tags=self.tags,
+            ai_metadata=self.metadata,
+            mcp_operations=SQLiteAiMcpOperationRepository(
+                self.connections, self.tags_repository
+            ),
+        )
+        formal_before = len(self.notes.list_active_notes())
+
+        async with self.session(
+            read_only=True,
+            actor="clawbot",
+            script="run_snotes_gale_tunnel_mcp_stdio.sh",
+        ) as session:
+            tools = (await session.list_tools()).tools
+            self.assertEqual({tool.name for tool in tools}, GALE_TUNNEL_TOOLS)
+            self.assertEqual(len(tools), 6)
+            by_name = {tool.name: tool for tool in tools}
+            for tool in tools:
+                self.assertNotIn(
+                    "actor_target_id", tool.inputSchema.get("properties", {})
+                )
+            self.assertNotIn("create_note", by_name)
+            self.assertIn(
+                "idempotency_key",
+                by_name["create_note_submission"].inputSchema["properties"],
+            )
+
+            gale = await self.call(session, "search_notes", {"query": "gale body"})
+            clawbot = await self.call(
+                session, "search_notes", {"query": "clawbot body"}
+            )
+            self.assertEqual(gale["total_visible_matches"], 1)
+            self.assertEqual(clawbot["total_visible_matches"], 0)
+
+            created = await self.call(
+                session,
+                "create_note_submission",
+                {
+                    "idempotency_key": "gale-tunnel-fictional-create",
+                    "title": "Gale Tunnel fictional pending",
+                    "content": "fictional tunnel body",
+                    "suggested_directory": "",
+                    "suggested_tags": [],
+                    "ai_visibility": "",
+                    "ai_targets": [],
+                    "main_category": "",
+                    "sub_category": "",
+                    "tags": [],
+                },
+            )
+            duplicate = await self.call(
+                session,
+                "create_note_submission",
+                {
+                    "idempotency_key": "gale-tunnel-fictional-create",
+                    "title": "Gale Tunnel fictional pending",
+                    "content": "fictional tunnel body",
+                    "suggested_directory": "",
+                    "suggested_tags": [],
+                    "ai_visibility": "",
+                    "ai_targets": [],
+                    "main_category": "",
+                    "sub_category": "",
+                    "tags": [],
+                },
+            )
+
+        self.assertEqual(created["status"], "pending_confirmation")
+        self.assertFalse(created["changed_formal_note"])
+        self.assertTrue(created["pending_confirmation"])
+        self.assertEqual(duplicate["status"], "already_processed")
+        self.assertEqual(duplicate["previous_status"], "pending_confirmation")
+        self.assertEqual(len(self.notes.list_active_notes()), formal_before)
+        pending = receipt_service.list_pending_receipts()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].id, created["proposal_id"])
+        self.assertEqual(pending[0].source, "Gale")
+        self.assertEqual(pending[0].actor_target_id, "gale")
+        self.assertEqual(pending[0].title, "Gale Tunnel fictional pending")
+        self.assertEqual(pending[0].body, "fictional tunnel body")
+        self.assertEqual(pending[0].tags, "")
+        self.assertEqual(pending[0].ai_visibility, "full")
+        self.assertEqual(pending[0].ai_targets, "gale")
+
+    async def test_gale_tunnel_submission_metadata_enters_existing_pending(self) -> None:
+        dynamic_main = self.directories_repository.create("Gale Tunnel 主分类")
+        self.directories_repository.create("Gale Tunnel 子分类", dynamic_main.id)
+        receipt_service = AiReceiptInboxService(
+            SQLiteAiReceiptInboxRepository(
+                self.connections,
+                self.directories_repository,
+                self.tags_repository,
+            ),
+            notes=self.notes,
+            tags=self.tags,
+            ai_metadata=self.metadata,
+            mcp_operations=SQLiteAiMcpOperationRepository(
+                self.connections, self.tags_repository
+            ),
+        )
+        formal_before = len(self.notes.list_active_notes())
+
+        async with self.session(
+            read_only=True,
+            actor="clawbot",
+            script="run_snotes_gale_tunnel_mcp_stdio.sh",
+        ) as session:
+            created = await self.call(
+                session,
+                "create_note_submission",
+                {
+                    "idempotency_key": "gale-tunnel-metadata-create",
+                    "title": "Gale Tunnel metadata pending",
+                    "content": "metadata body",
+                    "suggested_tags": [],
+                    "main_category": "Gale Tunnel 主分类",
+                    "sub_category": "Gale Tunnel 子分类",
+                    "tags": ["metadata-gale", "#Second"],
+                    "ai_visibility": "redacted",
+                    "ai_targets": ["gale"],
+                },
+            )
+
+        self.assertEqual(created["status"], "pending_confirmation")
+        self.assertEqual(len(self.notes.list_active_notes()), formal_before)
+        pending = receipt_service.list_pending_receipts()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].id, created["proposal_id"])
+        self.assertEqual(pending[0].actor_target_id, "gale")
+        self.assertEqual(pending[0].main_category, "Gale Tunnel 主分类")
+        self.assertEqual(pending[0].sub_category, "Gale Tunnel 子分类")
+        self.assertEqual(pending[0].tags, "metadata-gale, Second")
+        self.assertEqual(pending[0].ai_visibility, "redacted")
+        self.assertEqual(pending[0].ai_targets, "gale")
 
     async def test_read_only_catalog_is_only_two_and_write_is_unknown(self) -> None:
         async with self.session(read_only=True) as session:

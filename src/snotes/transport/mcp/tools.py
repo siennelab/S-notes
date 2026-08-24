@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import uuid
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.transport.mcp.schemas import (
@@ -34,6 +37,10 @@ from src.snotes.transport.mcp.schemas import (
 
 
 LOGGER = logging.getLogger("snotes_r2_mcp")
+SubmissionDirectoryText = Annotated[str, Field(max_length=200)]
+SubmissionMetadataText = Annotated[str, Field(max_length=200)]
+SubmissionTagList = Annotated[list[str], Field(max_length=32)]
+SubmissionAiTargetList = Annotated[list[str], Field(max_length=32)]
 READ_TOOL_NAMES = frozenset({"search_notes", "get_note"})
 WRITE_TOOL_NAMES = frozenset(
     {
@@ -47,7 +54,8 @@ WRITE_TOOL_NAMES = frozenset(
         "get_operation_status",
     }
 )
-ALL_TOOL_NAMES = READ_TOOL_NAMES | WRITE_TOOL_NAMES
+PROFILE_TOOL_NAMES = frozenset({"create_note_submission"})
+ALL_TOOL_NAMES = READ_TOOL_NAMES | WRITE_TOOL_NAMES | PROFILE_TOOL_NAMES
 WRITE_RULES = (
     "This tool may modify local data or create a pending human-confirmation proposal. "
     "request_id must remain stable for idempotency; retry the same operation with the same "
@@ -180,6 +188,41 @@ class LocalMcpToolAdapter:
             ),
         )
 
+    def create_note_submission(
+        self,
+        title: TitleText,
+        content: ContentText,
+        suggested_directory: SubmissionDirectoryText = "",
+        suggested_tags: SubmissionTagList | None = None,
+        ai_visibility: str | None = None,
+        ai_targets: SubmissionAiTargetList | None = None,
+        main_category: SubmissionMetadataText | None = None,
+        sub_category: SubmissionMetadataText | None = None,
+        tags: SubmissionTagList | None = None,
+        idempotency_key: RequestId | None = None,
+    ) -> WriteReceipt:
+        request_id = idempotency_key or f"gale-tunnel-{uuid.uuid4().hex}"
+        selected_main, selected_sub = _submission_location(
+            suggested_directory,
+            main_category,
+            sub_category,
+        )
+        selected_tags = _optional_list(tags if tags is not None else suggested_tags)
+        return self._write(
+            "create_note_submission",
+            request_id,
+            lambda: self.service.create_note(
+                request_id,
+                title,
+                content,
+                main_category=selected_main,
+                sub_category=selected_sub,
+                tags=selected_tags,
+                ai_visibility=_optional_text(ai_visibility),
+                ai_targets=_optional_list(ai_targets),
+            ),
+        )
+
     def prepend_note(
         self,
         request_id: RequestId,
@@ -295,9 +338,9 @@ def register_tools(
 ) -> None:
     if allowed_tools is not None and not allowed_tools.issubset(ALL_TOOL_NAMES):
         raise ValueError("unknown_tool_allowlist")
-    enabled_tools = READ_TOOL_NAMES if read_only else ALL_TOOL_NAMES
+    enabled_tools = READ_TOOL_NAMES if read_only else READ_TOOL_NAMES | WRITE_TOOL_NAMES
     if allowed_tools is not None:
-        enabled_tools &= allowed_tools
+        enabled_tools = ALL_TOOL_NAMES & allowed_tools
     adapter = LocalMcpToolAdapter(service)
 
     def add_enabled_tool(function, *, name, description, annotations):
@@ -362,6 +405,15 @@ def register_tools(
             "list_ai_metadata_options",
             "List current AI visibility options and selectable AI target stable IDs.",
             read_annotations,
+        ),
+        (
+            adapter.create_note_submission,
+            "create_note_submission",
+            "Create one Gale note submission through the fixed actor. The request is "
+            "stored as an existing AI Center pending proposal for S to review; it never "
+            "directly creates a formal note under the Gale Tunnel profile. "
+            "Use idempotency_key as the stable retry key when available.",
+            write_annotations,
         ),
         (
             adapter.create_note,
@@ -463,3 +515,30 @@ def _operation_response(result: dict) -> OperationStatusResponse:
 
 def _log_safe_failure(tool_name: str, error: Exception) -> None:
     LOGGER.error("tool=%s failed kind=%s", tool_name, type(error).__name__)
+
+
+def _submission_location(
+    suggested_directory: str,
+    main_category: str | None,
+    sub_category: str | None,
+) -> tuple[str | None, str | None]:
+    clean_main = _optional_text(main_category)
+    clean_sub = _optional_text(sub_category)
+    if clean_main is not None or clean_sub is not None:
+        return clean_main, clean_sub
+    parts = [part.strip() for part in suggested_directory.split("/") if part.strip()]
+    if not parts:
+        return None, None
+    return parts[0], parts[1] if len(parts) > 1 else None
+
+
+def _optional_text(value: object) -> str | None:
+    clean = str(value or "").strip()
+    return clean or None
+
+
+def _optional_list(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    return cleaned or None

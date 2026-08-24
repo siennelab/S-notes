@@ -8,6 +8,38 @@ the isolated Package 5 protocol tests:
 .venv/bin/python -m unittest tests.test_package5_local_mcp_protocol -v
 ```
 
+## Gale Secure MCP Tunnel Candidate
+
+Use the dedicated Gale Tunnel stdio wrapper for ChatGPT / Secure MCP Tunnel:
+
+```bash
+/Users/s/Documents/项目/S-notes/scripts/run_snotes_gale_tunnel_mcp_stdio.sh
+```
+
+The wrapper fixes `SNOTES_MCP_ACTOR_TARGET_ID=gale` and exposes only the Gale v3
+product tools:
+
+- `search_notes`
+- `get_note`
+- `list_directories`
+- `list_tags`
+- `list_ai_metadata_options`
+- `create_note_submission`
+
+`create_note_submission` is a local projection onto the existing MCP create
+receipt path. It must return an AI Center pending proposal under actor `gale`;
+it must not directly create a formal note. Use `idempotency_key` as the stable
+retry key for one submission.
+
+The Secure MCP Tunnel command value for the candidate is:
+
+```text
+/Users/s/Documents/项目/S-notes/scripts/run_snotes_gale_tunnel_mcp_stdio.sh
+```
+
+S must complete the ChatGPT-side association and Actions refresh. Do not record
+Tunnel IDs, runtime keys, or other secrets in this repository.
+
 The Task 13A/13B material retained below records the historical R1 server. Its
 retired doctor, adapter, and fixture commands are not current operating
 instructions.

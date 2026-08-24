@@ -25,7 +25,10 @@ def build_server(config: RuntimeConfig) -> FastMCP:
         resolved_data_root=config.data_root,
         create_confirmation_required=(
             config.tool_allowlist is not None
-            and "create_note" in config.tool_allowlist
+            and (
+                "create_note" in config.tool_allowlist
+                or "create_note_submission" in config.tool_allowlist
+            )
         ),
     )
     mcp = FastMCP(
