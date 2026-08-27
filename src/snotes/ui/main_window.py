@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
@@ -45,6 +46,8 @@ from src.snotes.ui.theme import (
 
 
 CONFLICT_MESSAGE = "这篇笔记已被其他来源修改，请重新加载后处理。"
+LOGGER = logging.getLogger(__name__)
+
 
 class MainWindow(QMainWindow):
     AUTOSAVE_DELAY_MS = 1000
@@ -435,15 +438,35 @@ class MainWindow(QMainWindow):
         center = self.shell.reminder_center
         if center is None:
             return
+        tables = center.service.list_tables(
+            ReminderQuery(
+                query=center.search_query,
+                label_id=center.label_id,
+                ai_visibility=center.ai_visibility,
+            )
+        )
+        if (
+            self.current_mode == "smart_view"
+            and self.current_filter == "reminder"
+            and not center.trash_mode
+            and not center.search_query.strip()
+            and center.label_id is None
+            and center.ai_visibility == "all"
+            and center.selected_table_id is not None
+            and (
+                not tables
+                or center.selected_table_id not in {item.table.id for item in tables}
+            )
+        ):
+            LOGGER.warning(
+                "SIDEBAR_EMPTY_ROOT_CAUSE=UNCONFIRMED "
+                "selected_table_id=%s table_count=%s",
+                center.selected_table_id,
+                len(tables),
+            )
         self.shell.sidebar.set_reminder_filters(
             center.labels(),
-            center.service.list_tables(
-                ReminderQuery(
-                    query=center.search_query,
-                    label_id=center.label_id,
-                    ai_visibility=center.ai_visibility,
-                )
-            ),
+            tables,
             center.label_id,
             center.ai_visibility,
             center.selected_table_id,
@@ -722,7 +745,7 @@ class MainWindow(QMainWindow):
     def show_smart_view(self, name: str) -> None:
         self.shell.sidebar.clear_search()
         self.ai_materials_query = ""
-        if name != "reminder" and self.current_mode == "smart_view" and self.current_filter == name:
+        if self.current_mode == "smart_view" and self.current_filter == name:
             self.current_directory_path = ()
             self.show_directory()
             return

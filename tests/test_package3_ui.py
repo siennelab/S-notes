@@ -280,6 +280,34 @@ class Package3UiTests(unittest.TestCase):
             self.window.shell.main_content,
         )
 
+    def test_reminder_tab_toggles_back_to_directory_notes(self) -> None:
+        note = self.create_note("Reminder toggle note", "<p>虚构正文</p>")
+        sidebar = self.window.shell.sidebar
+        reminder_button = sidebar.smart_buttons["reminder"]
+
+        self.window.refresh_note_list(note.id)
+        reminder_button.click()
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+        self.assertEqual(self.window.current_mode, "smart_view")
+        self.assertEqual(self.window.current_filter, "reminder")
+
+        reminder_button.click()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.current_mode, "directory")
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+        self.assertEqual(sidebar.mode, "directory")
+        self.assertGreater(sidebar.note_list.count(), 0)
+        current_payload = sidebar.note_list.item(0).data(PAYLOAD_ROLE) or {}
+        self.assertEqual(current_payload.get("type"), "note")
+
     def test_note_selection_to_reminder_click_rebuilds_sidebar_without_crash(self) -> None:
         note_a = self.create_note("Reminder 切换 A", "<p>虚构正文 A</p>")
         note_b = self.create_note("Reminder 切换 B", "<p>虚构正文 B</p>")
