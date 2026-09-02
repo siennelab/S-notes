@@ -51,6 +51,7 @@ class Package4AiSafeReadCoreTests(unittest.TestCase):
             (
                 "common",
                 "gale",
+                "yan",
                 "clawbot",
                 "antigravity",
                 "claude-code",

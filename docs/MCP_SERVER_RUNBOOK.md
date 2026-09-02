@@ -8,6 +8,19 @@ the isolated Package 5 protocol tests:
 .venv/bin/python -m unittest tests.test_package5_local_mcp_protocol -v
 ```
 
+## Yan local Codex profile
+
+Use the dedicated local stdio wrapper for Yan:
+
+```bash
+/Users/s/Documents/项目/S-notes/scripts/run_snotes_yan_mcp_stdio.sh
+```
+
+The wrapper fixes `SNOTES_MCP_ACTOR_TARGET_ID=yan`, resolves the canonical
+S-notes data root, and projects the same note and Reminder tools as the current
+Clawbot profile. Tests may opt into an isolated temporary data root with
+`SNOTES_YAN_ALLOW_DATA_ROOT_OVERRIDE=1`; normal clients must not set it.
+
 ## Gale Secure MCP Tunnel Candidate
 
 Use the dedicated Gale Tunnel stdio wrapper for ChatGPT / Secure MCP Tunnel:

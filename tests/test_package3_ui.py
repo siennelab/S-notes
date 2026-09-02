@@ -877,7 +877,7 @@ class Package3UiTests(unittest.TestCase):
         self.assertLess(next(iter(first_row_y)), next(iter(second_row_y)))
         self.assertTrue(shell.ai_visibility_combo.isEnabled())
         self.assertTrue(shell.ai_targets_widget.isEnabled())
-        self.assertEqual(len(shell.ai_target_checks), 6)
+        self.assertEqual(len(shell.ai_target_checks), 7)
         self.assertIsInstance(shell.ai_visibility_combo, FloatingComboBox)
         self.assertIsInstance(shell.main_combo, FloatingComboBox)
         self.assertIsInstance(shell.sub_combo, FloatingComboBox)

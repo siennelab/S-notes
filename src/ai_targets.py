@@ -36,6 +36,7 @@ class AiTargetDefinition:
 AI_TARGET_DEFINITIONS = (
     AiTargetDefinition("common", "通用", "general", True),
     AiTargetDefinition("gale", "Gale", "gale"),
+    AiTargetDefinition("yan", "砚", "yan"),
     AiTargetDefinition("clawbot", "Clawbot", "clawbot"),
     AiTargetDefinition("antigravity", "Antigravity", "antigravity"),
     AiTargetDefinition("codex", "Codex", "codex"),

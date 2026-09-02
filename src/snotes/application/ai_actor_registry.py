@@ -20,12 +20,14 @@ class AiTargetDefinition:
 
 AI_TARGET_COMMON_ID = "common"
 AI_ACTOR_GALE_ID = "gale"
+AI_ACTOR_YAN_ID = "yan"
 
 # Append new identities with a new target_id. Retired identities stay registered
 # so persisted grants remain readable and can never be reassigned.
 AI_TARGET_REGISTRY = (
     AiTargetDefinition("common", "通用", "general", system=True),
     AiTargetDefinition(AI_ACTOR_GALE_ID, "Gale", "gale", aliases=("G经理",)),
+    AiTargetDefinition(AI_ACTOR_YAN_ID, "砚", "yan"),
     AiTargetDefinition(
         "clawbot",
         "Clawbot",
