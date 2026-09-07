@@ -3,6 +3,9 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from email.header import decode_header, make_header
+from http.client import HTTPConnection
+from unittest.mock import MagicMock, patch
 from contextlib import closing
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -28,6 +31,7 @@ from src.snotes.domain.reminders import (
 )
 from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
 
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -594,6 +598,37 @@ class ReminderR1Tests(unittest.TestCase):
         self.assertIsNone(self.service.history(reminder.id)[0].action_notified_at)
         self.assertEqual(self.service.dispatch_due_notifications(), 1)
         self.assertEqual(self.service.dispatch_due_notifications(), 0)
+
+    def test_scheduled_chinese_title_survives_http_header_encoding(self) -> None:
+        self.enable_notifications()
+        reminder = self.create("中文提醒", {"type": "one_time", "date": "2026-09-10"})
+        service = ReminderService(
+            self.repository,
+            transport=NtfyReminderTransport("https://ntfy.invalid"),
+            clock=self.clock,
+        )
+        requests = []
+
+        def serialize_request(request, **kwargs):
+            # Exercise stdlib's actual header encoder without opening a socket.
+            connection = HTTPConnection("ntfy.invalid")
+            connection.putrequest(request.get_method(), request.selector)
+            for name, value in request.header_items():
+                connection.putheader(name, value)
+            with patch.object(connection, "send"):
+                connection.endheaders(request.data)
+            requests.append(request)
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            return response
+
+        with patch("src.snotes.transport.reminder_ntfy.urlopen", side_effect=serialize_request):
+            self.assertEqual(service.run_scheduled_once(), 1)
+            self.assertEqual(service.run_scheduled_once(), 0)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(str(make_header(decode_header(requests[0].get_header("Title")))), "S-notes 提醒")
+        self.assertIn("中文提醒", requests[0].data.decode("utf-8"))
+        self.assertIsNotNone(service.history(reminder.id)[0].action_notified_at)
 
     def test_missed_action_recovery_and_deadline_compaction(self) -> None:
         self.clock.set(datetime(2026, 9, 1, 10, 0, tzinfo=SHANGHAI))

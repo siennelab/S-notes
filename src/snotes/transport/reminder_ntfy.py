@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from email.header import Header
 from urllib.parse import quote, urljoin
 from urllib.request import Request, urlopen
 
@@ -23,7 +24,8 @@ class NtfyReminderTransport(ReminderNotificationTransport):
             urljoin(self.endpoint, quote(clean_topic, safe="")),
             data=message.encode("utf-8"),
             headers={
-                "Title": title,
+                # ntfy accepts RFC 2047; urllib cannot encode Chinese headers.
+                "Title": Header(title, "utf-8").encode() if not title.isascii() else title,
                 "Tags": "bell",
             },
             method="POST",
