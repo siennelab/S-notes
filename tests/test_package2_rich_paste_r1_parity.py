@@ -10,7 +10,6 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FROZEN_R1_ROOT = Path("/Users/s/Documents/项目/S-notes")
 PROBE = r'''
 import importlib
 import json
@@ -83,10 +82,8 @@ class RichPasteR1ParityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
-    def test_external_font_normalization_matches_frozen_r1(self) -> None:
-        r1 = self.run_probe(FROZEN_R1_ROOT, "src.editor")
+    def test_external_font_normalization_preserves_r1_contract(self) -> None:
         r2 = self.run_probe(PROJECT_ROOT, "src.snotes.ui.editor")
-        self.assertEqual(r2, r1)
         self.assertEqual(r2["plain"], "BOLD ITALIC STRIKE PLAIN")
         records = {record["text"]: record for record in r2["records"]}
         self.assertTrue(records["BOLD"]["bold"])

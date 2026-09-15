@@ -68,7 +68,7 @@ class EditorDataIntegrityTest(unittest.TestCase):
         self.assertNotIn("#ff0000", html)
         self.assertNotIn("color:blue", html)
 
-    def test_malformed_external_blocks_fall_back_to_exact_plain_text(self) -> None:
+    def test_external_blocks_keep_semantics_without_extra_blank_lines(self) -> None:
         expected = "第一段 1、\n第二段 2、\n\n第三段 3、"
         mime = QMimeData()
         mime.setText(expected)
@@ -202,7 +202,7 @@ class EditorDataIntegrityTest(unittest.TestCase):
                 "inline_replace",
                 "<p>版本 1.0</p>",
                 "版本1.0",
-                "版本1.0",
+                "版本 1.0",
             ),
             (
                 "cross_overlap",

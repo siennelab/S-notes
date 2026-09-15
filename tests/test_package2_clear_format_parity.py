@@ -48,7 +48,7 @@ class NotesEditorClearFormatInsertionStateTest(unittest.TestCase):
         self.editor.insertFromMimeData(mime)
         self.assertEqual(
             self.editor.toPlainText(),
-            "Fictional Alpha\nFictional body\n\n",
+            "Fictional Alpha\nFictional body\n",
         )
         self.large_pixel_size = self._format_at(0).font().pixelSize()
         self.assertGreaterEqual(self.large_pixel_size, 26)

@@ -102,9 +102,7 @@ def select_paste_representation(
         plain_text, strip_list_prefixes=html_has_list
     )
     if html_semantic_lines == plain_semantic_lines:
-        if html_has_list:
-            return "html", normalized_html
-        return "plain", plain_text
+        return "html", normalized_html
     if _is_line_subsequence(plain_semantic_lines, html_semantic_lines):
         return "html", normalized_html
     if _is_line_subsequence(html_semantic_lines, plain_semantic_lines):
@@ -115,11 +113,8 @@ def select_paste_representation(
     plain_characters = _semantic_characters(
         plain_text, strip_list_prefixes=html_has_list
     )
-    if (
-        html_characters == plain_characters
-        and len(html_semantic_lines) == len(plain_semantic_lines)
-    ):
-        return "plain", plain_text
+    if html_characters == plain_characters:
+        return "html", normalized_html
     if (
         plain_characters
         and plain_characters in html_characters

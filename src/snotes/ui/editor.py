@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+import re
 
 from PySide6.QtCore import QMimeData, QSignalBlocker, Qt
 from PySide6.QtGui import (
@@ -39,6 +40,7 @@ from src.snotes.ui.theme import (
 
 QUOTE_BLOCK_PROPERTY = QTextFormat.UserProperty + 1
 CODE_BLOCK_PROPERTY = QTextFormat.UserProperty + 2
+INLINE_SELECTION_MIME = "application/x-snotes-inline-selection"
 ZERO_WIDTH_BLANK_CHARACTERS = frozenset("\u200b\u200c\u200d\u2060\ufeff")
 
 
@@ -358,6 +360,15 @@ class NotesEditor(QTextEdit):
         super().inputMethodEvent(event)
         self._normalize_current_input_format()
 
+    def createMimeDataFromSelection(self) -> QMimeData:
+        mime = super().createMimeDataFromSelection()
+        selected = self.textCursor().selectedText()
+        # Qt can prepend an empty paragraph to a partial list-item copy in
+        # BOTH HTML and plain text. Keep the actual selection intent as well.
+        if selected and not any(char in selected for char in "\n\u2028\u2029"):
+            mime.setData(INLINE_SELECTION_MIME, selected.encode("utf-8"))
+        return mime
+
     def insertFromMimeData(self, source: QMimeData) -> None:
         if self.isReadOnly() or not self.isEnabled():
             return
@@ -368,8 +379,20 @@ class NotesEditor(QTextEdit):
                     normalized_html, html_text = self._normalized_html_and_text(
                         safe_html
                     )
+                    source_text = self.sanitize_pasted_text(source.text())
+                    if source.hasFormat(INLINE_SELECTION_MIME):
+                        selected = bytes(source.data(INLINE_SELECTION_MIME)).decode("utf-8")
+                        if self._is_inline_paste(selected):
+                            fragment = re.sub(
+                                r'^\s*(<body>\s*)?<p style="-qt-paragraph-type:empty"><br></p>',
+                                r"\1", safe_html, count=1,
+                            )
+                            fragment_html, fragment_text = self._normalized_html_and_text(fragment)
+                            if fragment_text == selected:
+                                safe_html = fragment
+                                normalized_html, html_text = fragment_html, fragment_text
+                                source_text = selected
                     if source.hasText():
-                        source_text = self.sanitize_pasted_text(source.text())
                         representation, content = self._select_paste_representation(
                             normalized_html, html_text, source_text
                         )
@@ -377,17 +400,52 @@ class NotesEditor(QTextEdit):
                             if content:
                                 self.insertPlainText(content)
                             return
-                    self.insertHtml(normalized_html)
+                    cursor = self.textCursor()
+                    # A one-line fragment inside existing text must not import
+                    # its source list/heading/paragraph container.
+                    if self._is_inline_paste(html_text):
+                        inline_html = re.sub(
+                            r"(?is)</?(?:p|div|h[1-3]|ol|ul|li|blockquote|pre)\b[^>]*>",
+                            "", safe_html,
+                        )
+                        self.insertHtml(inline_html)
+                    else:
+                        cursor.beginEditBlock()
+                        try:
+                            first = cursor.block()
+                            empty_target = not first.text() and not cursor.hasSelection()
+                            self.insertHtml(normalized_html)
+                            if empty_target:
+                                # Qt insertHtml can drop the first pre block's
+                                # nonBreakableLines flag when merging it.
+                                pasted = QTextDocument()
+                                pasted.setHtml(safe_html)
+                                if pasted.firstBlock().blockFormat().nonBreakableLines():
+                                    block_format = first.blockFormat()
+                                    block_format.setNonBreakableLines(True)
+                                    QTextCursor(first).setBlockFormat(block_format)
+                        finally:
+                            cursor.endEditBlock()
                     return
 
             text = self.sanitize_pasted_text(source.text() if source.hasText() else "")
-            if text and self.looks_like_markdown(text):
+            if text and self.looks_like_markdown(text) and not self._is_inline_paste(text):
                 self.insertHtml(self.markdown_to_html(text))
             elif text:
                 self.insertPlainText(text)
         except Exception:
             if source.hasText():
                 self.insertPlainText(self.sanitize_pasted_text(source.text()))
+
+    def _is_inline_paste(self, text: str) -> bool:
+        cursor = self.textCursor()
+        block = cursor.block()
+        return bool(
+            block.text() and text
+            and not any(char in text for char in "\n\u2028\u2029")
+            and cursor.selectionStart() >= block.position()
+            and cursor.selectionEnd() < block.position() + block.length()
+        )
 
     def paste_plain_text(self) -> None:
         if self.isReadOnly() or not self.isEnabled():
@@ -514,17 +572,17 @@ class NotesEditor(QTextEdit):
         cursor = self.textCursor()
         if not cursor.hasSelection():
             cursor.select(QTextCursor.Document)
-        text = self.sanitize_pasted_text(cursor.selection().toPlainText())
         start = cursor.selectionStart()
+        end = cursor.selectionEnd()
         cursor.beginEditBlock()
         try:
-            cursor.insertText(text, self.clean_char_format())
-            end = cursor.position()
+            cursor.setCharFormat(self.clean_char_format())
             self.normalize_format_range(
                 start,
                 end,
                 normalize_block_chars=True,
             )
+            cursor.setPosition(end)
             self.setTextCursor(cursor)
             self.setCurrentCharFormat(self.clean_char_format())
         finally:
@@ -1290,6 +1348,15 @@ class NotesEditor(QTextEdit):
         document = QTextDocument()
         document.setDefaultFont(editor_document_font())
         document.setHtml(markup or "")
+        # Canonical paste data: Qt's implicit p/heading margins are source
+        # layout too. Do not let serialization resurrect them after clearing.
+        block = document.begin()
+        while block.isValid():
+            block_format = block.blockFormat()
+            block_format.setTopMargin(0)
+            block_format.setBottomMargin(0)
+            QTextCursor(block).setBlockFormat(block_format)
+            block = block.next()
         return (
             document.toHtml(),
             NotesEditor.sanitize_pasted_text(document.toPlainText()),
