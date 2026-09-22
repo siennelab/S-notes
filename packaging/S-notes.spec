@@ -27,10 +27,11 @@ analysis = Analysis(
     binaries=[],
     datas=[
         (str(SVG_DIR), "src/icons"),
+        (str(ROOT / "web/markdown-editor/dist"), "web/markdown-editor/dist"),
         (str(HELPER_BINARY), "bin"),
         (str(REMINDER_HELPER_BINARY), "bin"),
     ],
-    hiddenimports=["PySide6.QtSvg"],
+    hiddenimports=["PySide6.QtSvg", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

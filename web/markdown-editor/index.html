@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' qrc:; script-src 'self' qrc:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'" />
+  <title>S-notes Markdown Editor</title>
+</head>
+<body>
+<main>
+  <div id="status" role="status">正在启动编辑器…</div>
+  <nav id="toolbar" aria-label="格式工具栏"></nav>
+  <label class="link-field">链接 <input id="link-url" type="url" placeholder="https://…" aria-label="链接地址" /></label>
+  <div class="find-bar" role="search">
+    <input id="find" aria-label="查找" placeholder="查找文字" />
+    <button id="find-next">下一个</button>
+    <input id="replacement" aria-label="替换为" placeholder="替换为" />
+    <button id="replace">替换</button><button id="replace-all">全部替换</button>
+    <span id="find-status" role="status"></span>
+  </div>
+  <div class="panes">
+    <section><h2 class="panel-title">正文</h2><div id="editor"></div></section>
+    <aside><h2 class="panel-title">Raw Markdown · 只读</h2><textarea id="raw" readonly aria-label="Raw Markdown"></textarea></aside>
+  </div>
+</main>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

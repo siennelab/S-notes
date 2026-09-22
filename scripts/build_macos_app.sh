@@ -74,7 +74,7 @@ echo "Repository: $ROOT_DIR"
 [[ -f "$REMINDER_HELPER_SPEC_FILE" ]] || fail "Reminder helper PyInstaller spec not found: $REMINDER_HELPER_SPEC_FILE"
 [[ -f "$ICON_SOURCE" ]] || fail "Official icon source not found: $ICON_SOURCE"
 
-for command_name in sips iconutil file lipo otool codesign du find grep tr awk shasum; do
+for command_name in npm node sips iconutil file lipo otool codesign du find grep tr awk shasum; do
     require_command "$command_name"
 done
 [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy not found."
@@ -116,6 +116,10 @@ for warning_path in "$ROOT_DIR/backups" "$ROOT_DIR/S-notes-icon-1024.png" "$ROOT
         echo "WARNING: ignored local item will not enter the App: $warning_path"
     fi
 done
+
+echo "Building local Markdown editor assets..."
+(cd "$ROOT_DIR/web/markdown-editor" && npm ci --no-audit --no-fund && npm run build)
+[[ -f "$ROOT_DIR/web/markdown-editor/dist/index.html" ]] || fail "Markdown bundle index.html missing."
 
 safe_clean "$BUILD_DIR"
 safe_clean "$DIST_DIR"
@@ -234,6 +238,10 @@ while IFS= read -r -d '' candidate; do
         fi
     fi
 done < <(find "$APP_BUNDLE" -type f -print0)
+
+[[ -f "$APP_BUNDLE/Contents/Resources/web/markdown-editor/dist/index.html" ]] || fail "Bundled Markdown editor missing."
+[[ -n "$(find "$APP_BUNDLE" -type f -name QtWebEngineProcess -print -quit)" ]] || fail "QtWebEngineProcess missing."
+[[ -n "$(find "$APP_BUNDLE" -type f -name qtwebengine_resources.pak -print -quit)" ]] || fail "QtWebEngine resources missing."
 
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
