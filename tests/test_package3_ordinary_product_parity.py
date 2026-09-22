@@ -80,7 +80,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         note = self.notes.save_note(
             note.id,
             title=title,
-            content_html=body,
+            content_markdown=body,
             location=location,
             expected_revision=note.revision,
         )
@@ -272,7 +272,7 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
     def test_markdown_json_and_sqlite_backup_match_frozen_ordinary_shape(self) -> None:
         note = self.create_note(
             '导出:/测试?"',
-            "<p><strong>粗体</strong></p><ul><li>项目</li></ul>",
+            "**粗体**\n\n- 项目",
             NoteLocation("资料", "导出"),
             ("Alpha", "中文"),
         )

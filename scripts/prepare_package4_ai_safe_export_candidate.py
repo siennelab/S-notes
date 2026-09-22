@@ -48,7 +48,7 @@ def main() -> int:
         note = window.note_service.save_note(
             note.id,
             title=title,
-            content_html=f"<p>{body}</p>",
+            content_markdown=body,
             location=note.location,
             expected_revision=note.revision,
         )

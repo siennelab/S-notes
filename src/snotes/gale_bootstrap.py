@@ -19,7 +19,7 @@ from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.ports import GaleOutboxTransport, GalePublishTransport
 from src.snotes.application.tag_service import TagService
-from src.snotes.exporting.ordinary import html_to_text
+from src.snotes.domain.markdown import markdown_to_plain_text
 from src.snotes.storage.gale_mirror import SQLiteGaleMirrorWriter
 from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
@@ -90,7 +90,7 @@ def compose_gale_control(
         notes,
         AiSafeReadService(
             root / "config" / "local_redaction_rules.json",
-            body_renderer=html_to_text,
+            body_renderer=markdown_to_plain_text,
         ),
         SQLiteGaleMirrorWriter(),
         audit,

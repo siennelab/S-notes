@@ -561,7 +561,7 @@ domain 的 `markdown_to_plain_text()` 本身保持纯函数。
 建立第二正文 truth
 ```
 
-Package 2 必须在真实 83 篇副本规模上报告 search / relations 实际耗时，并确认 warm cache 下未变化笔记不会被重复解析。
+Package 2 使用约 83 篇、约 2.5 MB 的 synthetic/candidate 数据报告 search / relations 实际耗时，并确认 warm cache 下未变化笔记不会被重复解析。
 
 ---
 
@@ -577,10 +577,17 @@ Markdown 是内部正文真身，但**不是所有外部/AI 读取接口都改�
 
 ```text
 content_markdown
-→ AI-safe export .md
+→ markdown_to_plain_text()
+→ existing redaction
+→ safe plain text in .md container
 ```
 
 不再走旧 HTML → Markdown converter。
+
+Package 2 经 S 确认的窄范围修正：AI Safe Export 是派生安全产物，
+不保证原 Markdown 格式保真；正文先派生纯文本再脱敏，写入现有 `.md` 容器。
+普通 Markdown export 仍直接输出完整 `content_markdown`。
+不新增 source-position mapping、跨节点回写、第二 parser 或第二份正文。
 
 ### 10.3 Local MCP / Yan get/search / append 前置读
 
@@ -1129,7 +1136,7 @@ scripts/markdown_roundtrip_check.py
 ### AI / MCP / Gale
 
 ```text
-AI safe export → Markdown
+AI safe export → derived plain text → redaction → .md container
 MCP get/search/read → plain text
 Gale mirror → plain text
 redaction → plain text
@@ -1150,7 +1157,7 @@ se**cr**et
 
 ### 性能验证
 
-在正式 83 篇 DB 副本规模上报告：
+使用约 83 篇、约 2.5 MB 的 synthetic/candidate 数据报告（真实副本留 Package 3）：
 
 ```text
 cold search / relations timing
@@ -1423,7 +1430,10 @@ MIGRATION_DB_INTEGRITY_GATE=YES
 PLAIN_TEXT_DERIVED_CACHE=MEMORY_ONLY
 PERSISTED_CONTENT_TEXT=NO
 
-AI_SAFE_EXPORT=MARKDOWN
+AI_SAFE_EXPORT=PASS
+AI_SAFE_EXPORT_BODY=REDACTED_PLAIN_TEXT
+AI_SAFE_EXPORT_FORMAT_PRESERVATION=NOT_REQUIRED
+MARKDOWN_REDACTION_BYPASS=NO
 MCP_BODY_OUTPUT=PLAIN_TEXT
 GALE_MIRROR_BODY=PLAIN_TEXT
 REDACTION_INPUT=PLAIN_TEXT

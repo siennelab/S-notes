@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +23,16 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.application = QApplication.instance() or QApplication([])
 
+    def _close_window(self):
+        self.window.has_unsaved_changes = False
+        self.window.conflict_active = False
+        self.window.close()
+        deadline = time.monotonic() + 15
+        while (not self.window._close_ready or self.window.receipt_refresh_timer.isActive()) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertTrue(self.window._close_ready)
+        QTest.qWait(20)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
             prefix="snotes-r2-p8-final-ui-"
@@ -30,7 +41,7 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
         _application, self.window = build_application(
             [], data_root=Path(self.temporary.name) / "data"
         )
-        self.addCleanup(self.window.close)
+        self.addCleanup(self._close_window)
 
     def _trash_item(self, item_type: str, item_id: int):
         tree = self.window.shell.sidebar.trash_tree
@@ -49,6 +60,12 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
                 return match
         self.fail(f"trash item not found: {item_type}/{item_id}")
 
+    def _wait_loaded(self):
+        deadline = time.monotonic() + 15
+        while self.window.body_edit.state != 'loaded' and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertEqual(self.window.body_edit.state, 'loaded')
+
     def test_deleted_note_click_previews_full_content_without_writes(self) -> None:
         note = self.window.note_service.create_note(
             NoteLocation("项目", "Package 8")
@@ -56,7 +73,7 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
         note = self.window.note_service.save_note(
             note.id,
             title="虚构回收站预览",
-            content_html="<p>虚构完整正文</p>",
+            content_markdown="虚构完整正文",
             location=note.location,
             expected_revision=note.revision,
         )
@@ -80,10 +97,11 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
         )
         self.application.processEvents()
 
+        self._wait_loaded()
         shell = self.window.shell
         self.assertEqual(self.window.status_label.text(), "回收站中 · 只读")
         self.assertEqual(self.window.title_input.text(), "虚构回收站预览")
-        self.assertEqual(self.window.body_edit.toPlainText(), "虚构完整正文")
+        self.assertEqual(self.window.body_edit.latest_markdown.strip(), "虚构完整正文")
         self.assertIn("#preview", shell.metadata_summary_button.text())
         self.assertIn("项目 / Package 8", shell.metadata_summary_button.text())
         self.assertEqual(shell.ai_visibility_combo.currentData(), "redacted")
@@ -91,9 +109,8 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
 
         self.assertIsNone(self.window.current_note)
         self.assertTrue(self.window.title_input.isReadOnly())
-        self.assertTrue(self.window.body_edit.isReadOnly())
+        self.assertTrue(self.window.body_edit.read_only)
         self.assertTrue(shell.tags_input.isReadOnly())
-        self.assertFalse(shell.editor_toolbar.isEnabled())
         self.assertFalse(shell.main_combo.isEnabled())
         self.assertFalse(shell.sub_combo.isEnabled())
         self.assertFalse(shell.ai_visibility_combo.isEnabled())
@@ -106,26 +123,26 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
         self.assertFalse(shell.delete_button.isEnabled())
         self.assertFalse(self.window.save_timer.isActive())
         self.assertFalse(self.window.has_unsaved_changes)
-        self.assertFalse(self.window.body_edit.document().isModified())
+        self.assertFalse(self.window.body_edit.dirty)
 
         original_title = self.window.title_input.text()
-        original_body = self.window.body_edit.toPlainText()
+        original_body = self.window.body_edit.latest_markdown.strip()
         self.window.title_input.setFocus()
         QTest.keyClicks(self.window.title_input, "blocked")
         self.window.body_edit.setFocus()
         QTest.keyClicks(self.window.body_edit, "blocked")
         mime = QMimeData()
         mime.setText("blocked paste")
-        self.window.body_edit.insertFromMimeData(mime)
+        self.window.body_edit.bridge.markdownChanged("blocked paste", self.window.body_edit.current_load_id)
         self.application.processEvents()
         self.assertEqual(self.window.title_input.text(), original_title)
-        self.assertEqual(self.window.body_edit.toPlainText(), original_body)
+        self.assertEqual(self.window.body_edit.latest_markdown.strip(), original_body)
         self.assertTrue(self.window.save_current_note())
 
         after = self.window.note_service.get_note(note.id, include_deleted=True)
         self.assertEqual(after.revision, before.revision)
         self.assertEqual(after.updated_at, before.updated_at)
-        self.assertEqual(after.content_html, before.content_html)
+        self.assertEqual(after.content_markdown, before.content_markdown)
 
     def test_single_restore_returns_preview_to_editable_note(self) -> None:
         note = self.window.note_service.create_note()
@@ -135,13 +152,14 @@ class Package8FinalUiParityResidualTests(unittest.TestCase):
 
         self.window.restore_trash_items([note.id], [])
 
+        self._wait_loaded()
         restored = self.window.note_service.get_note(note.id)
         self.assertIsNotNone(restored)
         self.assertEqual(self.window.current_mode, "directory")
         self.assertEqual(self.window.current_note.id, note.id)
         self.assertFalse(self.window.title_input.isReadOnly())
-        self.assertFalse(self.window.body_edit.isReadOnly())
-        self.assertTrue(self.window.shell.editor_toolbar.isEnabled())
+        self.assertFalse(self.window.body_edit.read_only)
+        self.assertTrue(self.window.body_edit.can_save)
 
     def test_deleted_directory_click_only_toggles_tree(self) -> None:
         root = self.window.directory_service.create_directory("虚构删除目录")

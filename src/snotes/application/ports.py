@@ -114,7 +114,7 @@ class NotesRepository(Protocol):
         note_id: int,
         *,
         title: str,
-        content_html: str,
+        content_markdown: str,
         location: NoteLocation,
         expected_revision: int,
     ) -> Note: ...
@@ -332,7 +332,7 @@ class AiMcpOperationRepository(Protocol):
         actor_target_id: str,
         request_id: str,
         title: str,
-        content_html: str,
+        content_markdown: str,
         directory_id: int,
         location: NoteLocation,
         tags: Sequence[str],
@@ -350,7 +350,7 @@ class AiMcpOperationRepository(Protocol):
         operation_type: str,
         expected_revision: int,
         expected_updated_at: str,
-        addition_html: str = "",
+        addition_markdown: str = "",
         title: str | None = None,
         directory_id: int | None = None,
         location: NoteLocation | None = None,
@@ -361,7 +361,7 @@ class AiMcpOperationRepository(Protocol):
         self,
         *,
         receipt_id: int,
-        addition_html: str,
+        addition_markdown: str,
         accepted_body: str,
     ) -> dict: ...
 

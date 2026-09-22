@@ -195,7 +195,8 @@ try {
       for (const [key, value] of Object.entries(theme)) if (/^#[0-9a-f]{6}$/i.test(value)) document.documentElement.style.setProperty(`--${key.replaceAll('_', '-')}`, value);
       document.documentElement.style.colorScheme = theme.name === 'dark' ? 'dark' : 'light';
     },
-    setReadOnly(value) { readOnly = value; controls(); },
+    // Resume after an aborted close or a note-switch flush, using container state.
+    setReadOnly(value) { closing = false; readOnly = value; controls(); },
     async prepareClose() {
       await queue;
       await finishComposition();

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import closing
 
 from src.snotes.domain.reminders import DEFAULT_REMINDER_LABEL_NAME
-from src.snotes.storage.connection import SQLiteConnectionFactory
+from src.snotes.storage.connection import SQLiteConnectionFactory, require_markdown_database
+import sqlite3
 from src.snotes.storage.support import timestamp_seconds
 
 
@@ -15,7 +17,7 @@ CATEGORY_SCHEMA_VERSION = "2"
 REMINDER_SCHEMA_VERSION_KEY = "reminder_schema_version"
 REMINDER_SCHEMA_VERSION = "3"
 
-FROZEN_SCHEMA_STATEMENTS = (
+SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS directories (
         id INTEGER PRIMARY KEY,
@@ -36,8 +38,7 @@ FROZEN_SCHEMA_STATEMENTS = (
         revision INTEGER NOT NULL DEFAULT 1,
         directory_id INTEGER REFERENCES directories(id),
         title TEXT NOT NULL DEFAULT '',
-        body_rich_text TEXT NOT NULL DEFAULT '',
-        content_html TEXT NOT NULL DEFAULT '',
+        content_markdown TEXT NOT NULL DEFAULT '',
         main_category TEXT NOT NULL DEFAULT '临时',
         sub_category TEXT NOT NULL DEFAULT '无',
         tags TEXT NOT NULL DEFAULT '',
@@ -321,13 +322,24 @@ REMINDER_SCHEMA_STATEMENTS = (
 
 
 def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
-    """Create or migrate the R2 schema at an explicitly supplied path."""
+    """Create a Markdown database or maintain an already-marked R2 schema."""
     path = Path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Inspect existing files read-only, before ANY schema writes.
+    fresh = not path.exists()
+    if not fresh:
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as existing:
+            require_markdown_database(existing)
     connections = SQLiteConnectionFactory(path)
-    with connections.write() as connection:
-        for statement in FROZEN_SCHEMA_STATEMENTS:
+    # Fresh initialization is the only path that may open before the marker exists.
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        for statement in SCHEMA_STATEMENTS:
             connection.execute(statement)
+        if fresh:
+            connection.execute("INSERT INTO schema_meta VALUES ('body_format', 'markdown')")
         _migrate_two_level_category_schema(connection)
         _migrate_reminder_schema(connection)
         count = int(connection.execute("SELECT COUNT(*) FROM directories").fetchone()[0])

@@ -23,8 +23,7 @@ from PySide6.QtWidgets import (
 
 from src.snotes.application.reminder_service import ReminderService
 from src.snotes.domain.tags import parse_tags
-from src.snotes.ui.editor import NotesEditor
-from src.snotes.ui.editor_toolbar import EditorToolbar
+from src.snotes.ui.markdown_editor import MarkdownEditorWidget
 from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.link_drawer import LinkDrawer
 from src.snotes.ui.reminder_center import ReminderCenter
@@ -65,10 +64,7 @@ class SnotesShell(QWidget):
         self._build_title(editor_layout)
         self._build_metadata(editor_layout)
 
-        self.body_editor = NotesEditor()
-        self.body_editor.setPlaceholderText("写正文")
-        self.editor_toolbar = EditorToolbar(self.body_editor)
-        editor_layout.addWidget(self.editor_toolbar)
+        self.body_editor = MarkdownEditorWidget()
         editor_layout.addSpacing(8)
         editor_layout.addWidget(self.body_editor, stretch=1)
         self.empty_label = QLabel("新建或选择一篇笔记开始编辑")
@@ -396,7 +392,6 @@ class SnotesShell(QWidget):
             button.setIcon(themed_icon(str(button.property("iconFile"))))
         self.metadata_collapse_button.setIcon(themed_icon("chevron-up.svg"))
         apply_selection_palette(self.body_editor)
-        apply_selection_palette(self.body_editor.viewport())
         if self.reminder_center is not None:
             self.reminder_center.refresh_theme()
 
@@ -414,19 +409,13 @@ class SnotesShell(QWidget):
             self.sidebar.note_list.viewport(),
             self.sidebar.trash_tree,
             self.sidebar.trash_tree.viewport(),
-            self.editor_toolbar,
-            *self.editor_toolbar.toolbar_rows,
-            *self.editor_toolbar.toolbar_groups,
-            self.editor_toolbar.find_panel,
             self.body_editor,
-            self.body_editor.viewport(),
             self.empty_label,
             self.status_label,
         )
         for widget in widgets:
             self._make_surface_child_transparent(widget)
         apply_selection_palette(self.body_editor)
-        apply_selection_palette(self.body_editor.viewport())
 
     def set_editor_available(self, available: bool) -> None:
         for widget in (
@@ -434,7 +423,6 @@ class SnotesShell(QWidget):
             self.title_separator,
             self.metadata_section,
             self.delete_button,
-            self.editor_toolbar,
             self.body_editor,
         ):
             widget.setVisible(available)
@@ -460,7 +448,6 @@ class SnotesShell(QWidget):
         for checkbox in self.ai_target_checks.values():
             checkbox.setEnabled(editable and self.ai_metadata_configured)
         for widget in (
-            self.editor_toolbar,
             self.metadata_summary_button,
             self.metadata_panel,
             self.pin_button,

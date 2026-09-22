@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 from dataclasses import dataclass
 from enum import Enum
 
@@ -222,7 +221,7 @@ class AiReceiptInboxService:
                 raise ValueError("回执中的 AI 身份未知或不可用。")
             result = self.mcp_accept_pending_append(
                 receipt_id=receipt.id,
-                addition_html=self._plain_text_to_html(fields.body),
+                addition_markdown=fields.body,
                 accepted_body=fields.body,
             )
             if result["status"] == "conflict":
@@ -259,7 +258,7 @@ class AiReceiptInboxService:
 
         command = AiReceiptAcceptCommand(
             title=fields.title.strip() or "未命名 AI 回执",
-            content_html=self._plain_text_to_html(fields.body),
+            content_markdown=fields.body,
             location=location,
             tags=tags_value,
             visibility=visibility,
@@ -376,7 +375,3 @@ class AiReceiptInboxService:
                     seen.add(target_id)
                     target_ids.append(target_id)
         return target_ids
-
-    @staticmethod
-    def _plain_text_to_html(value: str) -> str:
-        return "<p>" + html.escape(value or "").replace("\n", "<br>") + "</p>"

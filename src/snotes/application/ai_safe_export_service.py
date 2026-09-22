@@ -70,7 +70,7 @@ class AiSafeExportService:
             source = AiSafeReadSource(
                 note_id=note.id,
                 title=note.title,
-                content=note.content_html,
+                content=note.content_markdown,
                 visibility=note.ai_visibility,
                 targets=tuple(target_ids),
                 directory=" / ".join(note.location.values()),

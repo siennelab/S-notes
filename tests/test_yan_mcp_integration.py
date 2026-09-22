@@ -118,7 +118,7 @@ class YanMcpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         note = self.notes.save_note(
             note.id,
             title=title,
-            content_html=f"<p>{body}</p>",
+            content_markdown=body,
             location=location,
             expected_revision=note.revision,
         )
@@ -349,7 +349,7 @@ class YanMcpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.notes.save_note(
                 current.id,
                 title=current.title,
-                content_html=current.content_html + "<p>external change</p>",
+                content_markdown=current.content_markdown + "<p>external change</p>",
                 location=current.location,
                 expected_revision=current.revision,
             )

@@ -771,7 +771,7 @@ def register_tools(
         (
             adapter.create_note,
             "create_note",
-            "Request a plain-text note with optional AI visibility, AI targets, category, "
+            "Request a Markdown note with optional AI visibility, AI targets, category, "
             "subcategory, and tags metadata. "
             "A restricted server profile may place the request in AI Center for human "
             "confirmation before the formal note is created. "
@@ -781,7 +781,7 @@ def register_tools(
         (
             adapter.prepend_note,
             "prepend_note",
-            "Prepend plain text without replacing or deleting existing body content. Supply the "
+            "Prepend Markdown without replacing or deleting existing body content. Supply the "
             "version returned by get_note (preferred), or its legacy updated_at credential. "
             + WRITE_RULES,
             write_annotations,
@@ -789,7 +789,7 @@ def register_tools(
         (
             adapter.append_note,
             "append_note",
-            "Append plain text without replacing or deleting existing body content. Supply the "
+            "Append Markdown without replacing or deleting existing body content. Supply the "
             "version returned by get_note (preferred), or its legacy updated_at credential. "
             + WRITE_RULES,
             write_annotations,

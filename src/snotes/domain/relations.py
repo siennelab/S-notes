@@ -4,52 +4,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from html.parser import HTMLParser
+from src.snotes.domain.markdown import markdown_to_plain_text
 
 from src.snotes.domain.models import Note
 from src.snotes.domain.tags import parse_tags
 
 
 WIKI_LINK_RE = re.compile(r"\[\[\s*([^\[\]\n]+?)\s*\]\]")
-
-
-class PlainTextParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-        self.skip_depth = 0
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        clean_tag = tag.lower()
-        if clean_tag in {"head", "style", "script"}:
-            self.skip_depth += 1
-        elif not self.skip_depth and clean_tag in {
-            "br", "p", "div", "li", "tr", "h1", "h2", "h3"
-        }:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        clean_tag = tag.lower()
-        if clean_tag in {"head", "style", "script"} and self.skip_depth:
-            self.skip_depth -= 1
-        elif not self.skip_depth and clean_tag in {
-            "p", "div", "li", "tr", "h1", "h2", "h3"
-        }:
-            self.parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        if not self.skip_depth:
-            self.parts.append(data)
-
-    def text(self) -> str:
-        return re.sub(r"\s+", " ", "".join(self.parts)).strip()
-
-
-def html_to_visible_text(value: str) -> str:
-    parser = PlainTextParser()
-    parser.feed(value or "")
-    parser.close()
-    return parser.text()
 
 
 def extract_manual_reference_titles(text: str) -> list[str]:
@@ -70,14 +31,15 @@ class RelatedNote:
     reasons: tuple[str, ...]
 
 
-def build_related_notes(current_note_id: int | None, notes: list[Note]) -> list[RelatedNote]:
+def build_related_notes(current_note_id: int | None, notes: list[Note], text_by_id: dict[int, str] | None = None) -> list[RelatedNote]:
     if current_note_id is None:
         return []
     current = next((note for note in notes if note.id == current_note_id), None)
     if current is None:
         return []
     candidates = [note for note in notes if note.id != current_note_id]
-    text_by_id = {note.id: html_to_visible_text(note.content_html) for note in notes}
+    if text_by_id is None:
+        text_by_id = {note.id: markdown_to_plain_text(note.content_markdown) for note in notes}
     reasons_by_id: dict[int, list[str]] = {}
 
     def add(note: Note, reason: str) -> None:

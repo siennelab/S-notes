@@ -62,7 +62,7 @@ class AiReceiptInboxItem:
 @dataclass(frozen=True, slots=True)
 class AiReceiptAcceptCommand:
     title: str
-    content_html: str
+    content_markdown: str
     location: NoteLocation
     tags: tuple[str, ...]
     visibility: str

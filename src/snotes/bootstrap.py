@@ -20,8 +20,7 @@ from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.export_service import ExportService
 from src.snotes.application.tag_service import TagService
 from src.snotes.exporting.ordinary import OrdinaryExportWriter
-from src.snotes.exporting.ordinary import html_to_markdown
-from src.snotes.exporting.ordinary import html_to_text
+from src.snotes.domain.markdown import markdown_to_plain_text
 from src.snotes.exporting.ai_safe import AiSafePackageWriter
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
@@ -86,7 +85,7 @@ def build_application(
         notes,
         AiSafeReadService(
             root / "config" / "local_redaction_rules.json",
-            body_renderer=html_to_markdown,
+            body_renderer=markdown_to_plain_text,
         ),
         AiSafePackageWriter(root / "exports" / "ai_readbox"),
         ai_audit_service,
@@ -114,6 +113,7 @@ def build_application(
         gale_control_service=gale_control_service,
         reminder_service=reminder_service,
     )
+    application.aboutToQuit.connect(window.body_edit.page.deleteLater)
     return application, window
 
 
@@ -168,7 +168,7 @@ def build_local_mcp_service(
         ai_metadata=ai_metadata,
         safe_reads=AiSafeReadService(
             root / "config" / "local_redaction_rules.json",
-            body_renderer=html_to_text,
+            body_renderer=markdown_to_plain_text,
         ),
         audit=audit,
         receipt_inbox=receipt_inbox,

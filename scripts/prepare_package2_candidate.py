@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from src.snotes.migration.legacy_qt import legacy_qt_html_to_markdown
 from src.snotes.application.note_service import NoteService
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
@@ -72,12 +73,12 @@ def prepare(data_root: Path) -> tuple[Path, int]:
             ),
         ),
     )
-    for title, content_html in fictional:
+    for title, content_markdown in fictional:
         note = notes.create_note()
         notes.save_note(
             note.id,
             title=title,
-            content_html=content_html,
+            content_markdown=legacy_qt_html_to_markdown(content_markdown).markdown,
             location=note.location,
             expected_revision=note.revision,
         )

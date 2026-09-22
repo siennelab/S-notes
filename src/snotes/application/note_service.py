@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from src.snotes.application.ai_actor_registry import resolve_target_id
 from src.snotes.application.ai_safe_read_service import AI_VISIBILITY_VALUES
 from src.snotes.application.ports import NotesRepository
+from src.snotes.application.derived_text_cache import DerivedTextCache
 from src.snotes.domain.models import Note, NoteLocation, location_matches_directory_prefix
 from src.snotes.domain.relations import RelatedNote, build_related_notes
 from src.snotes.domain.search_query import match_search_fields, parse_search_query
@@ -16,6 +17,7 @@ from src.snotes.domain.tags import normalize_tag, parse_tags
 class NoteService:
     def __init__(self, notes: NotesRepository) -> None:
         self._notes = notes
+        self.derived_text = DerivedTextCache()
 
     def create_note(self, location: NoteLocation | None = None) -> Note:
         return self._notes.create(location or NoteLocation())
@@ -54,7 +56,7 @@ class NoteService:
             match = match_search_fields(
                 parsed,
                 title=note.title,
-                body=note.content_html,
+                body=self.derived_text.get(note),
                 directory=" / ".join(note.location.values()),
                 tags=(note.tags, *parse_tags(note.tags)),
             )
@@ -135,7 +137,7 @@ class NoteService:
             match = match_search_fields(
                 parsed,
                 title=note.title,
-                body=note.content_html,
+                body=self.derived_text.get(note),
                 directory=" / ".join(note.location.values()),
                 tags=(note.tags, *parse_tags(note.tags)),
             )
@@ -150,21 +152,22 @@ class NoteService:
         return [note for _score, note in matches]
 
     def related_notes(self, note_id: int | None) -> list[RelatedNote]:
-        return build_related_notes(note_id, self._notes.list_active())
+        notes = self._notes.list_active()
+        return build_related_notes(note_id, notes, {note.id: self.derived_text.get(note) for note in notes})
 
     def save_note(
         self,
         note_id: int,
         *,
         title: str,
-        content_html: str,
+        content_markdown: str,
         location: NoteLocation,
         expected_revision: int,
     ) -> Note:
         return self._notes.save(
             note_id,
             title=title,
-            content_html=content_html,
+            content_markdown=content_markdown,
             location=location,
             expected_revision=expected_revision,
         )

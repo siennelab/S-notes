@@ -98,7 +98,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.note = self.notes.save_note(
             created.id,
             title="Fictional audit note",
-            content_html="<p>FICTIONAL_NOTE_BODY_CANARY</p>",
+            content_markdown="<p>FICTIONAL_NOTE_BODY_CANARY</p>",
             location=created.location,
             expected_revision=created.revision,
         )
@@ -231,7 +231,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         before_count = len(self.notes.list_active_notes())
         fields = AiReceiptAcceptFields(
             title="Accepted fictional note",
-            body="Line one\n<script>fictional</script>",
+            body="# Heading\n\n这是 **重点**\n\n- item",
             main_category="项目",
             sub_category="验收",
             tags="One, #two，one",
@@ -251,8 +251,8 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         note = self.notes.get_note(accepted.note.id)
         self.assertEqual(note.title, "Accepted fictional note")
         self.assertEqual(
-            note.content_html,
-            "<p>Line one<br>&lt;script&gt;fictional&lt;/script&gt;</p>",
+            note.content_markdown,
+            "# Heading\n\n这是 **重点**\n\n- item",
         )
         self.assertEqual(note.location, NoteLocation("项目", "验收"))
         self.assertEqual(self.tags.get_note_tags(note.id), ["one", "two"])

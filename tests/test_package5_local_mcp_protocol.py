@@ -156,7 +156,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         note = self.notes.save_note(
             note.id,
             title=title,
-            content_html=f"<p>{body}</p>",
+            content_markdown=body,
             location=location,
             expected_revision=note.revision,
         )
@@ -1037,7 +1037,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(accepted.created)
             self.assertEqual(len(self.notes.list_active_notes()), formal_before + 1)
             self.assertEqual(accepted.note.title, "Clawde fictional pending")
-            self.assertEqual(accepted.note.content_html, "<p>fictional base body</p>")
+            self.assertEqual(accepted.note.content_markdown, "fictional base body")
             self.assertEqual(receipt_service.list_pending_receipts(), [])
 
             found = await self.call(
@@ -1203,7 +1203,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.notes.save_note(
                 current_note.id,
                 title=current_note.title,
-                content_html=current_note.content_html + "<p>external change</p>",
+                content_markdown=current_note.content_markdown + "<p>external change</p>",
                 location=current_note.location,
                 expected_revision=current_note.revision,
             )

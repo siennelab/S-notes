@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
@@ -20,6 +22,16 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def _close_window(self):
+        self.window.has_unsaved_changes = False
+        self.window.conflict_active = False
+        self.window.close()
+        deadline = time.monotonic() + 15
+        while (not self.window._close_ready or self.window.receipt_refresh_timer.isActive()) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertTrue(self.window._close_ready)
+        QTest.qWait(20)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
             prefix="snotes-r2-package4-ai-center-ui-"
@@ -27,7 +39,7 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
         _application, self.window = build_application([], data_root=self.data_root)
-        self.addCleanup(self.window.close)
+        self.addCleanup(self._close_window)
         self.connections = SQLiteConnectionFactory(self.data_root / "s_notes.db")
 
     def test_pending_detail_accept_and_processed_refresh_stay_in_one_window(self) -> None:
@@ -76,7 +88,7 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.assertEqual(receipt.status, "accepted")
         note = self.window.note_service.get_note(receipt.note_id)
         self.assertEqual(note.title, "Accepted from UI")
-        self.assertEqual(note.content_html, "<p>UI line one<br>UI line two</p>")
+        self.assertEqual(note.content_markdown, "UI line one\nUI line two")
         self.assertEqual(note.main_category, "项目")
         self.assertEqual(note.sub_category, "UI验收")
         self.assertIn(note.id, [item.id for item in self.window.visible_notes])

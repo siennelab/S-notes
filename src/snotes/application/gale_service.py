@@ -114,7 +114,7 @@ class GaleMirrorService:
             source = AiSafeReadSource(
                 note_id=note.id,
                 title=note.title,
-                content=note.content_html,
+                content=note.content_markdown,
                 visibility=stored.ai_visibility,
                 targets=tuple(target_ids),
                 directory=" / ".join(note.location.values()),

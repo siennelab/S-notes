@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import html
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -139,7 +138,7 @@ class LocalMcpWriteService:
                 actor_target_id=self.actor_target_id,
                 request_id=request_id,
                 title=clean_title,
-                content_html=_plain_text_to_html(content),
+                content_markdown=content,
                 directory_id=target_directory_id,
                 location=location,
                 tags=clean_tags,
@@ -317,8 +316,8 @@ class LocalMcpWriteService:
                 operation_type=operation_type,
                 expected_revision=note.revision,
                 expected_updated_at=note.updated_at,
-                addition_html=(
-                    _plain_text_to_html(content)
+                addition_markdown=(
+                    content
                     if operation_type in {"prepend", "append"}
                     else ""
                 ),
@@ -340,7 +339,7 @@ class LocalMcpWriteService:
         source = AiSafeReadSource(
             note_id=note.id,
             title=note.title,
-            content=note.content_html,
+            content=note.content_markdown,
             visibility=metadata.visibility,
             targets=metadata.target_ids,
             directory=" / ".join(note.location.values()),
@@ -482,8 +481,6 @@ def note_version_token(note_id: int, updated_at: str) -> str:
     return "snotes-v1-" + hashlib.sha256(material).hexdigest()
 
 
-def _plain_text_to_html(value: str) -> str:
-    return "<p>" + html.escape(value or "").replace("\n", "<br>") + "</p>"
 
 
 def _credential_supplied(

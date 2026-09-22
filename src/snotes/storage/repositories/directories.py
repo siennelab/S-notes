@@ -25,7 +25,7 @@ SELECT id, name, parent_id, sort_order, created_at, updated_at,
 FROM directories
 """
 TRASH_NOTE_SELECT = """
-SELECT id, note_uuid, revision, directory_id, title, content_html,
+SELECT id, note_uuid, revision, directory_id, title, content_markdown,
        main_category, sub_category, tags, ai_visibility,
        is_pinned, is_deleted, created_at, updated_at, deleted_at, trash_group_id
 FROM notes

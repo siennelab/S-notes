@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from html import unescape
 from collections.abc import Callable, Sequence
 
 from src.snotes.application.ports import (
@@ -179,18 +178,17 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
             cursor = connection.execute(
                 """
                 INSERT INTO notes (
-                    note_uuid, revision, directory_id, title, body_rich_text,
-                    content_html, main_category, sub_category,
+                    note_uuid, revision, directory_id, title,
+                    content_markdown, main_category, sub_category,
                     tags, ai_visibility, is_pinned, is_deleted, created_at,
                     updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
                 """,
                 (
                     note_uuid,
                     directory_id,
                     command.title,
-                    command.content_html,
-                    command.content_html,
+                    command.content_markdown,
                     main,
                     sub,
                     command.visibility,
@@ -344,7 +342,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 ", ".join(command.tags),
                 command.visibility,
                 ", ".join(command.target_ids),
-                _plain_text_from_html(command.content_html),
+                command.content_markdown,
                 note_id,
                 note_uuid,
                 result_status,
@@ -456,12 +454,6 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
         if row is None:
             raise RuntimeError("写入 AI 回执后读取失败。")
         return _receipt_from_row(row)
-
-
-def _plain_text_from_html(value: str) -> str:
-    if value.startswith("<p>") and value.endswith("</p>"):
-        value = value[3:-4]
-    return unescape(value.replace("<br>", "\n"))
 
 
 def _receipt_from_row(row) -> AiReceiptInboxItem:

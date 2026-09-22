@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +22,16 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def _close_window(self):
+        self.window.has_unsaved_changes = False
+        self.window.conflict_active = False
+        self.window.close()
+        deadline = time.monotonic() + 15
+        while (not self.window._close_ready or self.window.receipt_refresh_timer.isActive()) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertTrue(self.window._close_ready)
+        QTest.qWait(20)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
             prefix="snotes-r2-package4-safe-export-"
@@ -28,7 +39,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
         _application, self.window = build_application([], data_root=self.data_root)
-        self.addCleanup(self.window.close)
+        self.addCleanup(self._close_window)
         self.rules_path = (
             self.data_root / "config" / "local_redaction_rules.json"
         )
@@ -57,7 +68,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         note = self.window.note_service.save_note(
             note.id,
             title=title,
-            content_html=f"<p>{body}</p>",
+            content_markdown=body,
             location=note.location,
             expected_revision=note.revision,
         )
@@ -68,6 +79,23 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         )
         self.window.ai_access_metadata_service.set_note_targets(note.id, targets)
         return self.window.note_service.get_note(note.id)
+
+    def test_markdown_formats_cannot_bypass_safe_export(self):
+        bodies = ['Se**cret**Canary', '*Secret*Canary', ':size[SecretCanary]{size="20"}', '[SecretCanary](https://example.com)', '`SecretCanary`']
+        for index, body in enumerate(bodies):
+            self.add_note(f'format {index}', body=body, visibility='redacted', targets=('gale',))
+        plan = self.window.ai_safe_export_service.build_plan('gale')
+        self.assertEqual(plan.note_count, 5)
+        for note in plan.rendered_notes:
+            self.assertTrue(note.markdown.endswith('[MASKED]'))
+            self.assertNotIn('SecretCanary', note.markdown)
+            self.assertEqual(note.transform_count, 1)
+        outcome = self.window.ai_safe_export_service.export('gale', confirm_sensitive=lambda _plan: True)
+        self.assertEqual(outcome.status, 'exported')
+        files = list(outcome.result.package_dir.rglob('*.md'))
+        self.assertEqual(len(files), 5)
+        for path in files:
+            self.assertTrue(path.read_text(encoding='utf-8').rstrip().endswith('[MASKED]'))
 
     def test_gale_package_authorizes_materializes_scans_and_does_not_mutate(self) -> None:
         common = self.add_note(
@@ -347,7 +375,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         center = self.window.ai_center_dialog
         self.assertEqual(
             [center.tabs.tabText(index) for index in range(center.tabs.count())],
-            ["待确认 / 已处理", "调用记录"],
+            ["待确认 / 已处理", "笔记调用记录", "提醒操作记录"],
         )
         center.tabs.setCurrentWidget(center.log_page)
         self.app.processEvents()

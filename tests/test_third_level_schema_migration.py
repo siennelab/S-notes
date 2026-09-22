@@ -43,7 +43,7 @@ class ThirdLevelSchemaMigrationTests(unittest.TestCase):
         note = notes.save_note(
             note.id,
             title="FICTIONAL MIGRATION NOTE",
-            content_html="<p>FICTIONAL MIGRATION BODY</p>",
+            content_markdown="<p>FICTIONAL MIGRATION BODY</p>",
             location=NoteLocation("虚构主分类", "虚构子分类"),
             expected_revision=note.revision,
         )

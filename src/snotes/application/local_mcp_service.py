@@ -573,7 +573,7 @@ class LocalMcpService:
         source = AiSafeReadSource(
             note_id=note.id,
             title=note.title,
-            content=note.content_html,
+            content=note.content_markdown,
             visibility=metadata.visibility,
             targets=metadata.target_ids,
             directory=" / ".join(note.location.values()),

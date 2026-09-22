@@ -9,6 +9,7 @@ from pathlib import Path
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
+from src.snotes.migration.legacy_qt import legacy_qt_html_to_markdown
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
@@ -42,7 +43,7 @@ def prepare(data_root: Path) -> tuple[Path, int, int, int]:
         note = notes.save_note(
             note.id,
             title=title,
-            content_html=body,
+            content_markdown=legacy_qt_html_to_markdown(body).markdown,
             location=location,
             expected_revision=note.revision,
         )

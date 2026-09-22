@@ -718,8 +718,8 @@ class ReminderR1Tests(unittest.TestCase):
             connection.execute(
                 """
                 INSERT INTO notes (
-                    title, body_rich_text, content_html, created_at, updated_at
-                ) VALUES ('FICTIONAL_EXISTING_NOTE', '', '<p>safe</p>', '2026-01-01', '2026-01-01')
+                    title, content_markdown, created_at, updated_at
+                ) VALUES ('FICTIONAL_EXISTING_NOTE', 'safe', '2026-01-01', '2026-01-01')
                 """
             )
             connection.commit()
@@ -738,9 +738,10 @@ class ReminderR1Tests(unittest.TestCase):
 
     def test_reminder_v1_migration_assigns_default_table_and_preserves_items(self) -> None:
         old_path = Path(self.temporary.name) / "old-reminder.db"
+        initialize_database(old_path)
         with closing(sqlite3.connect(old_path)) as connection:
-            connection.execute("CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, meta_value TEXT NOT NULL)")
-            connection.execute("CREATE TABLE app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            connection.execute("DROP TABLE reminder_occurrences")
+            connection.execute("DROP TABLE reminders")
             connection.execute(
                 """
                 CREATE TABLE reminders (

@@ -40,7 +40,7 @@ class Note:
     revision: int
     directory_id: int | None
     title: str
-    content_html: str
+    content_markdown: str
     main_category: str
     sub_category: str
     tags: str

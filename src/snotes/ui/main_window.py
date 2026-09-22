@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
@@ -39,6 +40,7 @@ from src.snotes.ui.reminder_center import ReminderLabelManagerDialog
 from src.snotes.ui.shell import SnotesShell
 from src.snotes.ui.theme import (
     apply_theme,
+    current_theme,
     load_saved_theme,
     normalize_theme_name,
     save_theme,
@@ -134,6 +136,7 @@ class MainWindow(QMainWindow):
         application = QApplication.instance()
         if application is not None:
             apply_theme(application, self.current_theme_name)
+        self.body_edit.setTheme(current_theme())
         self.shell.enforce_single_surface_backgrounds()
         self.shell.sidebar.set_current_theme(self.current_theme_name)
         self.shell.refresh_theme_icons()
@@ -192,7 +195,12 @@ class MainWindow(QMainWindow):
                 self.send_reminder_test_notification
             )
         self.title_input.textChanged.connect(self.mark_note_dirty)
-        self.body_edit.textChanged.connect(self.mark_note_dirty)
+        self.body_edit.changed.connect(self._markdown_changed)
+        self.body_edit.loaded.connect(self._markdown_loaded)
+        self.body_edit.closeReady.connect(self._editor_close_ready)
+        self._pending_switch = None
+        self._close_ready = False
+        self._close_pending = False
         self.shell.tags_input.textChanged.connect(self.mark_note_dirty)
         for combo in (self.shell.main_combo, self.shell.sub_combo):
             combo.currentTextChanged.connect(self._location_changed)
@@ -476,11 +484,11 @@ class MainWindow(QMainWindow):
         if self.current_note is not None and note_id == self.current_note.id:
             self._enter_note_navigation_mode()
             return
-        if not self.force_save_current_note():
-            self._restore_sidebar_selection()
+        if self._close_pending:
             return
-        self._enter_note_navigation_mode()
-        self.load_note(note_id)
+        # Reuse the composition/change delivery barrier before saving old note.
+        self._pending_switch = note_id
+        self.body_edit.prepareClose()
 
     def _enter_note_navigation_mode(self) -> None:
         if self.current_mode == "smart_view" and self.current_filter == "reminder":
@@ -508,8 +516,7 @@ class MainWindow(QMainWindow):
         try:
             self.current_note = note
             self.title_input.setText(note.title)
-            self.body_edit.set_note_content(note.content_html)
-            self.body_edit.document().setModified(False)
+            self.body_edit.setMarkdown(note.content_markdown, uuid.uuid4().hex)
             self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
             populate_location_controls(self.shell, note, self.directory_service)
             if metadata is not None:
@@ -553,8 +560,7 @@ class MainWindow(QMainWindow):
         try:
             self.current_note = None
             self.title_input.setText(note.title)
-            self.body_edit.set_note_content(note.content_html)
-            self.body_edit.document().setModified(False)
+            self.body_edit.setMarkdown(note.content_markdown, uuid.uuid4().hex)
             self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
             populate_location_controls(self.shell, note, self.directory_service)
             if metadata is not None:
@@ -575,6 +581,27 @@ class MainWindow(QMainWindow):
         finally:
             self.is_loading_note = False
         return True
+
+    def _markdown_loaded(self, _load_id: str, _markdown: str) -> None:
+        # Canonicalization establishes the baseline; it never causes a save.
+        if self.has_unsaved_changes:
+            self.save_timer.start(self.AUTOSAVE_DELAY_MS)
+
+    def _markdown_changed(self, _markdown: str, _load_id: str) -> None:
+        if self.current_note is None:
+            return
+        metadata_changed = (
+            self.title_input.text() != self.current_note.title
+            or selected_location(self.shell) != self.current_note.location
+            or set(parse_tags(self.shell.tags_input.text())) != set(parse_tags(self.current_note.tags))
+        )
+        if self.body_edit.dirty or metadata_changed:
+            self.mark_note_dirty()
+        else:
+            self.has_unsaved_changes = False
+            self.save_timer.stop()
+            if not self.conflict_active:
+                self.shell.set_normal_status("已保存")
 
     def mark_note_dirty(self) -> None:
         if self.is_loading_note or self.current_note is None:
@@ -662,6 +689,9 @@ class MainWindow(QMainWindow):
     def save_current_note(self) -> bool:
         if self.current_note is None or not self.has_unsaved_changes:
             return True
+        if not self.body_edit.can_save:
+            self.shell.set_normal_status("正文尚未成功加载，禁止保存")
+            return False
         if self.conflict_active:
             self.shell.set_conflict_status(CONFLICT_MESSAGE)
             return False
@@ -670,7 +700,7 @@ class MainWindow(QMainWindow):
             saved = self.note_service.save_note(
                 self.current_note.id,
                 title=self.title_input.text().strip() or "未命名笔记",
-                content_html=self.body_edit.note_content_html(),
+                content_markdown=self.body_edit.latest_markdown,
                 location=selected_location(self.shell),
                 expected_revision=self.current_note.revision,
             )
@@ -694,7 +724,8 @@ class MainWindow(QMainWindow):
         self.current_note = saved
         self.has_unsaved_changes = False
         self.autosave_retry_count = 0
-        self.body_edit.document().setModified(False)
+        self.body_edit.baseline = self.body_edit.latest_markdown
+        self.body_edit.dirty = False
         self.shell.set_normal_status("已保存")
         self.refresh_note_list(saved.id)
         self._refresh_links()
@@ -933,8 +964,7 @@ class MainWindow(QMainWindow):
             apply_theme(application, theme_name)
         self.shell.enforce_single_surface_backgrounds()
         self.current_theme_name = save_theme(self.theme_settings_path, theme_name)
-        self.body_edit.apply_theme()
-        self.shell.editor_toolbar.refresh_theme()
+        self.body_edit.setTheme(current_theme())
         self.shell.sidebar.set_current_theme(theme_name)
         self.shell.refresh_theme_icons()
         if self.ai_center_dialog is not None:
@@ -946,7 +976,8 @@ class MainWindow(QMainWindow):
         self.is_loading_note = True
         self.current_note = None
         self.title_input.clear()
-        self.body_edit.clear()
+        if not self.body_edit.closing:
+            self.body_edit.setMarkdown("", uuid.uuid4().hex)
         self.shell.tags_input.clear()
         self.shell.clear_ai_metadata_values()
         self.shell.update_metadata_summary()
@@ -977,9 +1008,34 @@ class MainWindow(QMainWindow):
         if self.receipt_inbox_service is not None:
             self.receipt_refresh_timer.start()
 
+    def _editor_close_ready(self) -> None:
+        if self._pending_switch is not None:
+            note_id, self._pending_switch = self._pending_switch, None
+            self.body_edit.closing = False
+            self.body_edit.setReadOnly(False)
+            if not self.force_save_current_note():
+                self._restore_sidebar_selection()
+                return
+            self._enter_note_navigation_mode()
+            self.load_note(note_id)
+            return
+        self._close_ready = True
+        QTimer.singleShot(0, self.close)
+
     def closeEvent(self, event) -> None:
+        if not self._close_ready:
+            event.ignore()
+            if not self._close_pending:
+                self._close_pending = True
+                self._pending_switch = None
+                if not self.body_edit.closing:
+                    self.body_edit.prepareClose()
+            return
         if self.force_save_current_note():
             self.receipt_refresh_timer.stop()
             event.accept()
         else:
+            self._close_ready = self._close_pending = False
+            self.body_edit.closing = False
+            self.body_edit.setReadOnly(False)
             event.ignore()

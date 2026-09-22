@@ -13,7 +13,12 @@ class SQLiteConnectionFactory:
         self.database_path = Path(database_path)
 
     def _open(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=5.0)
+        connection = sqlite3.connect(f"{self.database_path.resolve().as_uri()}?mode=rw", uri=True, timeout=5.0)
+        try:
+            require_markdown_database(connection)
+        except Exception:
+            connection.close()
+            raise
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
@@ -39,3 +44,14 @@ class SQLiteConnectionFactory:
             raise
         finally:
             connection.close()
+
+
+def require_markdown_database(connection: sqlite3.Connection) -> None:
+    """Fail closed for every active connection, including helper/MCP callers."""
+    try:
+        marker = connection.execute("SELECT meta_value FROM schema_meta WHERE meta_key='body_format'").fetchone()
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(notes)')}
+    except sqlite3.DatabaseError as error:
+        raise RuntimeError("数据库需要 Markdown migration；请显式运行 migration CLI。") from error
+    if not marker or marker[0] != 'markdown' or 'content_markdown' not in columns or columns & {'content_html', 'body_rich_text'}:
+        raise RuntimeError("数据库需要 Markdown migration；请显式运行 migration CLI。")

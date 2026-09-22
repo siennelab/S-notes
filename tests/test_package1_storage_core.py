@@ -76,28 +76,28 @@ class Package1StorageCoreTests(unittest.TestCase):
         saved = self.notes.save_note(
             note.id,
             title="虚构保存标题",
-            content_html="<p>虚构保存正文</p>",
+            content_markdown="<p>虚构保存正文</p>",
             location=NoteLocation("虚构项目", "子目录"),
             expected_revision=before.revision,
         )
         self.assertEqual(saved.revision, before.revision + 1)
-        self.assertEqual(saved.content_html, "<p>虚构保存正文</p>")
+        self.assertEqual(saved.content_markdown, "<p>虚构保存正文</p>")
         self.assertEqual(saved.tags, "保留标签")
         self.assertEqual(saved.ai_visibility, "redacted")
         self.assertEqual(saved.trash_group_id, "FICTIONAL_SENTINEL")
         self.assertEqual(saved.note_uuid, note.note_uuid)
         with closing(sqlite3.connect(self.database_path)) as connection:
             body_columns = connection.execute(
-                "SELECT body_rich_text, content_html FROM notes WHERE id = ?", (note.id,)
+                "SELECT content_markdown FROM notes WHERE id = ?", (note.id,)
             ).fetchone()
-        self.assertEqual(body_columns, (saved.content_html, saved.content_html))
+        self.assertEqual(body_columns, (saved.content_markdown,))
 
     def test_stale_revision_is_rejected_without_side_effects(self) -> None:
         note = self.notes.create_note()
         first = self.notes.save_note(
             note.id,
             title="虚构较新标题",
-            content_html="<p>虚构较新正文</p>",
+            content_markdown="<p>虚构较新正文</p>",
             location=NoteLocation(),
             expected_revision=note.revision,
         )
@@ -105,7 +105,7 @@ class Package1StorageCoreTests(unittest.TestCase):
             self.notes.save_note(
                 note.id,
                 title="虚构过期标题",
-                content_html="<p>虚构过期正文</p>",
+                content_markdown="<p>虚构过期正文</p>",
                 location=NoteLocation("不应创建的冲突目录", "无"),
                 expected_revision=note.revision,
             )

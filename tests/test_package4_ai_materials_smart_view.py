@@ -48,7 +48,7 @@ class Package4AiMaterialsQueryTests(unittest.TestCase):
         note = self.note_service.save_note(
             note.id,
             title=title,
-            content_html=body,
+            content_markdown=body,
             location=note.location,
             expected_revision=note.revision,
         )
@@ -190,7 +190,7 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
         note = self.window.note_service.save_note(
             note.id,
             title=title,
-            content_html=f"<p>{title} FICTIONAL BODY</p>",
+            content_markdown=f"<p>{title} FICTIONAL BODY</p>",
             location=note.location,
             expected_revision=note.revision,
         )

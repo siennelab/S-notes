@@ -43,6 +43,9 @@ class Package1R1ParityTests(unittest.TestCase):
         "idx_reminder_occurrences_due",
         "reminder_occurrences",
         "reminders",
+        "reminder_labels",
+        "reminder_tables",
+        "ai_reminder_operations",
     }
     def setUp(self) -> None:
         self.database_connect_patch = patch.object(
@@ -91,7 +94,7 @@ class Package1R1ParityTests(unittest.TestCase):
         r2_note = self.r2_notes.save_note(
             r2_note.id,
             title="虚构 parity 标题",
-            content_html="<p>虚构 parity 正文</p>",
+            content_markdown="<p>虚构 parity 正文</p>",
             location=location,
             expected_revision=r2_note.revision,
         )
@@ -187,7 +190,7 @@ class Package1R1ParityTests(unittest.TestCase):
                 table: tuple(
                     row[1]
                     for row in connection.execute(f"PRAGMA table_info({table})")
-                    if row[1] != "sub_sub_category"
+                    if row[1] not in {"sub_sub_category", "body_rich_text", "content_html", "content_markdown"}
                 )
                 for table in table_names
             }
@@ -214,7 +217,7 @@ class Package1R1ParityTests(unittest.TestCase):
         with closing(sqlite3.connect(path)) as connection:
             return connection.execute(
                 """
-                SELECT revision, title, body_rich_text, content_html,
+                SELECT revision, title,
                        main_category, sub_category, tags,
                        ai_visibility, is_pinned, is_deleted,
                        deleted_at IS NOT NULL, trash_group_id IS NOT NULL

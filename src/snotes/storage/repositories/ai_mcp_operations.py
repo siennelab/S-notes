@@ -99,7 +99,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         actor_target_id: str,
         request_id: str,
         title: str,
-        content_html: str,
+        content_markdown: str,
         directory_id: int,
         location: NoteLocation,
         tags: Sequence[str],
@@ -134,18 +134,17 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             cursor = connection.execute(
                 """
                 INSERT INTO notes (
-                    note_uuid, revision, directory_id, title, body_rich_text,
-                    content_html, main_category, sub_category,
+                    note_uuid, revision, directory_id, title,
+                    content_markdown, main_category, sub_category,
                     tags, ai_visibility, is_pinned, is_deleted, created_at,
                     updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)
                 """,
                 (
                     note_uuid,
                     directory_id,
                     title,
-                    content_html,
-                    content_html,
+                    content_markdown,
                     main,
                     sub,
                     visibility,
@@ -174,7 +173,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         operation_type: str,
         expected_revision: int,
         expected_updated_at: str,
-        addition_html: str = "",
+        addition_markdown: str = "",
         title: str | None = None,
         directory_id: int | None = None,
         location: NoteLocation | None = None,
@@ -225,22 +224,21 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 self._append_content_in_connection(
                     connection,
                     note,
-                    addition_html=addition_html,
+                    addition_markdown=addition_markdown,
                     timestamp=timestamp,
                     expected_revision=expected_revision,
                 )
             elif operation_type == "prepend":
-                content_html = addition_html + str(note["content_html"])
+                content_markdown = addition_markdown + "\n\n" + str(note["content_markdown"])
                 connection.execute(
                     """
                     UPDATE notes
-                    SET content_html = ?, body_rich_text = ?,
+                    SET content_markdown = ?,
                         revision = revision + 1, updated_at = ?
                     WHERE id = ? AND revision = ?
                     """,
                     (
-                        content_html,
-                        content_html,
+                        content_markdown,
                         timestamp,
                         note_id,
                         expected_revision,
@@ -302,7 +300,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         self,
         *,
         receipt_id: int,
-        addition_html: str,
+        addition_markdown: str,
         accepted_body: str,
     ) -> dict:
         with self.connections.write() as connection:
@@ -359,7 +357,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             self._append_content_in_connection(
                 connection,
                 note,
-                addition_html=addition_html,
+                addition_markdown=addition_markdown,
                 timestamp=timestamp,
                 expected_revision=expected_revision,
             )
@@ -546,8 +544,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
     ) -> None:
         snapshot = {
             "title": note["title"],
-            "content_html": note["content_html"],
-            "body_rich_text": note["body_rich_text"],
+            "content_markdown": note["content_markdown"],
             "main_category": note["main_category"],
             "sub_category": note["sub_category"],
             "tags": note["tags"],
@@ -579,21 +576,20 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         connection,
         note,
         *,
-        addition_html: str,
+        addition_markdown: str,
         timestamp: str,
         expected_revision: int,
     ) -> None:
-        content_html = str(note["content_html"]) + addition_html
+        content_markdown = str(note["content_markdown"]) + "\n\n" + addition_markdown
         cursor = connection.execute(
             """
             UPDATE notes
-            SET content_html = ?, body_rich_text = ?,
+            SET content_markdown = ?,
                 revision = revision + 1, updated_at = ?
             WHERE id = ? AND revision = ?
             """,
             (
-                content_html,
-                content_html,
+                content_markdown,
                 timestamp,
                 note["id"],
                 expected_revision,

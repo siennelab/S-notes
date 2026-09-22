@@ -41,7 +41,7 @@ from src.snotes.domain.gale import (
     GaleSubmission,
 )
 from src.snotes.domain.models import NoteLocation
-from src.snotes.exporting.ordinary import html_to_text
+from src.snotes.domain.markdown import markdown_to_plain_text
 from src.snotes.gale_bootstrap import build_gale_control_service
 from src.snotes.storage.gale_mirror import SQLiteGaleMirrorWriter
 from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
@@ -179,7 +179,7 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         )
         self.mirror = GaleMirrorService(
             self.note_repository,
-            AiSafeReadService(self.rules, body_renderer=html_to_text),
+            AiSafeReadService(self.rules, body_renderer=markdown_to_plain_text),
             SQLiteGaleMirrorWriter(),
             self.audit,
             directories=DirectoryService(self.directories, self.note_repository),
@@ -200,7 +200,7 @@ class Package6GaleCodeGateTests(unittest.TestCase):
         note = self.notes.save_note(
             note.id,
             title=title,
-            content_html=f"<p>{body or title + ' body'}</p>",
+            content_markdown=body or title + ' body',
             location=location,
             expected_revision=note.revision,
         )
@@ -214,6 +214,14 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             return connection.execute(
                 "SELECT title, body, visibility FROM mirror_notes ORDER BY source_note_id"
             ).fetchall()
+
+    def test_markdown_mirror_body_is_redacted_plain_text(self):
+        self._seed('Markdown safety', 'redacted', ('gale',), body='FICTIONAL_**SECRET**_P6')
+        path = self.root / 'markdown-mirror.db'
+        self.mirror.generate(path)
+        with closing(sqlite3.connect(path)) as connection:
+            body = connection.execute("SELECT body FROM mirror_notes WHERE title='Markdown safety'").fetchone()[0]
+        self.assertEqual(body, '[P6_SAFE_MASK]')
 
     def test_mirror_reuses_safe_read_and_matches_frozen_schema(self) -> None:
         path = self.root / "mirror" / "gale-mirror.db"

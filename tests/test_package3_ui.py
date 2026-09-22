@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtTest import QTest
+import time
 from PySide6.QtGui import QColor, QFontInfo, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,19 +41,29 @@ class Package3UiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def _close_window(self):
+        self.window.has_unsaved_changes = False
+        self.window.conflict_active = False
+        self.window.close()
+        deadline = time.monotonic() + 15
+        while (not self.window._close_ready or self.window.receipt_refresh_timer.isActive()) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertTrue(self.window._close_ready)
+        QTest.qWait(20)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
         _application, self.window = build_application([], data_root=self.data_root)
-        self.addCleanup(self.window.close)
+        self.addCleanup(self._close_window)
 
     def create_note(self, title: str, body: str, location=NoteLocation(), tags=()):
         note = self.window.note_service.create_note(location)
         note = self.window.note_service.save_note(
             note.id,
             title=title,
-            content_html=body,
+            content_markdown=body,
             location=location,
             expected_revision=note.revision,
         )
@@ -122,6 +134,139 @@ class Package3UiTests(unittest.TestCase):
             note_list.item(row).setSelected(True)
         self.assertEqual(set(self.window.shell.sidebar.selected_note_ids()), {first.id, second.id})
 
+    def test_reminder_note_navigation_is_single_click_and_stays_in_editor(self) -> None:
+        note = self.create_note("导航 A", "<p>虚构正文</p>")
+        self.create_note("导航 B", "<p>其他正文</p>")
+        self.window.refresh_note_list(note.id)
+        self.window.load_note(note.id)
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+        self.assertEqual(self.window.shell.sidebar.mode, "reminder")
+
+        self.window.show_directory()
+        self.app.processEvents()
+        item = self.note_list_item(note.id)
+        self.window.shell.sidebar.note_list.itemClicked.emit(item)
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+        self.assertEqual(self.window.current_mode, "directory")
+
+        deadline = time.monotonic() + 15
+        while not self.window.body_edit.can_save and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertTrue(self.window.body_edit.can_save)
+        self.window.body_edit.bridge.markdownChanged(
+            self.window.body_edit.latest_markdown + " 输入",
+            self.window.body_edit.current_load_id,
+        )
+        self.window.save_timer.stop()
+        self.assertTrue(self.window.save_current_note())
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+
+        self.window.show_directory()
+        self.app.processEvents()
+        item = self.note_list_item(note.id)
+        self.window.shell.sidebar.note_list.itemClicked.emit(item)
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+
+        self.window.show_smart_view("reminder")
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.reminder_center,
+        )
+
+        self.window.show_directory()
+        self.app.processEvents()
+        self.window.shell.sidebar.note_list.itemClicked.emit(item)
+        self.app.processEvents()
+        self.assertIs(
+            self.window.shell.content_stack.currentWidget(),
+            self.window.shell.main_content,
+        )
+
+
+    def test_metadata_hierarchy_theme_swatches_and_selection_palette(self) -> None:
+        note = self.create_note("层级对照", "<p>这是用于主题选择的虚构正文</p>")
+        self.window.load_note(note.id)
+        shell = self.window.shell
+        shell.set_metadata_expanded(True)
+        self.window.resize(1420, 880)
+        self.window.show()
+        self.app.processEvents()
+        self.assertEqual(shell.title_separator.height(), 2)
+        self.assertLess(shell.title_band.geometry().top(), shell.title_separator.geometry().top())
+        self.assertLess(shell.title_separator.geometry().top(), shell.metadata_section.geometry().top())
+        self.assertLess(shell.metadata_section.geometry().top(), shell.body_editor.geometry().top())
+        self.assertEqual(shell.metadata_panel.layout().count(), 2)
+        first_row_y = {
+            widget.mapTo(shell.metadata_panel, widget.rect().topLeft()).y()
+            for widget in (shell.main_combo, shell.sub_combo, shell.tags_input)
+        }
+        second_row_y = {
+            widget.mapTo(shell.metadata_panel, widget.rect().topLeft()).y()
+            for widget in (shell.ai_visibility_combo, shell.ai_targets_widget)
+        }
+        self.assertEqual(len(first_row_y), 1)
+        self.assertEqual(len(second_row_y), 1)
+        self.assertLess(next(iter(first_row_y)), next(iter(second_row_y)))
+        self.assertTrue(shell.ai_visibility_combo.isEnabled())
+        self.assertTrue(shell.ai_targets_widget.isEnabled())
+        self.assertEqual(len(shell.ai_target_checks), 7)
+        self.assertIsInstance(shell.ai_visibility_combo, FloatingComboBox)
+        self.assertIsInstance(shell.main_combo, FloatingComboBox)
+        self.assertIsInstance(shell.sub_combo, FloatingComboBox)
+
+        for theme_name, tokens in THEMES.items():
+            with self.subTest(theme=theme_name):
+                self.window.set_theme(theme_name)
+                self.app.processEvents()
+                body_palette = shell.body_editor.palette()
+                for group in (QPalette.Active, QPalette.Inactive):
+                    self.assertEqual(
+                        body_palette.color(group, QPalette.Highlight),
+                        QColor(tokens.selection_background),
+                    )
+                    self.assertEqual(
+                        body_palette.color(group, QPalette.HighlightedText),
+                        QColor(tokens.selection_text),
+                    )
+                self.assertEqual(shell.body_editor._theme.name, theme_name)
+                self.assertIn(
+                    f"placeholder-text-color: {tokens.text_subtle};",
+                    build_app_style(theme_name),
+                )
+                active = sidebar_button = shell.sidebar.theme_buttons[theme_name]
+                self.assertEqual((active.width(), active.height()), (16, 16))
+                self.assertEqual(THEME_SWATCH_COLORS[theme_name], {
+                    "dark": "#1B1D1E",
+                    "light-slate": "#5F768B",
+                    "light-clay": "#A84B2F",
+                }[theme_name])
+                self.assertTrue(THEME_SWATCH_RING_COLORS[theme_name].startswith("#"))
+
+
     def test_drag_move_signal_pin_and_metadata_tags_use_services(self) -> None:
         root = self.window.directory_service.create_directory("客户")
         child = self.window.directory_service.create_directory("项目甲", root.id)
@@ -155,6 +300,10 @@ class Package3UiTests(unittest.TestCase):
         self.window.set_note_pinned(note.id, True)
         self.assertTrue(self.window.note_service.get_note(note.id).is_pinned)
         self.window.load_note(note.id)
+        deadline = time.monotonic() + 15
+        while not self.window.body_edit.can_save and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertTrue(self.window.body_edit.can_save)
         self.window.shell.tags_input.setText("One, #two，one")
         self.window.save_timer.stop()
         self.assertTrue(self.window.save_current_note())
@@ -215,70 +364,6 @@ class Package3UiTests(unittest.TestCase):
         self.assertLess(shell.export_button.geometry().top(), shell.body_editor.geometry().top())
         self.assertGreater(shell.delete_button.mapTo(shell.editor_pane, shell.delete_button.rect().topLeft()).y(), shell.body_editor.geometry().top())
 
-    def test_reminder_note_navigation_is_single_click_and_stays_in_editor(self) -> None:
-        note = self.create_note("导航 A", "<p>虚构正文</p>")
-        self.create_note("导航 B", "<p>其他正文</p>")
-        self.window.refresh_note_list(note.id)
-        self.window.load_note(note.id)
-        self.window.show_smart_view("reminder")
-        self.app.processEvents()
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.reminder_center,
-        )
-        self.assertEqual(self.window.shell.sidebar.mode, "reminder")
-
-        self.window.show_directory()
-        self.app.processEvents()
-        item = self.note_list_item(note.id)
-        self.window.shell.sidebar.note_list.itemClicked.emit(item)
-        self.app.processEvents()
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.main_content,
-        )
-        self.assertEqual(self.window.current_mode, "directory")
-
-        self.window.body_edit.insertPlainText(" 输入")
-        self.window.save_timer.stop()
-        self.assertTrue(self.window.save_current_note())
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.main_content,
-        )
-
-        self.window.show_smart_view("reminder")
-        self.app.processEvents()
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.reminder_center,
-        )
-
-        self.window.show_directory()
-        self.app.processEvents()
-        item = self.note_list_item(note.id)
-        self.window.shell.sidebar.note_list.itemClicked.emit(item)
-        self.app.processEvents()
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.main_content,
-        )
-
-        self.window.show_smart_view("reminder")
-        self.app.processEvents()
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.reminder_center,
-        )
-
-        self.window.show_directory()
-        self.app.processEvents()
-        self.window.shell.sidebar.note_list.itemClicked.emit(item)
-        self.app.processEvents()
-        self.assertIs(
-            self.window.shell.content_stack.currentWidget(),
-            self.window.shell.main_content,
-        )
 
     def test_reminder_tab_toggles_back_to_directory_notes(self) -> None:
         note = self.create_note("Reminder toggle note", "<p>虚构正文</p>")
@@ -850,73 +935,6 @@ class Package3UiTests(unittest.TestCase):
         self.assertFalse(center.pause_button.isEnabled())
         self.assertTrue(center.resume_button.isEnabled())
 
-    def test_metadata_hierarchy_theme_swatches_and_selection_palette(self) -> None:
-        note = self.create_note("层级对照", "<p>这是用于主题选择的虚构正文</p>")
-        self.window.load_note(note.id)
-        shell = self.window.shell
-        shell.set_metadata_expanded(True)
-        self.window.resize(1420, 880)
-        self.window.show()
-        self.app.processEvents()
-        self.assertEqual(shell.title_separator.height(), 2)
-        self.assertLess(shell.title_band.geometry().top(), shell.title_separator.geometry().top())
-        self.assertLess(shell.title_separator.geometry().top(), shell.metadata_section.geometry().top())
-        self.assertLess(shell.metadata_section.geometry().top(), shell.editor_toolbar.geometry().top())
-        self.assertLess(shell.editor_toolbar.geometry().top(), shell.body_editor.geometry().top())
-        self.assertEqual(shell.metadata_panel.layout().count(), 2)
-        first_row_y = {
-            widget.mapTo(shell.metadata_panel, widget.rect().topLeft()).y()
-            for widget in (shell.main_combo, shell.sub_combo, shell.tags_input)
-        }
-        second_row_y = {
-            widget.mapTo(shell.metadata_panel, widget.rect().topLeft()).y()
-            for widget in (shell.ai_visibility_combo, shell.ai_targets_widget)
-        }
-        self.assertEqual(len(first_row_y), 1)
-        self.assertEqual(len(second_row_y), 1)
-        self.assertLess(next(iter(first_row_y)), next(iter(second_row_y)))
-        self.assertTrue(shell.ai_visibility_combo.isEnabled())
-        self.assertTrue(shell.ai_targets_widget.isEnabled())
-        self.assertEqual(len(shell.ai_target_checks), 7)
-        self.assertIsInstance(shell.ai_visibility_combo, FloatingComboBox)
-        self.assertIsInstance(shell.main_combo, FloatingComboBox)
-        self.assertIsInstance(shell.sub_combo, FloatingComboBox)
-
-        for theme_name, tokens in THEMES.items():
-            with self.subTest(theme=theme_name):
-                self.window.set_theme(theme_name)
-                self.app.processEvents()
-                body_palette = shell.body_editor.palette()
-                viewport_palette = shell.body_editor.viewport().palette()
-                for group in (QPalette.Active, QPalette.Inactive):
-                    self.assertEqual(
-                        body_palette.color(group, QPalette.Highlight),
-                        QColor(tokens.selection_background),
-                    )
-                    self.assertEqual(
-                        viewport_palette.color(group, QPalette.Highlight),
-                        QColor(tokens.selection_background),
-                    )
-                    self.assertEqual(
-                        body_palette.color(group, QPalette.HighlightedText),
-                        QColor(tokens.selection_text),
-                    )
-                self.assertIn(
-                    f"#bodyEdit:focus {{ border: 1px solid {tokens.focus}; }}",
-                    build_app_style(theme_name),
-                )
-                self.assertIn(
-                    f"placeholder-text-color: {tokens.text_subtle};",
-                    build_app_style(theme_name),
-                )
-                active = sidebar_button = shell.sidebar.theme_buttons[theme_name]
-                self.assertEqual((active.width(), active.height()), (16, 16))
-                self.assertEqual(THEME_SWATCH_COLORS[theme_name], {
-                    "dark": "#1B1D1E",
-                    "light-slate": "#5F768B",
-                    "light-clay": "#A84B2F",
-                }[theme_name])
-                self.assertTrue(THEME_SWATCH_RING_COLORS[theme_name].startswith("#"))
 
     def test_all_sidebar_controls_use_sidebar_tokens_in_three_themes(self) -> None:
         sidebar = self.window.shell.sidebar

@@ -20,7 +20,7 @@ from src.snotes.storage.support import Clock, next_note_updated_at, now_shanghai
 
 
 NOTE_SELECT = """
-SELECT id, note_uuid, revision, directory_id, title, content_html,
+SELECT id, note_uuid, revision, directory_id, title, content_markdown,
        main_category, sub_category, tags, ai_visibility,
        is_pinned, is_deleted, created_at, updated_at, deleted_at, trash_group_id
 FROM notes
@@ -51,10 +51,10 @@ class SQLiteNotesRepository(NotesRepository):
             cursor = connection.execute(
                 """
                 INSERT INTO notes (
-                    note_uuid, revision, directory_id, title, body_rich_text,
-                    content_html, main_category, sub_category,
+                    note_uuid, revision, directory_id, title,
+                    content_markdown, main_category, sub_category,
                     tags, ai_visibility, is_pinned, is_deleted, created_at, updated_at
-                ) VALUES (?, 1, ?, ?, '', '', ?, ?, '', ?, 0, 0, ?, ?)
+                ) VALUES (?, 1, ?, ?, '', ?, ?, '', ?, 0, 0, ?, ?)
                 """,
                 (
                     note_uuid,
@@ -195,7 +195,7 @@ class SQLiteNotesRepository(NotesRepository):
         note_id: int,
         *,
         title: str,
-        content_html: str,
+        content_markdown: str,
         location: NoteLocation,
         expected_revision: int,
     ) -> Note:
@@ -212,15 +212,14 @@ class SQLiteNotesRepository(NotesRepository):
             cursor = connection.execute(
                 """
                 UPDATE notes
-                SET title = ?, body_rich_text = ?, content_html = ?,
+                SET title = ?, content_markdown = ?,
                     directory_id = ?, main_category = ?, sub_category = ?,
                     revision = revision + 1, updated_at = ?
                 WHERE id = ? AND is_deleted = 0 AND revision = ?
                 """,
                 (
                     title,
-                    content_html,
-                    content_html,
+                    content_markdown,
                     directory_id,
                     main,
                     sub,

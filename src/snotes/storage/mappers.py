@@ -15,7 +15,7 @@ def note_from_row(row: Mapping[str, Any]) -> Note:
         revision=int(row["revision"]),
         directory_id=row["directory_id"],
         title=str(row["title"]),
-        content_html=str(row["content_html"]),
+        content_markdown=str(row["content_markdown"]),
         main_category=str(row["main_category"]),
         sub_category=str(row["sub_category"]),
         tags=str(row["tags"]),
