@@ -58,6 +58,23 @@ class Package3UiTests(unittest.TestCase):
         _application, self.window = build_application([], data_root=self.data_root)
         self.addCleanup(self._close_window)
 
+    def wait_note(self, note_id: int, timeout: float = 15.0) -> None:
+        """The editor commits title/metadata/body together on loadComplete."""
+        deadline = time.monotonic() + timeout
+        window = self.window
+        while not (window.current_note is not None and window.current_note.id == note_id
+                   and window.body_edit.can_save) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertIsNotNone(window.current_note)
+        self.assertEqual(window.current_note.id, note_id)
+        self.assertTrue(window.body_edit.can_save)
+
+    def load_note(self, note_id: int) -> bool:
+        result = self.window.load_note(note_id)
+        if result:
+            self.wait_note(note_id)
+        return result
+
     def create_note(self, title: str, body: str, location=NoteLocation(), tags=()):
         note = self.window.note_service.create_note(location)
         note = self.window.note_service.save_note(
@@ -138,7 +155,7 @@ class Package3UiTests(unittest.TestCase):
         note = self.create_note("导航 A", "<p>虚构正文</p>")
         self.create_note("导航 B", "<p>其他正文</p>")
         self.window.refresh_note_list(note.id)
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         self.window.show_smart_view("reminder")
         self.app.processEvents()
         self.assertIs(
@@ -209,7 +226,7 @@ class Package3UiTests(unittest.TestCase):
 
     def test_metadata_hierarchy_theme_swatches_and_selection_palette(self) -> None:
         note = self.create_note("层级对照", "<p>这是用于主题选择的虚构正文</p>")
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         shell = self.window.shell
         shell.set_metadata_expanded(True)
         self.window.resize(1420, 880)
@@ -299,11 +316,7 @@ class Package3UiTests(unittest.TestCase):
 
         self.window.set_note_pinned(note.id, True)
         self.assertTrue(self.window.note_service.get_note(note.id).is_pinned)
-        self.window.load_note(note.id)
-        deadline = time.monotonic() + 15
-        while not self.window.body_edit.can_save and time.monotonic() < deadline:
-            QTest.qWait(20)
-        self.assertTrue(self.window.body_edit.can_save)
+        self.load_note(note.id)
         self.window.shell.tags_input.setText("One, #two，one")
         self.window.save_timer.stop()
         self.assertTrue(self.window.save_current_note())
@@ -329,7 +342,7 @@ class Package3UiTests(unittest.TestCase):
     def test_relation_drawer_opens_related_note(self) -> None:
         current = self.create_note("当前", "<p>[[目标]]</p>")
         target = self.create_note("目标", "<p>内容</p>")
-        self.window.load_note(current.id)
+        self.load_note(current.id)
         self.window.toggle_links()
         self.app.processEvents()
         self.assertFalse(self.window.shell.link_drawer.isHidden())
@@ -355,7 +368,7 @@ class Package3UiTests(unittest.TestCase):
         self.assertTrue(sidebar.clock_date_label.text())
 
         note = self.create_note("位置对照", "<p>虚构正文</p>")
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         self.window.show()
         self.app.processEvents()
         shell = self.window.shell
@@ -400,7 +413,7 @@ class Package3UiTests(unittest.TestCase):
         reminder_button = sidebar.smart_buttons["reminder"]
 
         self.window.refresh_note_list(note_a.id)
-        self.window.load_note(note_a.id)
+        self.load_note(note_a.id)
         self.window.show()
         self.app.processEvents()
         self.assertIsNotNone(sidebar.note_list.currentItem())
@@ -424,6 +437,7 @@ class Package3UiTests(unittest.TestCase):
         item_b = self.note_list_item(note_b.id)
         sidebar.note_list.itemClicked.emit(item_b)
         self.app.processEvents()
+        self.wait_note(note_b.id)
         self.assertEqual(self.window.current_note.id, note_b.id)
 
         reminder_button.click()
@@ -449,7 +463,7 @@ class Package3UiTests(unittest.TestCase):
     def test_reminder_sidebar_table_title_rename_and_delete_stay_synced(self) -> None:
         note = self.create_note("已有 Note selection", "<p>虚构正文</p>")
         self.window.refresh_note_list(note.id)
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         self.app.processEvents()
 
         service = self.window.reminder_service

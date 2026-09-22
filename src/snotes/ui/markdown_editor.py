@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -96,9 +96,6 @@ class MarkdownEditorWidget(QWidget):
         self._used_ids = set()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.status = QLabel("正在启动本地 Markdown 编辑器…")
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
         self.view = QWebEngineView(self)
         self.view.setAcceptDrops(False)
         self.profile = QWebEngineProfile(self)  # Unnamed profile is off-the-record.
@@ -123,11 +120,6 @@ class MarkdownEditorWidget(QWidget):
         return self.state == "loaded" and not self.read_only
 
     def _notify(self):
-        self.status.setText(self.error or {
-            "starting": "正在启动本地 Markdown 编辑器…",
-            "loading": "正在加载 · 暂不可保存",
-            "loaded": "只读" if self.read_only else ("已修改 · 可保存" if self.dirty else "已加载 · 未修改"),
-        }.get(self.state, self.state))
         self.stateChanged.emit()
 
     def setMarkdown(self, markdown: str, load_id: str):
@@ -138,6 +130,11 @@ class MarkdownEditorWidget(QWidget):
         if self.closing:
             raise RuntimeError("Editor is closing")
         self._used_ids.add(load_id)
+        # The view stays visible: a hidden QWebEngineView throttles renderer
+        # timers to ~1 s. The Web side keeps the previous document locked and
+        # replaces it in one step; hosts commit title/metadata on loaded.
+        self.baseline = self.latest_markdown = ""
+        self.dirty = False
         self.current_load_id = load_id
         self.state, self.error, self.dirty = "loading", "", False
         self._pending = (markdown, load_id)
@@ -158,6 +155,8 @@ class MarkdownEditorWidget(QWidget):
         self._notify()
 
     def prepareClose(self):
+        if self.closing:
+            return  # One composition/delivery barrier at a time.
         self.closing = True
         if self.ready:
             self.bridge.prepareClose.emit()
@@ -193,6 +192,8 @@ class MarkdownEditorWidget(QWidget):
             return
         self._timer.stop()
         self.state, self.error = "failed", reason
+        self.baseline = self.latest_markdown = ""
+        self.dirty = False
         self._pending = None
         self._notify()
         self.loadFailed.emit(load_id, reason)

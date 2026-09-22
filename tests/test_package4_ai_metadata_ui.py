@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.bootstrap import build_application
@@ -27,6 +29,27 @@ class Package4AiMetadataUiTests(unittest.TestCase):
     def create_note(self):
         return self.window.note_service.create_note()
 
+    def wait_note(self, note_id: int, timeout: float = 15.0) -> None:
+        """The editor commits title/metadata/body together on loadComplete."""
+        deadline = time.monotonic() + timeout
+        window = self.window
+        while not (window.current_note is not None and window.current_note.id == note_id
+                   and window.body_edit.can_save) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertIsNotNone(window.current_note)
+        self.assertEqual(window.current_note.id, note_id)
+        self.assertTrue(window.body_edit.can_save)
+
+    def load_note(self, note_id: int) -> bool:
+        result = self.window.load_note(note_id)
+        if result:
+            self.wait_note(note_id)
+        return result
+
+    def switch_note(self, note_id: int) -> None:
+        self.window.switch_note(note_id)
+        self.wait_note(note_id)
+
     def checked_target_ids(self) -> tuple[str, ...]:
         return self.window.shell.selected_ai_target_ids()
 
@@ -42,7 +65,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
             ("common", "gale", "codex"),
         )
 
-        self.assertTrue(self.window.load_note(empty.id))
+        self.assertTrue(self.load_note(empty.id))
         self.assertEqual(
             self.window.shell.ai_visibility_combo.currentData(),
             "hidden",
@@ -50,7 +73,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
         self.assertEqual(self.checked_target_ids(), ())
         self.assertIn("AI对象：无", self.window.shell.metadata_summary_button.text())
 
-        self.assertTrue(self.window.load_note(configured.id))
+        self.assertTrue(self.load_note(configured.id))
         self.assertEqual(
             self.window.shell.ai_visibility_combo.currentData(),
             "redacted",
@@ -63,7 +86,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
 
     def test_visibility_edit_calls_service_persists_and_syncs_revision(self) -> None:
         note = self.create_note()
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         wrapped = Mock(wraps=self.window.ai_access_metadata_service)
         self.window.ai_access_metadata_service = wrapped
 
@@ -79,7 +102,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
 
     def test_target_edits_call_service_and_round_trip_common_single_multi(self) -> None:
         note = self.create_note()
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         wrapped = Mock(wraps=self.window.ai_access_metadata_service)
         self.window.ai_access_metadata_service = wrapped
 
@@ -106,9 +129,9 @@ class Package4AiMetadataUiTests(unittest.TestCase):
         service.set_note_visibility(second.id, "redacted")
         service.set_note_targets(second.id, ("ke-den", "gemini"))
 
-        self.window.load_note(first.id)
+        self.load_note(first.id)
         self.assertEqual(self.checked_target_ids(), ("common",))
-        self.window.switch_note(second.id)
+        self.switch_note(second.id)
         self.assertEqual(
             self.window.shell.ai_visibility_combo.currentData(),
             "redacted",
@@ -118,7 +141,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
             self.window.shell.ai_legacy_targets_label.text(),
             "历史授权：Gemini",
         )
-        self.window.switch_note(first.id)
+        self.switch_note(first.id)
         self.assertEqual(
             self.window.shell.ai_visibility_combo.currentData(),
             "full",
@@ -145,7 +168,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
         note = self.create_note()
         service = self.window.ai_access_metadata_service
         service.set_note_targets(note.id, ("codex",))
-        self.window.load_note(note.id)
+        self.load_note(note.id)
 
         self.window.shell.ai_target_checks["gale"].setChecked(True)
         self.app.processEvents()
@@ -157,7 +180,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
 
     def test_failed_write_restores_persisted_control_and_reports_failure(self) -> None:
         note = self.create_note()
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         wrapped = Mock(wraps=self.window.ai_access_metadata_service)
         wrapped.set_note_visibility.side_effect = RuntimeError("虚构保存故障")
         self.window.ai_access_metadata_service = wrapped

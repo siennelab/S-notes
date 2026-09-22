@@ -78,13 +78,13 @@ class MarkdownCoreTests(unittest.TestCase):
         self.assertEqual(markdown_to_plain_text('`**secret**`'), '**secret**')
         self.assertEqual(markdown_to_plain_text('```\nsecret\n```'), 'secret')
         self.assertEqual(markdown_to_plain_text(':size[bad]{size="99"}'), ':size[bad]{size="99"}')
-        self.assertEqual(markdown_to_plain_text('# Title\n\n- one\n- two'), 'Title\none\n\ntwo')
+        self.assertEqual(markdown_to_plain_text('# Title\n\n- one\n- two'), 'Title\n\none\ntwo')
 
     def test_exports_and_cache_revision(self):
         note = self.save('# Heading\n\n:size[secret]{size="20"}')
         exported = note_to_json(note)
         self.assertEqual(exported['content_markdown'], note.content_markdown)
-        self.assertEqual(exported['content_text'], 'Heading\nsecret')
+        self.assertEqual(exported['content_text'], 'Heading\n\nsecret')
         self.assertNotIn('content_html', exported)
         self.assertTrue(note_to_markdown(note).endswith(note.content_markdown))
         self.assertEqual([x.id for x in self.notes.search_notes('secret')], [note.id])
@@ -158,7 +158,7 @@ class MarkdownCoreTests(unittest.TestCase):
 class LegacyMigrationTests(unittest.TestCase):
     def test_formats_and_known_losses(self):
         fixtures = {
-            '<p><b> one </b>two</p>': '**one** two',
+            '<p><b> one </b>two</p>': '&#32;**one** two',
             '<p><b>one</b><strong>two</strong></p>': '**onetwo**',
             '<p><b><span style="font-weight:700">one</span></b></p>': '**one**',
             '<h1>one</h1><h2>two</h2><h3>three</h3>': '# one\n\n## two\n\n### three',
@@ -177,9 +177,50 @@ class LegacyMigrationTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(legacy_qt_html_to_markdown(source).markdown, expected)
         plain = ' first\nsecond\n\n\nlast\n'
-        self.assertEqual(legacy_qt_html_to_markdown(plain).markdown, plain)
+        self.assertEqual(legacy_qt_html_to_markdown(plain).markdown,
+                         '&#32;first\\\nsecond\n\nlast')
         result = legacy_qt_html_to_markdown('<p><u>under</u><span style="color:red">red</span></p>')
         self.assertEqual(result.known_losses, ('color: red', 'underline'))
+
+    def test_real_qt_shapes_preserve_text_and_distinct_pre_blocks(self):
+        fixtures = [
+            ('<p>one  two</p>\n<p>  - literal</p>\n<p>+ literal</p>',
+             'one  two\n\n  - literal\n\n+ literal'),
+            ('<p>one</p>\n<p>  </p>\n<p>two</p>', 'one\n\n  \n\ntwo'),
+            ('<p>one</p>\n<p>&nbsp;</p>\n<p>two</p>', 'one\n\n\xa0\n\ntwo'),
+            ('<pre>one</pre>\n<pre>two</pre>\n<p>three</p>', 'one\ntwo\nthree'),
+            ('<h1><b><br></b></h1>\n<p>body</p>', 'body'),
+            ('<p><span style="font-size:20px">one<br><br>two</span></p>', 'one\n\ntwo'),
+        ]
+        for source, expected in fixtures:
+            with self.subTest(source=source):
+                markdown = legacy_qt_html_to_markdown(source).markdown
+                self.assertEqual(markdown_to_plain_text(markdown), expected)
+        converted = legacy_qt_html_to_markdown('<pre>one</pre>\n<pre>two</pre>').markdown
+        self.assertEqual(converted.count('```'), 4)
+        self.assertTrue(legacy_qt_html_to_markdown('<h1><br></h1>').markdown.startswith('#'))
+
+    def test_blank_lines_normalize_paragraphs_without_guessing_markdown(self):
+        from markdown_it import MarkdownIt
+        parser = MarkdownIt('commonmark')
+        text = 'A line 1\nA line 2\n\nB line\n \t\n\nC line 1\nC line 2'
+        for source in (text, '<p>' + text.replace('\n', '<br>') + '</p>',
+                       '<p><b>' + text.replace('\n', '<br>') + '</b></p>'):
+            with self.subTest(source=source):
+                md = legacy_qt_html_to_markdown(source).markdown
+                tokens = parser.parse(md)
+                self.assertEqual(sum(t.type == 'paragraph_open' for t in tokens), 3)
+                self.assertEqual(sum(c.type == 'hardbreak' for t in tokens for c in (t.children or [])), 2)
+                self.assertEqual(markdown_to_plain_text(md),
+                                 'A line 1\nA line 2\n\nB line\n\nC line 1\nC line 2')
+        literal = '# literal heading\n\n## literal subheading\n\n- literal dash\n\n* literal plus\n\n1. literal number\n\n> literal quote'
+        for source in (literal, '<p>' + literal.replace('\n', '<br>') + '</p>'):
+            md = legacy_qt_html_to_markdown(source).markdown
+            self.assertEqual(markdown_to_plain_text(md), literal)
+            self.assertTrue(all(t.type in {'paragraph_open', 'inline', 'paragraph_close'}
+                                for t in parser.parse(md)))
+        self.assertEqual(legacy_qt_html_to_markdown('<p>A</p><p>B</p><p>C</p>').markdown,
+                         'A\n\nB\n\nC')
 
     def test_cli_atomic_schema_marker_repeat_and_metadata(self):
         with tempfile.TemporaryDirectory(prefix='snotes-migration-') as home:

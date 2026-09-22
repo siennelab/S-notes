@@ -63,7 +63,7 @@ def run_smoke(app, window):
             QTest.qWait(30)
 
         def click(label):
-            js(f"[...document.querySelectorAll('#toolbar button')].find(b=>b.textContent==={json.dumps(label)}).click()")
+            js(f"[...document.querySelectorAll('#toolbar button')].find(b=>b.dataset.command==={json.dumps(label)}).click()")
             QTest.qWait(80)
 
         try:
@@ -108,6 +108,15 @@ def run_smoke(app, window):
             assert editor.current_load_id == newest_id and 'rapid current' in editor.latest_markdown
             assert not editor.dirty
             passed('RAPID_LOAD_SWITCH')
+            # One ProseMirror view for the whole session: loads replace the document, never the editor.
+            assert js("document.querySelectorAll('.ProseMirror').length") == 1
+            js("document.querySelector('.ProseMirror').dataset.smokeInstance='kept'")
+            load('reuse check')
+            assert js("document.querySelectorAll('.ProseMirror').length") == 1
+            assert js("document.querySelector('.ProseMirror').dataset.smokeInstance") == 'kept'
+            click('Undo')
+            assert js("document.querySelector('.ProseMirror').textContent") == 'reuse check'
+            passed('MILKDOWN_INSTANCE_REUSED')
             load(FIXTURES['未知扩展'])
             visible = js("document.querySelector('.ProseMirror').textContent")
             for literal in (':::note', ':tada:', ':xxx[test]{foo="bar"}', ':size[非法字号]{size="99"}', ':size[未闭合'):
@@ -115,19 +124,23 @@ def run_smoke(app, window):
             canonical = editor.latest_markdown
             assert load(canonical) == canonical
             passed('UNKNOWN_DIRECTIVE_SAFE')
-            # Inject a mount failure in the real Web path, without any test API.
-            before = editor.latest_markdown
+            # Inject a document-install failure in the real Web path, without any test API.
             count = len(events)
-            js("""window.originalAppendChild=Element.prototype.appendChild;
-            Element.prototype.appendChild=function(node){
-              if(node.classList?.contains('ProseMirror')) throw Error('Injected mount failure');
-              return window.originalAppendChild.call(this,node);
-            };""")
+            js("""window.originalDom={};
+            for (const name of ['insertBefore','appendChild','removeChild','replaceChild']) {
+              window.originalDom[name]=Node.prototype[name];
+              Node.prototype[name]=function(...args){
+                if(this.classList?.contains('ProseMirror')) throw Error('Injected install failure');
+                return window.originalDom[name].apply(this,args);
+              };
+            }""")
             editor.setMarkdown('must not replace prior document', uuid4().hex)
             wait(lambda: editor.state == 'failed')
-            assert not editor.can_save and editor.latest_markdown == before and len(events) == count
-            assert ':::note' in js("document.querySelector('.ProseMirror').textContent")
-            js("Element.prototype.appendChild=window.originalAppendChild; delete window.originalAppendChild")
+            assert not editor.can_save and editor.latest_markdown == '' and len(events) == count
+            assert editor.view.isVisible()  # The view is never hidden; the Web body is discarded and locked.
+            assert js("document.getElementById('editor').textContent") == ''
+            assert js("!document.querySelector('.ProseMirror') || document.querySelector('.ProseMirror').contentEditable === 'false'")
+            js("for (const [name, fn] of Object.entries(window.originalDom)) Node.prototype[name]=fn; delete window.originalDom")
             passed('LOAD_FAILURE_SAFE')
             for size in ('15', '20'):
                 load('字号 roundtrip')
@@ -201,7 +214,7 @@ def run_smoke(app, window):
             click('H1')
             assert ':size[' not in editor.latest_markdown
             passed('HEADING_SELECTION_SIZE_AND_BLOCK_CLEANUP')
-            assert not js("[...document.querySelectorAll('#toolbar button')].some(b=>b.textContent==='正文')")
+            assert not js("[...document.querySelectorAll('#toolbar button')].some(b=>b.dataset.command==='正文')")
             assert js("[...document.querySelectorAll('#toolbar button')].slice(0,6).map(b=>b.textContent).join('|')") == 'H1|H2|H3|15|17|20'
             passed('BODY_BUTTON_REMOVED')
             from src.snotes.ui.markdown_list_smoke import check_list_styles

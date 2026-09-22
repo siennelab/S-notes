@@ -197,7 +197,11 @@ class MainWindow(QMainWindow):
         self.title_input.textChanged.connect(self.mark_note_dirty)
         self.body_edit.changed.connect(self._markdown_changed)
         self.body_edit.loaded.connect(self._markdown_loaded)
+        self.body_edit.loadFailed.connect(self._markdown_load_failed)
         self.body_edit.closeReady.connect(self._editor_close_ready)
+        self._note_load = None
+        # Pending (note, metadata, load_id, read_only): shown only after loaded.
+        self._pending_note = None
         self._pending_switch = None
         self._close_ready = False
         self._close_pending = False
@@ -481,10 +485,26 @@ class MainWindow(QMainWindow):
         )
 
     def switch_note(self, note_id: int) -> None:
-        if self.current_note is not None and note_id == self.current_note.id:
-            self._enter_note_navigation_mode()
-            return
         if self._close_pending:
+            return
+        if self.current_note is None:
+            # There is no editable document to flush on the first selection.
+            # Going through the Web composition barrier here would run its 30 ms
+            # timer while the not-yet-available WebView is hidden; Chromium
+            # throttles that timer to about one second.  Warm switches still use
+            # the barrier below for IME and save-target safety.
+            self._enter_note_navigation_mode()
+            self.load_note(note_id)
+            return
+        if self._pending_switch is not None:
+            # currentItemChanged and itemClicked can both fire for one click.
+            # Retarget the existing barrier, including A -> B -> A, rather than
+            # starting a second flush that could close the next document.
+            self._pending_switch = note_id
+            return
+        if (self.current_note is not None and note_id == self.current_note.id
+                and self.body_edit.state != "failed"):
+            self._enter_note_navigation_mode()
             return
         # Reuse the composition/change delivery barrier before saving old note.
         self._pending_switch = note_id
@@ -512,32 +532,7 @@ class MainWindow(QMainWindow):
             except Exception as error:
                 self.shell.set_normal_status(f"AI 元数据加载失败：{error}")
                 return False
-        self.is_loading_note = True
-        try:
-            self.current_note = note
-            self.title_input.setText(note.title)
-            self.body_edit.setMarkdown(note.content_markdown, uuid.uuid4().hex)
-            self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
-            populate_location_controls(self.shell, note, self.directory_service)
-            if metadata is not None:
-                self.shell.set_ai_metadata_values(
-                    metadata.visibility,
-                    metadata.target_ids,
-                    metadata.legacy_target_names,
-                )
-            self.shell.update_metadata_summary()
-            self.has_unsaved_changes = False
-            self.conflict_active = False
-            self.autosave_retry_count = 0
-            self.save_timer.stop()
-            self.shell.set_editor_available(True)
-            self.shell.set_editor_read_only(False)
-            self.shell.set_normal_status("已保存")
-            self.shell.sidebar.select_note(note.id)
-            self._refresh_links()
-            self._refresh_action_states()
-        finally:
-            self.is_loading_note = False
+        self._begin_pending_load(note, metadata, read_only=False)
         return True
 
     def load_deleted_note(self, note_id: int) -> bool:
@@ -556,11 +551,34 @@ class MainWindow(QMainWindow):
             except Exception as error:
                 self.shell.set_normal_status(f"AI 元数据加载失败：{error}")
                 return False
+        self._begin_pending_load(note, metadata, read_only=True)
+        return True
+
+    def _begin_pending_load(self, note: Note, metadata, *, read_only: bool) -> None:
+        """Phase 1: request the body. The committed view (title, metadata and
+        body of the previous note) stays internally consistent and locked until
+        loaded commits everything for the new note at once."""
+        load_id = uuid.uuid4().hex
+        self._note_load = None if read_only else (note.id, load_id)
+        self._pending_note = (note, metadata, load_id, read_only)
+        self.save_timer.stop()
+        self.has_unsaved_changes = False
+        self.body_edit.setMarkdown(note.content_markdown, load_id)
+        # Nothing of the previous note may be edited while the switch is pending.
+        self.shell.set_editor_read_only(True)
+        self.shell.set_normal_status("正在加载正文…")
+        if not read_only:
+            self.shell.sidebar.select_note(note.id)
+
+    def _commit_pending_note(self, *, failed: str | None = None) -> None:
+        """Phase 2: one atomic UI switch. Title, metadata, body and save target
+        change together; the body is already the loaded document."""
+        note, metadata, _load_id, read_only = self._pending_note
+        self._pending_note = None
         self.is_loading_note = True
         try:
-            self.current_note = None
+            self.current_note = None if read_only else note
             self.title_input.setText(note.title)
-            self.body_edit.setMarkdown(note.content_markdown, uuid.uuid4().hex)
             self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
             populate_location_controls(self.shell, note, self.directory_service)
             if metadata is not None:
@@ -575,17 +593,33 @@ class MainWindow(QMainWindow):
             self.autosave_retry_count = 0
             self.save_timer.stop()
             self.shell.set_editor_available(True)
-            self.shell.set_editor_read_only(True)
-            self.shell.set_normal_status("回收站中 · 只读")
-            self.shell.link_drawer.set_results([])
+            self.shell.set_editor_read_only(read_only or failed is not None)
+            if failed is not None:
+                self.shell.set_normal_status(f"正文加载失败：{failed}，禁止保存")
+            elif read_only:
+                self.shell.set_normal_status("回收站中 · 只读")
+            else:
+                self.shell.set_normal_status("已保存")
+            if read_only:
+                self.shell.link_drawer.set_results([])
+            else:
+                self.shell.sidebar.select_note(note.id)
+                self._refresh_links()
+            self._refresh_action_states()
         finally:
             self.is_loading_note = False
-        return True
 
     def _markdown_loaded(self, _load_id: str, _markdown: str) -> None:
         # Canonicalization establishes the baseline; it never causes a save.
-        if self.has_unsaved_changes:
-            self.save_timer.start(self.AUTOSAVE_DELAY_MS)
+        if self._pending_note is None or self._pending_note[2] != _load_id:
+            return
+        self._commit_pending_note()
+
+    def _markdown_load_failed(self, _load_id: str, reason: str) -> None:
+        if self._pending_note is not None and self._pending_note[2] == _load_id:
+            self._commit_pending_note(failed=reason)
+            return
+        self.shell.set_normal_status(f"正文加载失败：{reason}，禁止保存")
 
     def _markdown_changed(self, _markdown: str, _load_id: str) -> None:
         if self.current_note is None:
@@ -604,7 +638,7 @@ class MainWindow(QMainWindow):
                 self.shell.set_normal_status("已保存")
 
     def mark_note_dirty(self) -> None:
-        if self.is_loading_note or self.current_note is None:
+        if self.is_loading_note or self.current_note is None or self._pending_note is not None:
             return
         self.has_unsaved_changes = True
         self.autosave_retry_count = 0
@@ -689,7 +723,8 @@ class MainWindow(QMainWindow):
     def save_current_note(self) -> bool:
         if self.current_note is None or not self.has_unsaved_changes:
             return True
-        if not self.body_edit.can_save:
+        if (not self.body_edit.can_save
+                or self._note_load != (self.current_note.id, self.body_edit.current_load_id)):
             self.shell.set_normal_status("正文尚未成功加载，禁止保存")
             return False
         if self.conflict_active:
@@ -975,6 +1010,8 @@ class MainWindow(QMainWindow):
     def clear_editor(self) -> None:
         self.is_loading_note = True
         self.current_note = None
+        self._pending_note = None
+        self._note_load = None
         self.title_input.clear()
         if not self.body_edit.closing:
             self.body_edit.setMarkdown("", uuid.uuid4().hex)
@@ -1019,8 +1056,9 @@ class MainWindow(QMainWindow):
             self._enter_note_navigation_mode()
             self.load_note(note_id)
             return
-        self._close_ready = True
-        QTimer.singleShot(0, self.close)
+        if self._close_pending:
+            self._close_ready = True
+            QTimer.singleShot(0, self.close)
 
     def closeEvent(self, event) -> None:
         if not self._close_ready:
@@ -1032,6 +1070,7 @@ class MainWindow(QMainWindow):
                     self.body_edit.prepareClose()
             return
         if self.force_save_current_note():
+            self._pending_note = None  # A late loaded/failed must not touch a closed window.
             self.receipt_refresh_timer.stop()
             event.accept()
         else:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
@@ -305,11 +307,28 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
         self.assertEqual(sidebar.main_filter_combo.objectName(), "categoryFilter")
         self.assertEqual(sidebar.sub_filter_combo.objectName(), "categoryFilter")
 
+    def wait_note(self, note_id: int, timeout: float = 15.0) -> None:
+        """The editor commits title/metadata/body together on loadComplete."""
+        deadline = time.monotonic() + timeout
+        window = self.window
+        while not (window.current_note is not None and window.current_note.id == note_id
+                   and window.body_edit.can_save) and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertIsNotNone(window.current_note)
+        self.assertEqual(window.current_note.id, note_id)
+        self.assertTrue(window.body_edit.can_save)
+
+    def load_note(self, note_id: int) -> bool:
+        result = self.window.load_note(note_id)
+        if result:
+            self.wait_note(note_id)
+        return result
+
     def test_visibility_and_target_edits_refresh_current_ai_view(self) -> None:
         note = self.add_note("Editable Gale", targets=("gale",))
         self.window.show_smart_view("ai")
         self.select_actor("gale")
-        self.window.load_note(note.id)
+        self.load_note(note.id)
         self.assertIn(note.id, {row.id for row in self.window.visible_notes})
 
         visibility = self.window.shell.ai_visibility_combo
