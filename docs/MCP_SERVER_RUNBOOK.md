@@ -203,11 +203,10 @@ direct create/prepend/append, pending status via request ID
 
 `get_note` returns both `updated_at` and an opaque `version`. For
 `prepend_note`, `append_note`, and `update_note_metadata`, copy `version`
-unchanged into `expected_version` whenever possible. The older
-`expected_updated_at` input remains supported and is compared as a normalized
-ISO 8601 instant, including full stored precision. At least one credential is
-required; if both are supplied, both must match. After one successful change,
-reusing either old credential with a new request ID must return `conflict`.
+unchanged into the required `expected_version`. The MCP tool schema exposes only
+`expected_version` (v2.1 FINAL); the legacy `expected_updated_at` credential
+stays inside the application layer for internal callers. After one successful
+change, reusing the old version with a new request ID must return `conflict`.
 
 ## Logs
 

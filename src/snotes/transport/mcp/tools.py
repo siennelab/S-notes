@@ -40,7 +40,6 @@ from src.snotes.transport.mcp.schemas import (
     TagName,
     TagList,
     TitleText,
-    VersionText,
     VersionToken,
     WriteReceipt,
 )
@@ -256,8 +255,7 @@ class LocalMcpToolAdapter:
         request_id: RequestId,
         note_id: PositiveId,
         content: ContentText,
-        expected_version: VersionToken | None = None,
-        expected_updated_at: VersionText | None = None,
+        expected_version: VersionToken,
     ) -> WriteReceipt:
         return self._write(
             "prepend_note",
@@ -267,7 +265,6 @@ class LocalMcpToolAdapter:
                 note_id=note_id,
                 content=content,
                 expected_version=expected_version,
-                expected_updated_at=expected_updated_at,
             ),
             note_id,
         )
@@ -277,8 +274,7 @@ class LocalMcpToolAdapter:
         request_id: RequestId,
         note_id: PositiveId,
         content: ContentText,
-        expected_version: VersionToken | None = None,
-        expected_updated_at: VersionText | None = None,
+        expected_version: VersionToken,
     ) -> WriteReceipt:
         return self._write(
             "append_note",
@@ -288,7 +284,6 @@ class LocalMcpToolAdapter:
                 note_id=note_id,
                 content=content,
                 expected_version=expected_version,
-                expected_updated_at=expected_updated_at,
             ),
             note_id,
         )
@@ -297,8 +292,7 @@ class LocalMcpToolAdapter:
         self,
         request_id: RequestId,
         note_id: PositiveId,
-        expected_version: VersionToken | None = None,
-        expected_updated_at: VersionText | None = None,
+        expected_version: VersionToken,
         title: TitleText | None = None,
         directory_id: PositiveId | None = None,
         add_tags: TagList | None = None,
@@ -311,7 +305,6 @@ class LocalMcpToolAdapter:
                 request_id=request_id,
                 note_id=note_id,
                 expected_version=expected_version,
-                expected_updated_at=expected_updated_at,
                 title=title,
                 directory_id=directory_id,
                 add_tags=add_tags,
@@ -784,7 +777,7 @@ def register_tools(
             adapter.prepend_note,
             "prepend_note",
             "Prepend Markdown without replacing or deleting existing body content. Supply the "
-            "version returned by get_note (preferred), or its legacy updated_at credential. "
+            "version returned by get_note as expected_version. "
             + WRITE_RULES,
             write_annotations,
         ),
@@ -792,7 +785,7 @@ def register_tools(
             adapter.append_note,
             "append_note",
             "Append Markdown without replacing or deleting existing body content. Supply the "
-            "version returned by get_note (preferred), or its legacy updated_at credential. "
+            "version returned by get_note as expected_version. "
             + WRITE_RULES,
             write_annotations,
         ),
@@ -800,7 +793,7 @@ def register_tools(
             adapter.update_note_metadata,
             "update_note_metadata",
             "Change only title, an existing visible directory, or ordinary tag additions/removals. "
-            "Supply the version returned by get_note (preferred), or its legacy updated_at credential. "
+            "Supply the version returned by get_note as expected_version. "
             + WRITE_RULES,
             write_annotations,
         ),
@@ -891,11 +884,6 @@ def _enforce_strict_input_schemas(mcp: FastMCP) -> None:
         argument_model.model_config["extra"] = "forbid"
         argument_model.model_rebuild(force=True)
         tool.parameters = argument_model.model_json_schema(by_alias=True)
-        if tool.name in {"prepend_note", "append_note", "update_note_metadata"}:
-            tool.parameters["anyOf"] = [
-                {"required": ["expected_version"]},
-                {"required": ["expected_updated_at"]},
-            ]
 
 
 def _write_response(result: dict) -> WriteReceipt:

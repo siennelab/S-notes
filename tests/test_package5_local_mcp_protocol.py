@@ -355,13 +355,11 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertIn(name, create_properties)
             for name in ("prepend_note", "append_note", "update_note_metadata"):
-                self.assertEqual(
-                    by_name[name].inputSchema["anyOf"],
-                    [
-                        {"required": ["expected_version"]},
-                        {"required": ["expected_updated_at"]},
-                    ],
-                )
+                schema = by_name[name].inputSchema
+                for combinator in ("anyOf", "oneOf", "allOf"):
+                    self.assertNotIn(combinator, schema)
+                self.assertIn("expected_version", schema["required"])
+                self.assertNotIn("expected_updated_at", schema["properties"])
             directories = await self.call(session, "list_directories", {})
             tags = await self.call(session, "list_tags", {})
             navigation = json.dumps([directories, tags], ensure_ascii=False)
