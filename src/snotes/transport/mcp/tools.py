@@ -520,6 +520,7 @@ class LocalMcpToolAdapter:
         deadline_spec: ReminderDeadlineSpec | None = None,
         clear_deadline: bool = False,
         lifecycle: LifecycleText | None = None,
+        multi_notify: bool | None = None,
     ) -> ReminderWriteReceipt:
         return self._reminder_write(
             "update_reminder_item",
@@ -533,6 +534,7 @@ class LocalMcpToolAdapter:
                 deadline_spec=deadline_spec,
                 clear_deadline=clear_deadline,
                 lifecycle=lifecycle,
+                multi_notify=multi_notify,
             ),
             item_id=item_id,
         )

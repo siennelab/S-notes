@@ -44,6 +44,15 @@ class Reminder:
     created_at: str
     updated_at: str
     completed_at: str | None = None
+    multi_notify: bool = False
+    recurrence_mode: str | None = None
+
+    @property
+    def effective_recurrence_mode(self) -> str:
+        return self.recurrence_mode or (
+            "completion_date" if self.action_spec.get("type") == "interval_from_completion"
+            else "due_date"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +68,9 @@ class ReminderOccurrence:
     deadline_notified_at: str | None
     created_at: str
     updated_at: str
+    advance_7_notified_at: str | None = None
+    advance_3_notified_at: str | None = None
+    advance_1_notified_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +81,8 @@ class ReminderDraft:
     deadline_spec: dict | None = None
     note: str = ""
     table_id: int | None = None
+    multi_notify: bool = False
+    recurrence_mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

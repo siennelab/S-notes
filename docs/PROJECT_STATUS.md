@@ -3,6 +3,31 @@
 This is the current repository handoff for S-notes. Frozen R1 information is
 retained below; active R2 package closeouts are recorded first.
 
+## 2026-09-23 — 3.5-0 Reminder CLOSED
+
+S completed human acceptance with PASS and accepted the current implementation.
+Multi-notify defaults OFF; ON sends at 7 / 3 / 1 days before and on the
+deadline, falling back to the start date when no deadline exists. OFF retains
+the existing single normal notification. Occurrence/node dedupe and no overdue
+chasing remain in place. Only day-interval recurrence supports recalculation
+from actual completion; calendar recurrence retains its existing rules.
+The existing AI update tool can change multi_notify without broader authority.
+The first-entry Reminder table widths and resize behavior are fixed.
+
+Validation: 59 targeted tests passed (56 core/protocol and 3 Reminder UI).
+The formal dist/S-notes.app was rebuilt, signature-verified, launched, and
+opened on Reminder with the existing Application Support data preserved.
+
+No restoration of the old public ntfy.sh topic or phone push acceptance is
+required for 3.5-0. Real end-to-end multi-notify push acceptance is deferred to
+3.5-B Reminder Cloud Authority through the formal chain:
+GreenCloud Reminder scheduler → https://ntfy.ke-den.de → new s-* Reminder
+topic → iPhone lock-screen human acceptance.
+
+3.5-0 is CLOSED. Notes MCP follow-up and GreenCloud implementation were not
+started in this task. The next separately opened task is Notes MCP / Markdown
+write.
+
 ## 2026-08-12 S-notes / S-lumen Directory Consolidation
 
 The two-directory period is formally closed. `/Users/s/Documents/项目/S-notes`

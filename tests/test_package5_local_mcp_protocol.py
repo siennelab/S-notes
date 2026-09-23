@@ -291,6 +291,41 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.structuredContent)
         return response.structuredContent
 
+    async def test_reminder_multi_notify_write_preserves_authorization(self) -> None:
+        visible = self.reminder_ids["visible_reminder"]
+        hidden = self.reminder_ids["hidden_reminder"]
+        async with self.session(read_only=False, actor="clawbot", tool_allowlist=CLAWDE_REMINDER_TOOLS) as session:
+            tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+            self.assertEqual(set(tools), CLAWDE_REMINDER_TOOLS)
+            self.assertIn("multi_notify", tools["update_reminder_item"].inputSchema["properties"])
+            for enabled in (True, False):
+                result = await self.call(session, "update_reminder_item", {
+                    "request_id": f"multi-{enabled}", "item_id": visible, "multi_notify": enabled,
+                })
+                self.assertEqual(result["status"], "updated")
+                self.assertEqual(self.reminders.get_reminder(visible).reminder.multi_notify, enabled)
+                read = await self.call(session, "get_reminder_item", {"item_id": visible})
+                self.assertIn('"multi_notify": ' + str(enabled).lower(), json.dumps(read))
+            result = await self.call(session, "update_reminder_item", {
+                "request_id": "hidden-multi", "item_id": hidden, "multi_notify": True,
+            })
+            self.assertEqual(result["status"], "not_found")
+            self.assertFalse(self.reminders.get_reminder(hidden).reminder.multi_notify)
+            for field in ("ai_visible", "actor_target_id"):
+                response = await session.call_tool("update_reminder_item", {
+                    "request_id": f"extra-{field}", "item_id": visible,
+                    "multi_notify": True, field: "forbidden",
+                })
+                self.assertTrue(response.isError)
+            self.assertFalse(self.reminders.get_reminder(visible).reminder.multi_notify)
+        for read_only, allowlist in ((True, None), (False, {"get_reminder_item"})):
+            async with self.session(read_only=read_only, actor="clawbot", tool_allowlist=allowlist) as session:
+                response = await session.call_tool("update_reminder_item", {
+                    "request_id": "blocked-multi", "item_id": visible, "multi_notify": True,
+                })
+                self.assertTrue(response.isError)
+        self.assertFalse(self.reminders.get_reminder(visible).reminder.multi_notify)
+
     async def test_normal_catalog_and_frozen_strict_schemas(self) -> None:
         async with self.session(read_only=False) as session:
             tools = (await session.list_tools()).tools

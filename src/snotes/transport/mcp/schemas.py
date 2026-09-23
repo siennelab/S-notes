@@ -434,6 +434,8 @@ class ReminderRecord(StrictModel):
     status_label: str
     action_spec: dict
     deadline_spec: dict | None = None
+    multi_notify: bool = False
+    recurrence_mode: str = "due_date"
     schedule: str | None = None
     next_action_date: str | None = None
     next_deadline_date: str | None = None

@@ -15,7 +15,7 @@ INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "�
 CATEGORY_SCHEMA_VERSION_KEY = "category_schema_version"
 CATEGORY_SCHEMA_VERSION = "2"
 REMINDER_SCHEMA_VERSION_KEY = "reminder_schema_version"
-REMINDER_SCHEMA_VERSION = "3"
+REMINDER_SCHEMA_VERSION = "4"
 
 SCHEMA_STATEMENTS = (
     """
@@ -389,10 +389,22 @@ def _ensure_reminder_columns(connection) -> None:
     }
     additions = {
         "table_id": "ALTER TABLE reminders ADD COLUMN table_id INTEGER REFERENCES reminder_tables(id)",
+        "multi_notify": "ALTER TABLE reminders ADD COLUMN multi_notify INTEGER NOT NULL DEFAULT 0",
+        # NULL retains the original schedule algorithm, including its initial anchor.
+        "recurrence_mode": "ALTER TABLE reminders ADD COLUMN recurrence_mode TEXT",
     }
     for column, statement in additions.items():
         if column not in reminder_columns:
             connection.execute(statement)
+
+    occurrence_columns = {
+        str(row["name"])
+        for row in connection.execute('PRAGMA table_info("reminder_occurrences")')
+    }
+    for days in (7, 3, 1):
+        column = f"advance_{days}_notified_at"
+        if column not in occurrence_columns:
+            connection.execute(f"ALTER TABLE reminder_occurrences ADD COLUMN {column} TEXT")
 
 
 def _ensure_default_reminder_label(connection) -> None:

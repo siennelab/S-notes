@@ -545,6 +545,7 @@ class ReminderService:
         deadline_spec: dict | None = None,
         clear_deadline: bool = False,
         lifecycle: str | None = None,
+        multi_notify: bool | None = None,
     ) -> dict:
         existing = self._repository.get_operation(request_id, actor_target_id)
         if existing is not None:
@@ -568,6 +569,8 @@ class ReminderService:
             deadline_spec=new_deadline,
             note=note if note is not None else before.note,
             table_id=before.table_id,
+            multi_notify=before.multi_notify if multi_notify is None else multi_notify,
+            recurrence_mode=before.recurrence_mode,
         )
         updated = self.update_reminder(item_id, draft)
         after_item = self.get_reminder(updated.id)
@@ -772,6 +775,12 @@ class ReminderService:
         return sent
 
     def dispatch_due_notifications(self, today: date | None = None) -> int:
+        with self._repository.notification_dispatch_lock() as acquired:
+            if not acquired:
+                return 0
+            return self._dispatch_due_notifications(today)
+
+    def _dispatch_due_notifications(self, today: date | None = None) -> int:
         if self._transport is None:
             raise RuntimeError("reminder_notification_transport_not_configured")
         settings = self.settings()
@@ -796,7 +805,7 @@ class ReminderService:
         notifications: list[ReminderNotification] = []
         for item in self.list_reminders():
             occurrence = item.occurrence
-            if occurrence is None or item.status not in {"due", "overdue"}:
+            if occurrence is None or occurrence.status != OCCURRENCE_PENDING:
                 continue
             action_date = date.fromisoformat(occurrence.action_date)
             deadline_date = (
@@ -804,9 +813,21 @@ class ReminderService:
                 if occurrence.deadline_date
                 else None
             )
+            notification_anchor = deadline_date or action_date
+            days_before = (notification_anchor - business_today).days
+            if item.reminder.multi_notify and days_before in (7, 3, 1):
+                kind = f"advance_{days_before}"
+                if not getattr(occurrence, f"{kind}_notified_at"):
+                    notifications.append(ReminderNotification(
+                        item.reminder.id, occurrence.id, kind, "S-notes 提醒",
+                        f"{item.reminder.title} 还有 {days_before} 天到"
+                        f"{'最晚处理日' if deadline_date else '开始处理日期'}。",
+                    ))
+            # Action and deadline share the normal node: never chase an already
+            # notified occurrence when it becomes overdue. Retain missed-run recovery.
+            if occurrence.action_notified_at or occurrence.deadline_notified_at:
+                continue
             if deadline_date is not None and business_today >= deadline_date:
-                if occurrence.deadline_notified_at:
-                    continue
                 notifications.append(
                     ReminderNotification(
                         item.reminder.id,
@@ -817,7 +838,8 @@ class ReminderService:
                     )
                 )
                 continue
-            if business_today >= action_date and not occurrence.action_notified_at:
+            normal_date = notification_anchor if item.reminder.multi_notify else action_date
+            if business_today >= normal_date and not occurrence.action_notified_at:
                 notifications.append(
                     ReminderNotification(
                         item.reminder.id,
@@ -921,6 +943,10 @@ class ReminderService:
                 next_occurrence is None
                 or date.fromisoformat(next_occurrence.action_date) > today
             ):
+                if next_occurrence is not None and (
+                    reminder.multi_notify or reminder.recurrence_mode is not None
+                ):
+                    return next_occurrence
                 return completed
         current = self._current_uncompleted_occurrence(reminder)
         if current is not None and date.fromisoformat(current.action_date) <= today:
@@ -1015,11 +1041,27 @@ class ReminderService:
     ) -> ReminderOccurrence | None:
         if not is_recurring(reminder.action_spec):
             return None
-        after = date.fromisoformat(occurrence.action_date)
-        if str(reminder.action_spec.get("type")) != "interval_from_completion":
-            after = after + timedelta(days=1)
+        pending = self._current_uncompleted_occurrence(reminder)
+        if pending is not None:
+            return pending
+        spec = reminder.action_spec
+        if reminder.recurrence_mode is not None and spec.get("type") in {
+            "interval_days", "interval_from_completion",
+        }:
+            anchor = date.fromisoformat(occurrence.action_date)
+            if reminder.recurrence_mode == "completion_date":
+                completed = datetime.fromisoformat(occurrence.completed_at)
+                if completed.tzinfo is None:
+                    completed = completed.replace(tzinfo=SHANGHAI)
+                anchor = completed.astimezone(SHANGHAI).date()
+            spec = {**spec, "type": "interval_days", "anchor_date": anchor.isoformat()}
+            after = anchor + timedelta(days=1)
+        else:
+            after = date.fromisoformat(occurrence.action_date)
+            if spec.get("type") != "interval_from_completion":
+                after += timedelta(days=1)
         action = next_action_date(
-            reminder.action_spec,
+            spec,
             on_or_after=after,
             last_completed_at=occurrence.completed_at,
         )
@@ -1103,6 +1145,14 @@ class ReminderService:
             dict(draft.deadline_spec) if draft.deadline_spec else None,
         )
         self._validate_schedule(action_spec, deadline_spec)
+        if not isinstance(draft.multi_notify, bool):
+            raise ValueError("multi_notify_must_be_boolean")
+        if draft.recurrence_mode not in (None, "due_date", "completion_date"):
+            raise ValueError("unsupported_recurrence_mode")
+        if draft.recurrence_mode == "completion_date" and action_spec.get("type") not in {
+            "interval_days", "interval_from_completion",
+        }:
+            raise ValueError("completion_mode_requires_day_interval")
         return ReminderDraft(
             title,
             lifecycle,
@@ -1110,6 +1160,8 @@ class ReminderService:
             deadline_spec,
             draft.note.strip(),
             table_id,
+            draft.multi_notify,
+            draft.recurrence_mode,
         )
 
     def _validate_schedule(self, action_spec: dict, deadline_spec: dict | None) -> None:
@@ -1231,6 +1283,8 @@ def _item_snapshot(item: ReminderListItem | None) -> dict:
         "ai_visible": item.table.ai_visible,
         "action_spec": item.reminder.action_spec,
         "deadline_spec": item.reminder.deadline_spec,
+        "multi_notify": item.reminder.multi_notify,
+        "recurrence_mode": item.reminder.effective_recurrence_mode,
         "next_action_date": item.next_action_date,
         "next_deadline_date": item.next_deadline_date,
         "occurrence": (
@@ -1279,6 +1333,8 @@ def _changed_fields(
     after: ReminderListItem,
 ) -> tuple[str, ...]:
     fields: list[str] = []
+    if before.reminder.multi_notify != after.reminder.multi_notify:
+        fields.append("multi_notify")
     if before.reminder.title != after.reminder.title:
         fields.append("title")
     if before.reminder.note != after.reminder.note:

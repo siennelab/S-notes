@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QDate, QLocale, QSize, Qt, QTime, Signal
+from PySide6.QtCore import QDate, QEvent, QLocale, QSize, Qt, QTime, Signal
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -171,6 +171,7 @@ class ReminderCenter(QWidget):
             )
         self.table.currentCellChanged.connect(lambda *_args: self._update_action_states())
         layout.addWidget(self.table, stretch=1)
+        self.table.viewport().installEventFilter(self)
 
         self.settings_widget = QWidget()
         self.settings_widget.setObjectName("reminderSettings")
@@ -221,9 +222,11 @@ class ReminderCenter(QWidget):
         self.refresh_theme()
         self.refresh()
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._apply_table_widths()
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.table.viewport() and event.type() == QEvent.Resize:
+            # The page can resize before its child layout has sized the viewport.
+            self._apply_table_widths()
+        return super().eventFilter(watched, event)
 
     def refresh(self) -> None:
         if self.trash_mode:
@@ -777,11 +780,22 @@ class ReminderDialog(QDialog):
         self.repeat_combo.addItem("每月固定日", "monthly_day")
         self.repeat_combo.addItem("每年固定公历日期", "yearly_date")
         self.repeat_combo.addItem("每 N 天", "interval_days")
-        self.repeat_combo.addItem("完成后 + N 天", "interval_from_completion")
         self.repeat_combo.addItem("每月第 N 个星期几", "nth_weekday_monthly")
         self.repeat_combo.addItem("每年某月第 N 个星期几", "nth_weekday_yearly")
         self.repeat_combo.addItem("每年农历某月某日", "lunar_yearly")
         self.repeat_combo.addItem("A股每月某日或之后首个交易日", "cn_a_share_on_or_after")
+        self.multi_notify_check = QCheckBox("OFF · 仅当天")
+        self.multi_notify_check.setObjectName("reminderMultiNotify")
+        self.multi_notify_check.toggled.connect(lambda enabled: self.multi_notify_check.setText(
+            "ON · 提前 7 天、3 天、1 天和当天" if enabled else "OFF · 仅当天"
+        ))
+        self.recurrence_mode_combo = FloatingComboBox()
+        self.recurrence_mode_combo.setObjectName("reminderRecurrenceMode")
+        self.recurrence_mode_combo.configure_popup(320)
+        self.recurrence_mode_combo.setMinimumWidth(320)
+        self.recurrence_mode_combo.addItem("从原到期日继续", "due_date")
+        self.recurrence_mode_combo.addItem("从实际完成日重新计算", "completion_date")
+        self.recurrence_mode_label = _dialog_label("下次周期")
         self.repeat_number = QSpinBox()
         self.repeat_number.setRange(1, 3660)
         self.repeat_number.setValue(1)
@@ -860,8 +874,10 @@ class ReminderDialog(QDialog):
         form.addRow(self.title_label, self.title_input)
         form.addRow(self.lifecycle_label, self.lifecycle_combo)
         form.addRow(self.action_label, self.action_date)
+        form.addRow(_dialog_label("多次提醒"), self.multi_notify_check)
         form.addRow(self.repeat_label, self.repeat_combo)
         form.addRow(self.repeat_param_label, self.repeat_param_widget)
+        form.addRow(self.recurrence_mode_label, self.recurrence_mode_combo)
         form.addRow(self.deadline_label, self.deadline_widget)
         form.addRow(self.repeat_until_label, self.repeat_until_widget)
         form.addRow(self.note_label, self.note_input)
@@ -895,7 +911,19 @@ class ReminderDialog(QDialog):
             deadline_spec=self._deadline_spec(action_spec),
             note=self.note_input.toPlainText(),
             table_id=self.table_id,
+            multi_notify=self.multi_notify_check.isChecked(),
+            recurrence_mode=self._recurrence_mode(),
         )
+
+    def _recurrence_mode(self) -> str | None:
+        if self.repeat_combo.currentData() != "interval_days":
+            return None
+        mode = str(self.recurrence_mode_combo.currentData())
+        if (self.reminder and mode == self.reminder.effective_recurrence_mode
+                and self._action_spec(self._pydate(self.action_date.date())).get("type")
+                == self.reminder.action_spec.get("type")):
+            return self.reminder.recurrence_mode
+        return mode
 
     def _action_spec(self, action: date) -> dict:
         mode = str(self.repeat_combo.currentData())
@@ -907,7 +935,15 @@ class ReminderDialog(QDialog):
         if mode == "yearly_date":
             return {"type": "yearly_date", "month": action.month, "day": action.day}
         if mode == "interval_days":
-            return {"type": "interval_days", "anchor_date": action.isoformat(), "days": value}
+            kind = "interval_days"
+            # Saving unrelated controls must preserve old completion-anchor semantics.
+            if self.reminder:
+                old = self.reminder.action_spec
+                if (old.get("type") == "interval_from_completion"
+                        and old.get("anchor_date") == action.isoformat()
+                        and old.get("days") == value):
+                    kind = "interval_from_completion"
+            return {"type": kind, "anchor_date": action.isoformat(), "days": value}
         if mode == "interval_from_completion":
             return {"type": "interval_from_completion", "anchor_date": action.isoformat(), "days": value}
         if mode == "nth_weekday_monthly":
@@ -927,12 +963,16 @@ class ReminderDialog(QDialog):
 
     def _load(self, reminder: Reminder) -> None:
         self.title_input.setText(reminder.title)
+        self.multi_notify_check.setChecked(reminder.multi_notify)
+        self.recurrence_mode_combo.setCurrentIndex(
+            self.recurrence_mode_combo.findData(reminder.effective_recurrence_mode)
+        )
         self.note_input.setPlainText(reminder.note)
         lifecycle_index = self.lifecycle_combo.findData(reminder.lifecycle)
         self.lifecycle_combo.setCurrentIndex(max(0, lifecycle_index))
         spec = reminder.action_spec
         spec_type = str(spec.get("type", "one_time"))
-        mode = spec_type
+        mode = "interval_days" if spec_type == "interval_from_completion" else spec_type
         if spec_type == "nth_weekday":
             mode = "nth_weekday_yearly" if spec.get("month") else "nth_weekday_monthly"
         index = self.repeat_combo.findData(mode)
@@ -955,6 +995,7 @@ class ReminderDialog(QDialog):
 
     def _update_repeat_parameter(self) -> None:
         mode = str(self.repeat_combo.currentData())
+        self.form.setRowVisible(self.recurrence_mode_label, mode == "interval_days")
         if mode == "one_time":
             self._set_repeat_parameter("", "", False)
         elif mode == "monthly_day":

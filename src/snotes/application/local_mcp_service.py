@@ -504,6 +504,7 @@ class LocalMcpService:
         deadline_spec: dict | None = None,
         clear_deadline: bool = False,
         lifecycle: str | None = None,
+        multi_notify: bool | None = None,
     ) -> dict:
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
@@ -517,6 +518,7 @@ class LocalMcpService:
             deadline_spec=deadline_spec,
             clear_deadline=clear_deadline,
             lifecycle=lifecycle,
+            multi_notify=multi_notify,
         )
 
     def complete_reminder_item(
@@ -649,6 +651,8 @@ def _reminder_item_payload(item: ReminderListItem) -> dict:
         "status_label": item.status_label,
         "action_spec": item.reminder.action_spec,
         "deadline_spec": item.reminder.deadline_spec,
+        "multi_notify": item.reminder.multi_notify,
+        "recurrence_mode": item.reminder.effective_recurrence_mode,
         "schedule": item.next_action_date,
         "next_action_date": item.next_action_date,
         "next_deadline_date": item.next_deadline_date,

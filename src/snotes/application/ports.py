@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -263,6 +264,8 @@ class ReminderRepository(Protocol):
     def delete_pending_occurrences(self, reminder_id: int) -> None: ...
 
     def mark_occurrence_completed(self, occurrence_id: int, completed_at: str) -> None: ...
+
+    def notification_dispatch_lock(self) -> AbstractContextManager[bool]: ...
 
     def mark_notified(self, occurrence_id: int, kind: str, notified_at: str) -> None: ...
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import fcntl
+from contextlib import contextmanager
 import uuid
 from collections.abc import Sequence
 
@@ -50,8 +52,8 @@ class SQLiteReminderRepository(ReminderRepository):
                 """
                 INSERT INTO reminders (
                     table_id, title, lifecycle, action_spec_json,
-                    deadline_spec_json, note, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    deadline_spec_json, note, created_at, updated_at, multi_notify, recurrence_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     table_id,
@@ -62,6 +64,8 @@ class SQLiteReminderRepository(ReminderRepository):
                     draft.note,
                     timestamp,
                     timestamp,
+                    int(draft.multi_notify),
+                    draft.recurrence_mode,
                 ),
             )
             return self._read_reminder(connection, int(cursor.lastrowid))
@@ -75,7 +79,7 @@ class SQLiteReminderRepository(ReminderRepository):
                 """
                 UPDATE reminders
                 SET table_id = ?, title = ?, lifecycle = ?, action_spec_json = ?,
-                    deadline_spec_json = ?, note = ?, updated_at = ?
+                    deadline_spec_json = ?, note = ?, updated_at = ?, multi_notify = ?, recurrence_mode = ?
                 WHERE id = ? AND lifecycle != ?
                 """,
                 (
@@ -86,6 +90,8 @@ class SQLiteReminderRepository(ReminderRepository):
                     self._json(draft.deadline_spec),
                     draft.note,
                     timestamp,
+                    int(draft.multi_notify),
+                    draft.recurrence_mode,
                     reminder_id,
                     REMINDER_DELETED,
                 ),
@@ -685,10 +691,27 @@ class SQLiteReminderRepository(ReminderRepository):
             if cursor.rowcount != 1:
                 raise ValueError("reminder_occurrence_not_found")
 
+    @contextmanager
+    def notification_dispatch_lock(self):
+        # GUI/helper processes share the existing occurrence dedupe under one lock.
+        # A busy dispatcher can be skipped; the existing scheduler will poll again.
+        path = self.connections.database_path.with_suffix(".reminder-notifications.lock")
+        with path.open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def mark_notified(self, occurrence_id: int, kind: str, notified_at: str) -> None:
         column = {
             NOTIFICATION_ACTION: "action_notified_at",
             NOTIFICATION_DEADLINE: "deadline_notified_at",
+            **{f"advance_{days}": f"advance_{days}_notified_at" for days in (7, 3, 1)},
         }[kind]
         timestamp = timestamp_seconds(self.clock)
         with self.connections.write() as connection:
@@ -984,6 +1007,8 @@ class SQLiteReminderRepository(ReminderRepository):
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
             completed_at=row["completed_at"],
+            multi_notify=bool(row["multi_notify"]),
+            recurrence_mode=row["recurrence_mode"],
         )
 
     @staticmethod
@@ -1027,6 +1052,9 @@ class SQLiteReminderRepository(ReminderRepository):
             completed_at=row["completed_at"],
             action_notified_at=row["action_notified_at"],
             deadline_notified_at=row["deadline_notified_at"],
+            advance_7_notified_at=row["advance_7_notified_at"],
+            advance_3_notified_at=row["advance_3_notified_at"],
+            advance_1_notified_at=row["advance_1_notified_at"],
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
         )

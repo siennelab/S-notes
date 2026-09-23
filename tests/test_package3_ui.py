@@ -615,6 +615,52 @@ class Package3UiTests(unittest.TestCase):
                 self.assertEqual({note.id for note in self.window.visible_notes}, all_notes)
                 self.assertFalse(any(button.property("active") for button in sidebar.smart_buttons.values()))
 
+    def test_reminder_columns_ready_on_first_entry_and_resize(self) -> None:
+        for index in range(35):
+            self.window.reminder_service.create_reminder(ReminderDraft(
+                title=f"FICTIONAL width {index}", lifecycle=REMINDER_ACTIVE,
+                action_spec={"type": "one_time", "date": "2027-10-01"},
+                note="FICTIONAL layout fixture",
+            ))
+        self.window.resize(1800, 900)
+        self.window.show()
+        self.window.shell.show_notes_surface()
+        QTest.qWait(150)
+        self.window.shell.show_reminder_surface()
+        QTest.qWait(150)
+        table = self.window.shell.reminder_center.table
+
+        def widths():
+            return tuple(table.columnWidth(column) for column in range(6))
+
+        def expected():
+            width = table.viewport().width()
+            return tuple(max(minimum, int(width * ratio)) for ratio, minimum in zip(
+                (0.24, 0.16, 0.14, 0.20, 0.12, 0.22), (160, 160, 112, 180, 112, 240),
+            ))
+
+        first, first_expected = widths(), expected()
+        self.assertFalse(table.selectedItems())
+        QTest.mouseClick(table.viewport(), Qt.LeftButton, pos=table.visualItemRect(table.item(0, 0)).center())
+        QTest.qWait(150)
+        clicked = widths()
+        self.window.resize(1500, 800)
+        QTest.qWait(150)
+        resized, resized_expected = widths(), expected()
+        self.window.shell.show_notes_surface()
+        QTest.qWait(50)
+        self.window.resize(1700, 900)
+        QTest.qWait(50)
+        self.window.shell.show_reminder_surface()
+        QTest.qWait(150)
+        returned, returned_expected = widths(), expected()
+        print(f"Reminder widths: first={first}, expected={first_expected}, clicked={clicked}, "
+              f"resized={resized}, resized_expected={resized_expected}", flush=True)
+        self.assertEqual(first, first_expected)
+        self.assertEqual(clicked, first)
+        self.assertEqual(resized, resized_expected)
+        self.assertEqual(returned, returned_expected)
+
     def test_reminder_dialog_uses_localized_dates_and_dynamic_repeat_parameters(self) -> None:
         dialog = ReminderDialog(parent=self.window)
         self.addCleanup(dialog.close)
@@ -664,15 +710,17 @@ class Package3UiTests(unittest.TestCase):
         self.assertTrue(dialog.repeat_until_date.isHidden())
 
         dialog.repeat_combo.setCurrentIndex(
-            dialog.repeat_combo.findData("interval_from_completion")
+            dialog.repeat_combo.findData("interval_days")
         )
         dialog.deadline_combo.setCurrentIndex(dialog.deadline_combo.findData("set"))
         dialog.deadline_date.setDate(dialog.action_date.date().addDays(7))
         dialog.repeat_until_combo.setCurrentIndex(
             dialog.repeat_until_combo.findData("never")
         )
+        dialog.recurrence_mode_combo.setCurrentIndex(1)
         dialog.repeat_number.setValue(90)
-        self.assertEqual(dialog.repeat_param_label.text(), "实际完成后再间隔")
+        self.assertEqual(dialog.repeat_param_label.text(), "间隔天数")
+        self.assertEqual(dialog.draft().recurrence_mode, "completion_date")
         self.assertEqual(dialog.repeat_param_unit.text(), "天")
         self.assertEqual(dialog.draft().action_spec["days"], 90)
         self.assertEqual(dialog.draft().deadline_spec, {"type": "offset_days", "days": 7})
@@ -694,6 +742,49 @@ class Package3UiTests(unittest.TestCase):
                 dialog.deadline_date.setDate(QDate(2026, 9, 12))
                 self.assertTrue(dialog.deadline_combo.isEnabled())
                 self.assertEqual(dialog.draft().deadline_spec, {"type": "offset_days", "days": 2})
+
+    def test_reminder_multi_notify_and_recurrence_controls_persist(self) -> None:
+        service = self.window.reminder_service
+        reminder = service.create_reminder(ReminderDraft(
+            title="FICTIONAL ctexcel UI", lifecycle=REMINDER_ACTIVE,
+            action_spec={"type": "interval_days", "anchor_date": "2026-10-01", "days": 90},
+        ))
+        before = service.get_reminder(reminder.id).occurrence
+        dialog = ReminderDialog(reminder, self.window)
+        self.addCleanup(dialog.close)
+        self.assertFalse(dialog.multi_notify_check.isChecked())
+        self.assertEqual(dialog.recurrence_mode_combo.currentData(), "due_date")
+        self.assertGreaterEqual(dialog.recurrence_mode_combo.minimumWidth(), 320)
+        dialog.multi_notify_check.setChecked(True)
+        dialog.recurrence_mode_combo.setCurrentIndex(1)
+        saved = service.update_reminder(reminder.id, dialog.draft())
+        self.assertEqual(service.get_reminder(reminder.id).occurrence, before)
+        reopened = ReminderDialog(saved, self.window)
+        self.addCleanup(reopened.close)
+        self.assertTrue(reopened.multi_notify_check.isChecked())
+        self.assertEqual(reopened.recurrence_mode_combo.currentData(), "completion_date")
+        reopened.multi_notify_check.setChecked(False)
+        reopened.recurrence_mode_combo.setCurrentIndex(0)
+        saved = service.update_reminder(reminder.id, reopened.draft())
+        self.assertFalse(saved.multi_notify)
+        self.assertEqual(saved.recurrence_mode, "due_date")
+        # Old completion-based records round-trip without changing their anchor/spec.
+        legacy = service.create_reminder(ReminderDraft(
+            title="FICTIONAL legacy", lifecycle=REMINDER_ACTIVE,
+            action_spec={"type": "interval_from_completion", "anchor_date": "2026-10-01", "days": 90},
+        ))
+        legacy_dialog = ReminderDialog(legacy, self.window)
+        self.addCleanup(legacy_dialog.close)
+        legacy_dialog.multi_notify_check.setChecked(True)
+        draft = legacy_dialog.draft()
+        self.assertEqual(draft.action_spec, legacy.action_spec)
+        self.assertIsNone(draft.recurrence_mode)
+        self.assertEqual(legacy_dialog.recurrence_mode_combo.currentData(), "completion_date")
+        legacy_dialog.repeat_number.setValue(60)
+        self.assertEqual(legacy_dialog.draft().recurrence_mode, "completion_date")
+        legacy_dialog.repeat_combo.setCurrentIndex(legacy_dialog.repeat_combo.findData("monthly_day"))
+        self.assertFalse(legacy_dialog.form.isRowVisible(legacy_dialog.recurrence_mode_label))
+        self.assertIsNone(legacy_dialog.draft().recurrence_mode)
 
     def test_reminder_dialog_nth_weekday_yearly_and_monthly_round_trip(self) -> None:
         dialog = ReminderDialog(parent=self.window)
