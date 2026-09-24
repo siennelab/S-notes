@@ -29,7 +29,7 @@ from src.snotes.storage.repositories.directories import SQLiteDirectoriesReposit
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
-from src.snotes.ui.ai_center_dialog import ReceiptCard, ReceiptInboxView
+from src.snotes.ui.ai_center_dialog import AiCenterDialog, ReceiptCard, ReceiptInboxView
 
 
 class Step03FollowupTests(unittest.TestCase):
@@ -123,6 +123,60 @@ class Step03FollowupTests(unittest.TestCase):
     def _formal_state(self):
         with self.connections.read() as connection:
             return tuple(tuple(row) for row in connection.execute("SELECT * FROM notes ORDER BY id"))
+
+    def _audit_center(self):
+        audit = AiAuditService(SQLiteAiAuditRepository(self.connections))
+        center = AiCenterDialog(self.receipts, self.metadata, audit=audit)
+        self.addCleanup(center.close)
+        center.refresh_logs()
+        return audit, center
+
+    def test_conflict_retry_audit_displays_conflict_not_human_rejection(self):
+        note = self._note()
+        request_id = "audit-conflict-retry"
+        receipt_id = self._edit(note, request_id)
+        self.notes.save_note(
+            note.id, title=note.title, content_markdown="S later edit\n",
+            location=note.location, expected_revision=note.revision,
+        )
+        view, card = self._view(receipt_id, expanded=False)
+        with patch.object(QMessageBox, "warning"):
+            QTest.mouseClick(card.accept_button, Qt.LeftButton)
+        retry = self.writes.edit_note(
+            request_id=request_id, note_id=note.id,
+            expected_version=self._version(note),
+            edits=[{"old_markdown": "Before", "new_markdown": "After"}],
+        )
+        self.assertEqual(retry["previous_status"], "conflict")
+        self.assertEqual(retry["handling_mode"], "human_rejected")
+        self.assertTrue(retry["reason"])
+        audit, center = self._audit_center()
+        rows = audit.list_call_logs()
+        index = next(i for i, row in enumerate(rows) if row.is_duplicate)
+        self.assertEqual(rows[index].handling_mode, "human_rejected")
+        self.assertEqual(center.log_table.item(index, 6).text(), "版本冲突 · 未写入")
+        self.assertEqual(self.notes.get_note(note.id).content_markdown, "S later edit\n")
+
+    def test_audit_genuine_rejection_and_other_modes_keep_labels(self):
+        note = self._note()
+        receipt_id = self._edit(note, "audit-genuine-reject")
+        self.receipts.discard_receipt(receipt_id)
+        self.writes.edit_note(
+            request_id="audit-genuine-reject", note_id=note.id,
+            expected_version=self._version(note),
+            edits=[{"old_markdown": "Before", "new_markdown": "After"}],
+        )
+        audit, center = self._audit_center()
+        expected = {"direct": "直接执行", "human_approved": "人工确认", "read": "读取"}
+        for mode in expected:
+            audit.record_event("clawbot", "append", request_id=mode,
+                               handling_mode=mode, status="updated")
+        center.refresh_logs()
+        for index, row in enumerate(audit.list_call_logs()):
+            if row.is_duplicate:
+                self.assertEqual(center.log_table.item(index, 6).text(), "人工拒绝")
+            elif row.request_id in expected:
+                self.assertEqual(center.log_table.item(index, 6).text(), expected[row.request_id])
 
     def test_stale_edit_accept_records_conflict_and_keeps_stored_diff(self) -> None:
         for expanded in (True, False):

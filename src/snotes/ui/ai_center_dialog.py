@@ -1226,6 +1226,22 @@ class AiCenterDialog(QWidget):
                 )
             if row.is_duplicate:
                 status += " · 重复请求"
+            operation = (
+                self.receipt_view.service.mcp_get_operation(
+                    row.request_id, row.actor_target_id
+                )
+                if row.request_id
+                else None
+            )
+            handling_label = (
+                "版本冲突 · 未写入"
+                if operation and operation.get("status") == "conflict"
+                else _audit_display_text(
+                    row.handling_mode,
+                    AUDIT_HANDLING_MODE_LABELS,
+                    unknown_label="其他方式",
+                )
+            )
             values = (
                 row.called_at.replace("T", " ")[:19],
                 row.actor_display,
@@ -1237,11 +1253,7 @@ class AiCenterDialog(QWidget):
                 row.request_id,
                 row.note_id or "",
                 row.result_count,
-                _audit_display_text(
-                    row.handling_mode,
-                    AUDIT_HANDLING_MODE_LABELS,
-                    unknown_label="其他方式",
-                ),
+                handling_label,
                 status,
             )
             for column, value in enumerate(values):
