@@ -61,6 +61,15 @@ actor authorization, and version before saving; a failure leaves formal body,
 history, revision, and timestamp unchanged. A successful change updates history,
 revision, timestamp, version, and receipt through the existing transaction.
 
+AI Center keeps the stored old/new edit pairs visible even if the current note
+has changed or the receipt was rejected. An unavailable stale final preview does
+not swallow Accept: the existing acceptance transaction records `conflict`,
+rejects the receipt, and the UI shows the reason. The original pairs remain
+viewable under processed receipts. Accept shows immediate processing feedback.
+Metadata cards show added/removed tags when the current note still matches the
+proposal version; stale proposals show the stored complete target tag list,
+because that payload does not contain a historical add/remove snapshot.
+
 Candidate verification uses temporary HOME and databases only. The formal App
 is not replaced. Human acceptance must cover:
 

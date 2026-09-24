@@ -8,7 +8,7 @@ from dataclasses import replace
 from difflib import unified_diff
 from shiboken6 import isValid
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QFontDatabase, QKeyEvent, QMouseEvent, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -36,6 +36,7 @@ from src.snotes.application.ai_access_metadata_service import AiAccessMetadataSe
 from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
     AiReceiptInboxService,
+    StaleNoteProposalError,
 )
 from src.snotes.application.gale_service import GaleControlService
 from src.snotes.application.reminder_service import ReminderService
@@ -137,6 +138,8 @@ class ReceiptCard(QFrame):
         self.receipt = receipt
         self._preview_service = service
         self._preview_busy = False
+        self._processing = False
+        self._operation_status = None
         self.receipt_id = receipt.id
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
@@ -185,6 +188,11 @@ class ReceiptCard(QFrame):
         top.addWidget(self.discard_button)
         top.addWidget(self.delete_button)
         layout.addLayout(top)
+        self.processing_status = QLabel(self)
+        self.processing_status.setObjectName("receiptProcessingStatus")
+        self.processing_status.setWordWrap(True)
+        self.processing_status.hide()
+        layout.addWidget(self.processing_status)
 
         self.details = QWidget()
         self.details.setObjectName("receiptCardDetails")
@@ -198,11 +206,24 @@ class ReceiptCard(QFrame):
             parse_error.setObjectName("receiptParseErrorDetail")
             parse_error.setWordWrap(True)
             details.addWidget(parse_error)
+        if receipt.processed and receipt.request_id:
+            operation = service.mcp_get_operation(
+                receipt.request_id, receipt.actor_target_id
+            )
+            self._operation_status = operation.get("status") if operation else None
+            reason = operation.get("reason") if operation is not None else None
+            if reason:
+                prefix = "版本冲突：" if self._operation_status == "conflict" else "处理结果："
+                operation_error = QLabel(prefix + str(reason))
+                operation_error.setObjectName("receiptOperationReason")
+                operation_error.setWordWrap(True)
+                details.addWidget(operation_error)
 
         self.is_pending_metadata = bool(
             receipt.pending and receipt.request_id and receipt.operation_type == "metadata"
         )
         self.has_final_preview = False
+        self.is_edit_proposal = False
         self.metadata_preview_ready = False
         if self.is_pending_metadata:
             self.accept_button.setEnabled(False)
@@ -231,6 +252,32 @@ class ReceiptCard(QFrame):
 
         self.details.setVisible(False)
         layout.addWidget(self.details)
+
+    def set_processing(self, processing: bool) -> None:
+        self._processing = processing
+        self.accept_button.setText("处理中…" if processing else "接受")
+        self.accept_button.setEnabled(
+            not processing
+            and (
+                self.metadata_preview_ready
+                if self.is_pending_metadata
+                else not self.has_final_preview
+                or self.final_preview_ready
+                or self.preview_conflict
+                or (self.is_edit_proposal and not self.property("expanded"))
+            )
+        )
+        self.discard_button.setEnabled(not processing)
+        if processing:
+            self.processing_status.setText("请求已收到，正在处理…")
+            self.processing_status.show()
+        elif self.processing_status.text() == "请求已收到，正在处理…":
+            self.processing_status.clear()
+            self.processing_status.hide()
+
+    def show_accept_error(self, reason: str) -> None:
+        self.processing_status.setText("接受失败：" + reason)
+        self.processing_status.show()
 
     def _build_editable_details(
         self,
@@ -299,9 +346,14 @@ class ReceiptCard(QFrame):
             and receipt.operation_type in {"append", "prepend", "edit"}
         )
         self.final_preview_ready = False
+        self.preview_conflict = False
         if self.has_final_preview:
             self.accept_button.setEnabled(False)
-        self.is_edit_proposal = receipt.pending and receipt.operation_type == "edit"
+        self.is_edit_proposal = bool(receipt.request_id and receipt.operation_type == "edit")
+        if self.is_edit_proposal and receipt.pending:
+            # An unexpanded stale proposal must still be actionable so accepting
+            # it can record the conflict; a fresh proposal is reviewed below.
+            self.accept_button.setEnabled(True)
         if self.is_edit_proposal:
             self.edit_diff = QTextEdit()
             self.edit_diff.setObjectName("receiptExactEditDiff")
@@ -352,6 +404,8 @@ class ReceiptCard(QFrame):
             self.final_preview.setMinimumHeight(240)
             details.addWidget(self.final_preview)
             self.body_edit.textChanged.connect(self.invalidate_final_preview)
+        elif self.is_edit_proposal and self._operation_status == "conflict":
+            details.addWidget(QLabel("最终正文预览不可用：笔记已被更新。"))
 
         for widget in (
             self.title_input,
@@ -386,11 +440,17 @@ class ReceiptCard(QFrame):
         self.setProperty("expanded", expanded)
         repolish(self)
         if self.has_final_preview:
+            if self.is_edit_proposal and not self._processing:
+                self.accept_button.setEnabled(
+                    self.final_preview_ready or self.preview_conflict or not expanded
+                )
             if expanded:
                 # Finish building/replacing cards before Milkdown processes Qt events.
                 self._preview_timer.start(0)
             else:
                 self._preview_timer.stop()
+        elif self.is_edit_proposal and expanded:
+            self.refresh_edit_diff()
         if self.is_pending_metadata:
             if expanded:
                 self._metadata_preview_timer.start(0)
@@ -405,26 +465,37 @@ class ReceiptCard(QFrame):
         self.accept_button.setEnabled(False)
         self.metadata_preview.clear()
         try:
-            changes = self._preview_service.pending_metadata_changes(self.receipt_id)
-            labels = {"title": "标题", "directory": "分类", "tags": "标签"}
+            changes = self._preview_service.pending_metadata_display_changes(self.receipt_id)
             lines = []
-            for key in ("title", "directory", "tags"):
+            for key in ("title", "directory"):
                 if key not in changes:
                     continue
                 value = changes[key]
                 if key == "directory":
                     display = " / ".join(value)
-                elif key == "tags":
-                    display = "、".join(value) or "无"
                 else:
                     display = str(value)
-                lines.append(f"{labels[key]}：{display}")
+                lines.append(f"{'标题' if key == 'title' else '分类'}：{display}")
+            if "tags" in changes:
+                if "added_tags" in changes or "removed_tags" in changes:
+                    added = changes.get("added_tags", ())
+                    removed = changes.get("removed_tags", ())
+                    if added:
+                        lines.append("新增标签：" + "、".join(added))
+                    if removed:
+                        lines.append("移除标签：" + "、".join(removed))
+                    if not added and not removed:
+                        lines.append("标签无变化")
+                else:
+                    lines.append(
+                        "标签将设为（完整列表）：" + ("、".join(changes["tags"]) or "无")
+                    )
             if not lines:
                 raise ValueError("提案没有实际资料变化。")
             self.metadata_preview.setText("\n".join(lines))
             self.metadata_preview_status.setText("接受时会再次检查当前权限和笔记版本。")
             self.metadata_preview_ready = True
-            self.accept_button.setEnabled(True)
+            self.accept_button.setEnabled(not self._processing)
         except ValueError as error:
             self.metadata_preview_status.setText("资料预览不可用：" + str(error))
         except Exception:
@@ -432,10 +503,24 @@ class ReceiptCard(QFrame):
 
     def invalidate_final_preview(self) -> None:
         self.final_preview_ready = False
+        self.preview_conflict = False
         self.accept_button.setEnabled(False)
         self.final_preview.clear()
         self.legacy_warning.hide()
         self.preview_status.setText("提议内容已改变，请刷新最终预览。")
+
+    def refresh_edit_diff(self) -> None:
+        if not self.is_edit_proposal:
+            return
+        try:
+            edits = self._preview_service.pending_note_edits(self.receipt_id)
+            self.edit_diff.setPlainText("\n\n".join(
+                f"第 {index} 组\n--- old_markdown\n{edit['old_markdown']}"
+                f"\n→\n+++ new_markdown\n{edit['new_markdown']}"
+                for index, edit in enumerate(edits, 1)
+            ))
+        except ValueError as error:
+            self.edit_diff.setPlainText("提案内容不可用：" + str(error))
 
     def refresh_final_preview(self) -> None:
         if self._preview_busy:
@@ -443,6 +528,7 @@ class ReceiptCard(QFrame):
         self._preview_timer.stop()
         self._preview_busy = True
         self.final_preview_ready = False
+        self.preview_conflict = False
         self.accept_button.setEnabled(False)
         self.preview_refresh.setEnabled(False)
         self.final_preview.clear()
@@ -451,13 +537,7 @@ class ReceiptCard(QFrame):
         fragment = self.body_edit.toPlainText()
         try:
             if self.is_edit_proposal:
-                self.edit_diff.clear()
-                edits = self._preview_service.pending_note_edits(self.receipt_id)
-                self.edit_diff.setPlainText("\n\n".join(
-                    f"第 {index} 组\n--- old_markdown\n{edit['old_markdown']}"
-                    f"\n→\n+++ new_markdown\n{edit['new_markdown']}"
-                    for index, edit in enumerate(edits, 1)
-                ))
+                self.refresh_edit_diff()
             preview = self._preview_service.build_pending_note_preview(
                 self.receipt_id,
                 addition_markdown=None if self.is_edit_proposal else fragment,
@@ -482,7 +562,12 @@ class ReceiptCard(QFrame):
             self.legacy_warning.setVisible(preview.legacy_canonicalization_changed)
             self.preview_status.setText("完整正文差异：− 为删除，+ 为新增。预览不会保存正文。")
             self.final_preview_ready = True
-            self.accept_button.setEnabled(True)
+            self.accept_button.setEnabled(not self._processing)
+        except StaleNoteProposalError as error:
+            if isValid(self):
+                self.preview_conflict = True
+                self.preview_status.setText("版本冲突，最终预览不可用：" + str(error))
+                self.accept_button.setEnabled(not self._processing)
         except ValueError as error:
             if isValid(self):
                 self.preview_status.setText("预览不可用：" + str(error))
@@ -552,6 +637,7 @@ class ReceiptInboxView(QWidget):
         self.cards: dict[int, ReceiptCard] = {}
         self.scroll: QScrollArea | None = None
         self._delete_message_box: QMessageBox | None = None
+        self._accepting_receipt_id: int | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -681,37 +767,89 @@ class ReceiptInboxView(QWidget):
             card.set_expanded(card_id == self.expanded_receipt_id)
 
     def accept_receipt(self, receipt_id: int) -> None:
+        if self._accepting_receipt_id is not None:
+            return
         card = self.cards.get(receipt_id)
         if card is None:
             return
-        if card.is_pending_metadata and not card.metadata_preview_ready:
-            return
-        if not card.is_pending_metadata and card.has_final_preview and not card.final_preview_ready:
-            return
-        fields = card.form_fields()
-        if card.receipt.parse_status != "parsed":
-            box = QMessageBox(self)
-            box.setWindowTitle("人工确认解析失败回执")
-            box.setText(
-                "这条回执解析失败。请确认你已经检查标题、分类、正文和 AI 设置。"
-            )
-            continue_button = box.addButton("仍然入库", QMessageBox.AcceptRole)
-            box.addButton("取消", QMessageBox.RejectRole)
-            box.exec()
-            if box.clickedButton() is not continue_button:
-                return
-            fields = replace(fields, allow_failed_parse=True)
+        self._accepting_receipt_id = receipt_id
+        card.set_processing(True)
+        card.processing_status.repaint()
+        card.accept_button.repaint()
         try:
-            result = self.service.accept_receipt(receipt_id, fields)
-        except Exception as error:
+            if card.has_final_preview:
+                card._preview_timer.stop()
+            if card.is_pending_metadata:
+                card._metadata_preview_timer.stop()
+            QCoreApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+            if not isValid(card):
+                return
+            if card.is_pending_metadata and not card.metadata_preview_ready:
+                self.expanded_receipt_id = receipt_id
+                card.set_expanded(True)
+                card.refresh_metadata_preview()
+                if not card.metadata_preview_ready:
+                    card.show_accept_error(card.metadata_preview_status.text())
+                return
+            if card.has_final_preview and not card.final_preview_ready:
+                self.expanded_receipt_id = receipt_id
+                card.set_expanded(True)
+                card.refresh_final_preview()
+                if not card.preview_conflict:
+                    card.show_accept_error(
+                        "请先检查最终正文差异，再点击接受。"
+                        if card.final_preview_ready
+                        else card.preview_status.text()
+                    )
+                    return
+            fields = card.form_fields()
+            if card.receipt.parse_status != "parsed":
+                box = QMessageBox(self)
+                box.setWindowTitle("人工确认解析失败回执")
+                box.setText(
+                    "这条回执解析失败。请确认你已经检查标题、分类、正文和 AI 设置。"
+                )
+                continue_button = box.addButton("仍然入库", QMessageBox.AcceptRole)
+                box.addButton("取消", QMessageBox.RejectRole)
+                box.exec()
+                if box.clickedButton() is not continue_button:
+                    return
+                fields = replace(fields, allow_failed_parse=True)
+            try:
+                result = self.service.accept_receipt(receipt_id, fields)
+            except Exception as error:
+                operation = None
+                if card.receipt.request_id:
+                    try:
+                        operation = self.service.mcp_get_operation(
+                            card.receipt.request_id, card.receipt.actor_target_id
+                        )
+                    except Exception:
+                        pass
+                conflict = operation is not None and operation.get("status") == "conflict"
+                reason = str(error)
+                card.show_accept_error(("版本冲突：" if conflict else "") + reason)
+                if conflict:
+                    self.list_filter = "processed"
+                    self.expanded_receipt_id = receipt_id
+                try:
+                    self.refresh_receipts()
+                except Exception:
+                    # Keep the original service error visible if refreshing also fails.
+                    pass
+                QMessageBox.warning(
+                    self.window(), "版本冲突" if conflict else "接受失败", reason
+                )
+                self._activate_host_window()
+                return
+            self.expanded_receipt_id = None
             self.refresh_receipts()
-            QMessageBox.warning(self.window(), "接受失败", str(error))
+            self.receiptAccepted.emit(result.note.id)
             self._activate_host_window()
-            return
-        self.expanded_receipt_id = None
-        self.refresh_receipts()
-        self.receiptAccepted.emit(result.note.id)
-        self._activate_host_window()
+        finally:
+            if isValid(card):
+                card.set_processing(False)
+            self._accepting_receipt_id = None
 
     def discard_receipt(self, receipt_id: int) -> None:
         try:

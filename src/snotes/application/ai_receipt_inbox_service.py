@@ -14,7 +14,6 @@ from src.snotes.application.ai_actor_registry import (
 )
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.note_canonical_candidate import (
-    apply_exact_markdown_edits,
     build_canonical_edit_candidate,
     build_canonical_note_candidate,
     canonicalize_new_note,
@@ -107,6 +106,10 @@ class UnsupportedReceiptOperationError(ValueError):
     pass
 
 
+class StaleNoteProposalError(ValueError):
+    """Preview is unavailable, but Accept must still record the version conflict."""
+
+
 class AiReceiptInboxService:
     """Own frozen-R1 reads, create acceptance, discard, and deletion policy."""
 
@@ -168,9 +171,18 @@ class AiReceiptInboxService:
         if note is None:
             raise ValueError("目标笔记不存在。")
         if note.updated_at != receipt.expected_updated_at:
-            raise ValueError("笔记已被更新。")
+            raise StaleNoteProposalError("笔记已被更新，提案版本冲突。")
 
         if receipt.operation_type == "edit":
+            metadata = self._ai_metadata
+            if metadata is None:
+                raise RuntimeError("笔记权限服务不可用。")
+            grants = metadata.get_note_metadata(note.id)
+            if (
+                normalize_ai_visibility(grants.visibility) != AI_VISIBILITY_FULL
+                or not is_actor_authorized(resolve_target_id(receipt.actor_target_id), grants.target_ids)
+            ):
+                raise ValueError("当前 AI 身份已无权修改此笔记。")
             edits = self.pending_note_edits(receipt_id)
             candidate = build_canonical_edit_candidate(note.content_markdown, edits)
         else:
@@ -185,6 +197,8 @@ class AiReceiptInboxService:
         # note can change; never show a result for a stale snapshot.
         current_receipt = self._receipts.get(receipt_id)
         current_note = notes.get_note(receipt.target_note_id)
+        if current_note is not None and current_note.updated_at != receipt.expected_updated_at:
+            raise StaleNoteProposalError("提案或笔记已被更新，请刷新后重新预览。")
         if current_receipt != receipt or current_note != note:
             raise ValueError("提案或笔记已被更新，请刷新后重新预览。")
         return PendingNotePreview(
@@ -201,27 +215,14 @@ class AiReceiptInboxService:
         )
 
     def pending_note_edits(self, receipt_id: int) -> list[dict[str, str]]:
-        """Read the immutable edit pairs stored with a pending local proposal."""
-        notes = self._notes
-        metadata = self._ai_metadata
-        if notes is None or metadata is None:
-            raise RuntimeError("笔记服务不可用，无法读取修改提案。")
+        """Read stored proposal evidence for the local human UI, even after rejection.
+
+        This is not an AI note read and does not grant write permission. Current
+        note/version/grants are checked separately by preview and acceptance.
+        """
         receipt = self._receipts.get(receipt_id)
-        if receipt is None or not receipt.pending or receipt.operation_type != "edit":
-            raise ValueError("该回执不是待确认的正文修改提案。")
-        if receipt.target_note_id is None or not receipt.expected_updated_at:
-            raise ValueError("修改提案缺少目标笔记或版本信息。")
-        note = notes.get_note(receipt.target_note_id)
-        if note is None or note.updated_at != receipt.expected_updated_at:
-            raise ValueError("笔记已被更新。")
-        actor_id = resolve_target_id(receipt.actor_target_id)
-        grants = metadata.get_note_metadata(note.id)
-        if (
-            actor_id not in AI_ACTOR_IDS
-            or normalize_ai_visibility(grants.visibility) != AI_VISIBILITY_FULL
-            or not is_actor_authorized(actor_id, grants.target_ids)
-        ):
-            raise ValueError("当前 AI 身份已无权修改此笔记。")
+        if receipt is None or receipt.operation_type != "edit":
+            raise ValueError("该回执不是正文修改提案。")
         raw = self._require_mcp_operations().pending_operation_payload(receipt_id)
         try:
             payload = json.loads(raw) if raw is not None else None
@@ -230,7 +231,17 @@ class AiReceiptInboxService:
         if not isinstance(payload, dict) or set(payload) != {"edits"}:
             raise ValueError("正文修改提案内容无效。")
         edits = payload["edits"]
-        apply_exact_markdown_edits(note.content_markdown, edits)
+        if not isinstance(edits, list) or not edits:
+            raise ValueError("正文修改提案内容无效。")
+        for edit in edits:
+            if (
+                not isinstance(edit, dict)
+                or set(edit) != {"old_markdown", "new_markdown"}
+                or not isinstance(edit["old_markdown"], str)
+                or not edit["old_markdown"]
+                or not isinstance(edit["new_markdown"], str)
+            ):
+                raise ValueError("正文修改提案内容无效。")
         return edits
 
     def import_gale_submission(
@@ -287,6 +298,28 @@ class AiReceiptInboxService:
         if raw is None:
             raise ValueError("元数据提案内容不存在。")
         return parse_pending_metadata_payload(raw)
+
+    def pending_metadata_display_changes(self, receipt_id: int) -> dict[str, object]:
+        """Describe the stored target; infer tag deltas only at its exact version."""
+        changes = self.pending_metadata_changes(receipt_id)
+        if "tags" not in changes or self._notes is None or self._tags is None:
+            return changes
+        receipt = self._receipts.get(receipt_id)
+        if receipt is None or receipt.target_note_id is None:
+            return changes
+        note = self._notes.get_note(receipt.target_note_id)
+        if note is None or note.updated_at != receipt.expected_updated_at:
+            # Legacy payload stores final tags, not historical add/remove intent.
+            return changes
+        current_tags = self._tags.get_note_tags(note.id)
+        if self._notes.get_note(note.id) != note or self._receipts.get(receipt_id) != receipt:
+            return changes
+        desired_tags = changes["tags"]
+        return {
+            **changes,
+            "added_tags": tuple(tag for tag in desired_tags if tag not in current_tags),
+            "removed_tags": tuple(tag for tag in current_tags if tag not in desired_tags),
+        }
 
     def mcp_create_pending(self, **values) -> dict:
         return self._require_mcp_operations().create_pending(**values)
