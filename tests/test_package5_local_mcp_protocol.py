@@ -1499,7 +1499,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             after = await self.call(
                 session, "get_note", {"note_id": created["note_id"]}
             )
-            self.assertEqual(after["content"], "base\n\n-end")
+            self.assertEqual(after["content"], "base\n-end")
             prepended = await self.call(
                 session,
                 "prepend_note",
@@ -1514,7 +1514,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             after_prepend = await self.call(
                 session, "get_note", {"note_id": created["note_id"]}
             )
-            self.assertEqual(after_prepend["content"], "start-\n\nbase\n\n-end")
+            self.assertEqual(after_prepend["content"], "start-\nbase\n-end")
             conflict = await self.call(
                 session,
                 "append_note",
