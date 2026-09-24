@@ -3,7 +3,7 @@
 > 状态：FINAL 施工基线  
 > 日期：2026-09-21  
 > 适用仓库：`/Users/s/Documents/项目/S-notes`  
-> 实验依据：`/Users/s/Documents/项目/S-notes-md-wysiwyg-lab`  
+> 实验依据：原 `/Users/s/Documents/项目/S-notes-md-wysiwyg-lab`（2026-09-23 已归档并删除目录）；完整 Git 历史见 `/Users/s/Documents/项目/_archive/S-notes-md-wysiwyg-lab-20260923.bundle`（`git clone <bundle>` 可还原，HEAD `23b461a`）  
 > 核心目标：保留 S-notes 现有产品/业务层，仅替换“笔记正文编辑器 + 正文存储主干 + 直接依赖 HTML 正文的活动接点”。
 
 ---
