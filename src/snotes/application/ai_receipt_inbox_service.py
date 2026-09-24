@@ -30,7 +30,6 @@ from src.snotes.domain.ai_receipts import (
     GaleReceiptImport,
 )
 from src.snotes.domain.models import Note, NoteLocation
-from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
 
 
 class ReceiptDeleteReason(str, Enum):
@@ -325,6 +324,8 @@ class AiReceiptInboxService:
                 and current_note is not None
                 and current_note.updated_at == receipt.expected_updated_at
             ):
+                from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
+
                 try:
                     candidate = build_canonical_note_candidate(
                         current_note.content_markdown,

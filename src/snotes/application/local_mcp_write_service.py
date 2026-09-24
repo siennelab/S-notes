@@ -25,7 +25,6 @@ from src.snotes.application.note_canonical_candidate import (
 from src.snotes.application.ports import TagRecord
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, Note, NoteLocation
-from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +138,8 @@ class LocalMcpWriteService:
                 target_ids=targets,
             )
         else:
+            from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
+
             try:
                 canonical_content = canonicalize_new_note(content)
             except CanonicalizationError:
@@ -309,6 +310,8 @@ class LocalMcpWriteService:
         canonical_candidate = None
         canonicalization_failed = False
         if operation_type in {"prepend", "append"}:
+            from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
+
             try:
                 canonical_candidate = build_canonical_note_candidate(
                     note.content_markdown, content, operation_type
