@@ -3,6 +3,54 @@
 This is the current repository handoff for S-notes. Frozen R1 information is
 retained below; active R2 package closeouts are recorded first.
 
+## 2026-09-23 — GreenCloud 3.5 Step 2 CLOSED
+
+Step 2A–2E and the isolated candidate App human Gate are complete. S confirmed
+PREPEND=PASS, METADATA=PASS, RESTART=PASS. Candidate:
+`dist-d1-candidate/S-notes.app`; isolated data root:
+`data/gc35-step2-candidate-b392fe5`, reopened through its isolated launcher.
+
+Prepend acceptance preserved the original body and correctly displayed the new
+opening content, headings, bold, link and existing font size. Metadata acceptance
+updated title/tags without rewriting the body. Both results survived restart;
+accepted proposals did not return to pending.
+
+Candidate build boundary fix `3de2543` removes unconditional GUI canonicalizer
+imports from shared application modules; only real body writes load it lazily.
+Packaged helper `--version`, ad-hoc signature verification and no-Node candidate
+launch/AI Center smoke passed. Final bounded regression: **39/39 PASS**
+(Step 2C write paths, Step 2D invariants/timestamps, Step 2E acceptance and helper
+import boundary). No candidate rebuild was performed during closeout.
+
+```text
+STEP2=CLOSED
+STEP2A_ROUNDTRIP_SCAN=PASS
+STEP2B_CANONICALIZER=PASS
+STEP2C_WRITE_PATHS=PASS
+STEP2D_VERSION_INVARIANTS=PASS
+STEP2E_ACCEPTANCE=PASS
+STEP2_CANDIDATE_BUILD=PASS
+STEP2_HUMAN_GATE=PASS
+PREPEND_HUMAN_GATE=PASS
+METADATA_HUMAN_GATE=PASS
+RESTART_HUMAN_GATE=PASS
+FORMAL_DB_MUTATED_DURING_STEP2_TESTING=NO
+APPEND_NEWLINE_CONTRACT=DOUBLE_NEWLINE
+CANONICALIZER_FIXED_POINT=YES
+MAX_PASSES=4
+NODE_RUNTIME_REQUIRED=NO
+LEGACY_NONCANONICAL_DIRECT_MODIFY=FORCED_PENDING
+PREVIEW_ACCEPT_SINGLE_SOURCE=YES
+ACCEPTANCE_PERMISSION_RECHECK=YES
+METADATA_ALLOWLIST=title,directory,tags
+AI_VISIBILITY_METADATA_WRITE=BLOCKED
+AI_TARGETS_METADATA_WRITE=BLOCKED
+```
+
+Existing legacy Notes were not batch-canonicalized. Candidate artifacts remain
+gitignored; the formal App was not replaced and the formal DB was not modified.
+This closes Step 2, not a production deployment. Step 3 `edit_note` is not started.
+
 ## 2026-09-23 — 3.5-0 Reminder CLOSED
 
 S completed human acceptance with PASS and accepted the current implementation.

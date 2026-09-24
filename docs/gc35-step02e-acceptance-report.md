@@ -65,4 +65,12 @@ PUSHED=NO
 
 本轮不 build / deploy，不做人类 UI Gate，不进入 Step 3，不改 canonicalizer / token / schema，不新增表，不批量改 Notes，不改 Gale / Reminder / GreenCloud；不 merge、不 push。
 
-NEXT=WAIT_FOR_S_G_REVIEW_BEFORE_STEP2_APP_GATE
+以上为 Step 2E 代码阶段记录。后续 candidate build blocker 已在 `3de2543`
+通过正文路径 lazy import 修复，helper `--version`、签名与 no-Node launch 均 PASS。
+S 已完成 isolated candidate 的 Prepend / Metadata / Restart 真人验收，全部 PASS。
+Step 2 正式封口与保留的契约见 `docs/PROJECT_STATUS.md` 的 Step 2 CLOSED 记录；
+封口限定回归 39/39 PASS。未替换正式 App、未修改正式 DB。
+
+STEP2_HUMAN_GATE=PASS
+
+NEXT=STEP_3_NOT_STARTED
