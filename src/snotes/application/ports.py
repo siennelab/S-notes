@@ -427,6 +427,14 @@ class AiAuditRepository(Protocol):
 
     def list(self, operation_type: str | None = None) -> list[AiCallLog]: ...
 
+    def list_page(
+        self,
+        operation_type: str | None = None,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[AiCallLog]: ...
+
 
 class GaleMirrorWriter(Protocol):
     def write(

@@ -47,6 +47,13 @@ class AiCallLogView:
     failure_reason: str
     is_duplicate: bool
     entered_confirmation: bool
+    operation_status: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AiCallLogPage:
+    rows: tuple[AiCallLogView, ...]
+    has_more: bool
 
 
 class AiAuditService:
@@ -97,6 +104,22 @@ class AiAuditService:
     def operation_filter_options(self) -> tuple[str, ...]:
         return AUDIT_OPERATION_TYPES
 
+    def list_call_logs_page(
+        self,
+        operation_type: str | None = None,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> AiCallLogPage:
+        if offset < 0 or limit < 1:
+            raise ValueError("Invalid call-log page bounds")
+        clean_type = str(operation_type or "").strip() or None
+        rows = self._repository.list_page(clean_type, offset=offset, limit=limit + 1)
+        return AiCallLogPage(
+            rows=tuple(self._view(row) for row in rows[:limit]),
+            has_more=len(rows) > limit,
+        )
+
     @staticmethod
     def _view(row: AiCallLog) -> AiCallLogView:
         definition = target_definition(row.actor_target_id)
@@ -116,6 +139,7 @@ class AiAuditService:
             failure_reason=row.failure_reason,
             is_duplicate=row.is_duplicate,
             entered_confirmation=row.entered_confirmation,
+            operation_status=row.operation_status,
         )
 
 

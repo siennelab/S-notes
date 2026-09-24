@@ -36,3 +36,4 @@ class AiCallLog:
     failure_reason: str
     is_duplicate: bool
     entered_confirmation: bool
+    operation_status: str | None = None

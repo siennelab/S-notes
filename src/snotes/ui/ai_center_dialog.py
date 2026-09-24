@@ -955,6 +955,9 @@ class AiCenterDialog(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         self.audit = audit
+        self.log_page_size = 100
+        self.log_offset = 0
+        self._logs_loaded = False
         self.reminders = reminders
         self.reminder_log_offset = 0
         self.reminder_log_limit = 50
@@ -1166,9 +1169,9 @@ class AiCenterDialog(QWidget):
         self.log_filter.currentIndexChanged.connect(self.refresh_logs)
         toolbar.addWidget(self.log_filter)
         toolbar.addStretch(1)
-        refresh_button = QPushButton("刷新")
-        refresh_button.clicked.connect(self.refresh_logs)
-        toolbar.addWidget(refresh_button)
+        self.log_refresh_button = QPushButton("刷新")
+        self.log_refresh_button.clicked.connect(self.refresh_logs)
+        toolbar.addWidget(self.log_refresh_button)
         layout.addLayout(toolbar)
 
         self.log_table = QTableWidget(0, 8)
@@ -1194,23 +1197,53 @@ class AiCenterDialog(QWidget):
             QHeaderView.Interactive
         )
         layout.addWidget(self.log_table, stretch=1)
-        self.refresh_logs()
+        pagination = QHBoxLayout()
+        self.log_page_label = QLabel("尚未加载")
+        pagination.addWidget(self.log_page_label)
+        pagination.addStretch(1)
+        self.log_previous_button = QPushButton("上一页")
+        self.log_previous_button.setEnabled(False)
+        self.log_previous_button.clicked.connect(self.previous_log_page)
+        pagination.addWidget(self.log_previous_button)
+        self.log_next_button = QPushButton("下一页")
+        self.log_next_button.setEnabled(False)
+        self.log_next_button.clicked.connect(self.next_log_page)
+        pagination.addWidget(self.log_next_button)
+        layout.addLayout(pagination)
         return page
 
     def _tab_changed(self, index: int) -> None:
         if index == self.tabs.indexOf(self.log_page):
-            self.refresh_logs()
+            if not self._logs_loaded:
+                self.refresh_logs()
         elif index == self.tabs.indexOf(self.reminder_log_page):
             self.refresh_reminder_logs(reset=True)
         else:
             self.receipt_view.refresh_receipts()
 
-    def refresh_logs(self, *_args) -> None:
-        rows = (
-            self.audit.list_call_logs(self.log_filter.currentData())
+    def previous_log_page(self) -> None:
+        if self.log_offset > 0:
+            self.log_offset = max(0, self.log_offset - self.log_page_size)
+            self.refresh_logs(reset=False)
+
+    def next_log_page(self) -> None:
+        if self.log_next_button.isEnabled():
+            self.log_offset += self.log_page_size
+            self.refresh_logs(reset=False)
+
+    def refresh_logs(self, *_args, reset: bool = True) -> None:
+        if reset:
+            self.log_offset = 0
+        page = (
+            self.audit.list_call_logs_page(
+                self.log_filter.currentData(),
+                offset=self.log_offset,
+                limit=self.log_page_size,
+            )
             if self.audit is not None
-            else ()
+            else None
         )
+        rows = page.rows if page is not None else ()
         self.log_table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             status = _audit_display_text(
@@ -1226,16 +1259,9 @@ class AiCenterDialog(QWidget):
                 )
             if row.is_duplicate:
                 status += " · 重复请求"
-            operation = (
-                self.receipt_view.service.mcp_get_operation(
-                    row.request_id, row.actor_target_id
-                )
-                if row.request_id
-                else None
-            )
             handling_label = (
                 "版本冲突 · 未写入"
-                if operation and operation.get("status") == "conflict"
+                if row.operation_status == "conflict"
                 else _audit_display_text(
                     row.handling_mode,
                     AUDIT_HANDLING_MODE_LABELS,
@@ -1263,6 +1289,14 @@ class AiCenterDialog(QWidget):
                     QTableWidgetItem(str(value)),
                 )
         self.log_table.resizeColumnsToContents()
+        self.log_table.scrollToTop()
+        self.log_previous_button.setEnabled(self.log_offset > 0)
+        self.log_next_button.setEnabled(page is not None and page.has_more)
+        self.log_page_label.setText(
+            f"第 {self.log_offset // self.log_page_size + 1} 页 · {len(rows)} 条"
+            if rows else "暂无调用记录"
+        )
+        self._logs_loaded = True
 
     def refresh_theme(self) -> None:
         for table in (self.log_table, self.reminder_log_table):

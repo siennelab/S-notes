@@ -448,7 +448,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         for _attempt in range(4):
             center.tabs.setCurrentWidget(center.log_page)
             self.app.processEvents()
-            self.assertEqual(center.log_table.rowCount(), 625)
+            self.assertEqual(center.log_table.rowCount(), 100)
             center.tabs.setCurrentWidget(center.receipt_view)
             self.app.processEvents()
         QTest.qWait(20)
