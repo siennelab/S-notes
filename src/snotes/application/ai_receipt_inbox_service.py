@@ -16,6 +16,7 @@ from src.snotes.application.note_canonical_candidate import (
     build_canonical_note_candidate,
     canonicalize_new_note,
 )
+from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
     AiReceiptInboxRepository,
@@ -29,6 +30,7 @@ from src.snotes.domain.ai_receipts import (
     GaleReceiptImport,
 )
 from src.snotes.domain.models import Note, NoteLocation
+from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
 
 
 class ReceiptDeleteReason(str, Enum):
@@ -232,6 +234,16 @@ class AiReceiptInboxService:
     def mcp_accept_pending_append(self, **values) -> dict:
         return self._require_mcp_operations().accept_pending_append(**values)
 
+    def pending_metadata_changes(self, receipt_id: int) -> dict[str, object]:
+        """Return only validated changes from the stored pending payload."""
+        receipt = self._receipts.get(receipt_id)
+        if receipt is None or not receipt.pending or receipt.operation_type != "metadata":
+            raise ValueError("该回执不是待确认的元数据提案。")
+        raw = self._require_mcp_operations().pending_operation_payload(receipt_id)
+        if raw is None:
+            raise ValueError("元数据提案内容不存在。")
+        return parse_pending_metadata_payload(raw)
+
     def mcp_create_pending(self, **values) -> dict:
         return self._require_mcp_operations().create_pending(**values)
 
@@ -291,38 +303,58 @@ class AiReceiptInboxService:
             if not fields.main_category.strip():
                 raise ValueError("人工确认入库前，主分类不能为空。")
 
-        if receipt.request_id and receipt.operation_type == "append":
-            if not fields.body:
-                raise ValueError("追加内容不能为空。")
-            actor_id = resolve_target_id(receipt.actor_target_id)
-            if actor_id not in AI_ACTOR_IDS:
-                raise ValueError("回执中的 AI 身份未知或不可用。")
-            if receipt.target_note_id is None or not receipt.expected_updated_at:
-                raise ValueError("追加提案缺少目标笔记或版本信息。")
-            current_note = notes.get_note(receipt.target_note_id)
-            if current_note is None:
-                raise ValueError("目标笔记不存在。")
-            if current_note.updated_at != receipt.expected_updated_at:
-                raise ValueError("笔记已被更新。")
-            candidate = build_canonical_note_candidate(
-                current_note.content_markdown, fields.body, "append"
+        if receipt.operation_type in {
+            "append", "prepend", "metadata"
+        }:
+            raw_payload = self._require_mcp_operations().pending_operation_payload(
+                receipt.id
             )
-            result = self.mcp_accept_pending_append(
+            current_note = (
+                notes.get_note(receipt.target_note_id)
+                if receipt.target_note_id is not None
+                else None
+            )
+            accepted_body = (
+                fields.body if receipt.operation_type in {"append", "prepend"}
+                else None
+            )
+            candidate = None
+            failure_reason = None
+            if (
+                accepted_body is not None
+                and current_note is not None
+                and current_note.updated_at == receipt.expected_updated_at
+            ):
+                try:
+                    candidate = build_canonical_note_candidate(
+                        current_note.content_markdown,
+                        accepted_body,
+                        receipt.operation_type,
+                    )
+                except (CanonicalizationError, ValueError, TypeError):
+                    failure_reason = "无法生成稳定的 Markdown 正文。"
+            result = self._require_mcp_operations().accept_pending_modification(
                 receipt_id=receipt.id,
-                addition_markdown=fields.body,
-                accepted_body=fields.body,
-                canonical_markdown=candidate.final_markdown,
-                expected_revision=current_note.revision,
-                expected_content_markdown=current_note.content_markdown,
+                expected_receipt=receipt,
+                expected_payload=raw_payload,
+                accepted_body=accepted_body,
+                canonical_markdown=(
+                    candidate.final_markdown if candidate is not None else None
+                ),
+                expected_revision=(
+                    current_note.revision if current_note is not None else None
+                ),
+                expected_content_markdown=(
+                    current_note.content_markdown if current_note is not None else None
+                ),
+                failure_reason=failure_reason,
             )
-            if result["status"] == "conflict":
-                raise ValueError(result["reason"])
             if result["status"] != "updated":
-                raise RuntimeError(result.get("reason") or "接受追加提案失败。")
+                raise ValueError(result.get("reason") or "接受修改提案失败。")
             persisted_receipt = self._receipts.get(receipt.id)
             note = notes.get_note(result["note_id"])
             if persisted_receipt is None or note is None:
-                raise RuntimeError("接受追加提案后读取正式笔记失败。")
+                raise RuntimeError("接受修改提案后读取正式笔记失败。")
             return AcceptReceiptResult(
                 persisted_receipt, note, False, False
             )

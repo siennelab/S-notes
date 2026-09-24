@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import (
-    AiReceiptAcceptFields, AiReceiptInboxService, UnsupportedReceiptOperationError,
+    AiReceiptAcceptFields, AiReceiptInboxService,
 )
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
 from src.snotes.application.directory_service import DirectoryService
@@ -139,7 +139,7 @@ class CanonicalWriteTests(unittest.TestCase):
                 self.assertNotEqual(after.updated_at, note.updated_at)
                 self._fixed(after.content_markdown)
 
-    def test_legacy_forced_pending_and_append_preview_accept_match(self):
+    def test_legacy_forced_pending_and_body_preview_accept_match(self):
         for operation in ("append", "prepend"):
             with self.subTest(operation=operation):
                 note = self._note("- old")
@@ -152,14 +152,9 @@ class CanonicalWriteTests(unittest.TestCase):
                 self.assertIn("* old", preview.final_markdown)
                 self.assertIn("* new", preview.final_markdown)
                 self.assertEqual(self.notes.get_note(note.id), note)
-                if operation == "append":
-                    accepted = self._accept(result["proposal_id"])
-                    self.assertEqual(accepted.note.content_markdown, preview.final_markdown)
-                    self._fixed(accepted.note.content_markdown)
-                else:
-                    with self.assertRaises(UnsupportedReceiptOperationError):
-                        self._accept(result["proposal_id"])
-                    self.assertEqual(self.notes.get_note(note.id), note)
+                accepted = self._accept(result["proposal_id"])
+                self.assertEqual(accepted.note.content_markdown, preview.final_markdown)
+                self._fixed(accepted.note.content_markdown)
 
     def test_canonical_pending_accept_uses_edited_fragment_and_shared_builder(self):
         self._confirmation(True)

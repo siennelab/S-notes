@@ -11,11 +11,11 @@ from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
     AiReceiptInboxService,
     ReceiptDeleteReason,
-    UnsupportedReceiptOperationError,
 )
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import NoteLocation
+from src.snotes.storage.repositories.ai_mcp_operations import SQLiteAiMcpOperationRepository
 from src.snotes.storage.repositories.ai_receipts import (
     SQLiteAiReceiptInboxRepository,
 )
@@ -93,6 +93,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
+            mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
         )
         created = self.notes.create_note(NoteLocation("项目", "虚构"))
         self.note = self.notes.save_note(
@@ -403,32 +404,31 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.assertEqual(operation["status"], "created")
         self.assertEqual(json.loads(operation["result_json"])["note_id"], first.note.id)
 
-    def test_unsupported_prepend_proposal_remains_out_of_scope_without_mutation(self) -> None:
-        self._insert_receipt(
-            85,
-            status="pending",
-            request_id="fictional-prepend-request-85",
-            actor_target_id="gale",
-            operation_type="prepend",
+    def test_prepend_proposal_accepts_existing_note_without_creating_another(self) -> None:
+        before = self.notes.get_note(self.note.id)
+        pending = self.receipts.mcp_create_pending(
+            actor_target_id="gale", actor_display="Gale",
+            request_id="fictional-prepend-request-85", operation_type="prepend",
+            title=before.title, note_id=before.id, expected_updated_at=before.updated_at,
+            payload={"content": "Before"}, location=before.location,
+            tags=[], body="Before", visibility="full", target_ids=("gale",),
         )
-        note_before = self._note_state()
-
-        with self.assertRaises(UnsupportedReceiptOperationError):
-            self.receipts.accept_receipt(
-                85,
-                AiReceiptAcceptFields(
-                    title="Ignored",
-                    body="Ignored",
-                    main_category="项目",
-                    sub_category="虚构",
-                    tags="",
-                    visibility="full",
-                    target_ids=("gale",),
-                ),
-            )
-
-        self.assertEqual(self._note_state(), note_before)
-        self.assertEqual(self.receipts.get_receipt(85).status, "pending")
+        before_count = len(self.notes.list_active_notes())
+        preview = self.receipts.build_pending_note_preview(pending["proposal_id"])
+        accepted = self.receipts.accept_receipt(
+            pending["proposal_id"],
+            AiReceiptAcceptFields(
+                title="Ignored", body="Before", main_category="项目",
+                sub_category="虚构", tags="", visibility="hidden", target_ids=(),
+            ),
+        )
+        self.assertEqual(accepted.note.id, before.id)
+        self.assertEqual(accepted.note.content_markdown, preview.final_markdown)
+        self.assertTrue(accepted.note.content_markdown.startswith("Before"))
+        self.assertEqual(accepted.note.revision, before.revision + 1)
+        self.assertEqual(accepted.note.ai_visibility, before.ai_visibility)
+        self.assertEqual(len(self.notes.list_active_notes()), before_count)
+        self.assertEqual(accepted.receipt.status, "accepted")
 
     def _insert_receipt(
         self,

@@ -10,12 +10,21 @@ from src.snotes.application.ports import (
     AiMcpOperationRepository,
     AiTargetCatalogEntry,
 )
-from src.snotes.domain.models import NoteLocation
+from src.snotes.application.ai_actor_registry import resolve_target_id
+from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
+from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_HIDDEN,
+    is_actor_authorized,
+    normalize_ai_visibility,
+)
+from src.snotes.domain.ai_receipts import AiReceiptInboxItem
+from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, NoteLocation
 from src.snotes.storage.ai_metadata import (
     replace_note_ai_targets,
     sync_ai_target_catalog,
 )
 from src.snotes.storage.connection import SQLiteConnectionFactory
+from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.support import next_note_updated_at, timestamp_seconds
 
@@ -219,60 +228,12 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 )
                 return result
 
-            timestamp = next_note_updated_at(str(note["updated_at"]))
-            self._insert_history(
-                connection,
-                note,
-                actor_target_id,
-                request_id,
-                operation_type,
-                timestamp,
-            )
-            result_title = str(note["title"])
-            if operation_type in {"append", "prepend"}:
-                self._write_content_in_connection(
-                    connection,
-                    note,
-                    canonical_markdown=canonical_markdown,
-                    timestamp=timestamp,
-                    expected_revision=expected_revision,
-                )
-            elif operation_type == "metadata":
-                result_title = title if title is not None else str(note["title"])
-                new_directory_id = (
-                    directory_id if directory_id is not None else note["directory_id"]
-                )
-                new_location = location or NoteLocation(
-                    str(note["main_category"]),
-                    str(note["sub_category"]),
-                )
-                main, sub = new_location.values()
-                connection.execute(
-                    """
-                    UPDATE notes
-                    SET title = ?, directory_id = ?, main_category = ?,
-                        sub_category = ?, revision = revision + 1, updated_at = ?
-                    WHERE id = ? AND revision = ?
-                    """,
-                    (
-                        result_title,
-                        new_directory_id,
-                        main,
-                        sub,
-                        timestamp,
-                        note_id,
-                        expected_revision,
-                    ),
-                )
-                if tags is not None:
-                    self.tags.set_for_new_note_in_connection(
-                        connection, note_id, tags, timestamp
-                    )
-            else:
-                raise ValueError(f"不支持的 AI 修改类型：{operation_type}")
-            connection.execute(
-                "UPDATE ai_note_history SET after_updated_at = ? WHERE request_id = ?",
-                (timestamp, request_id),
+            result_title, _timestamp = self._apply_modification_in_connection(
+                connection, note, actor_target_id=actor_target_id,
+                request_id=request_id, operation_type=operation_type,
+                expected_revision=expected_revision,
+                canonical_markdown=canonical_markdown, title=title,
+                directory_id=directory_id, location=location, tags=tags,
             )
             result = _result(
                 "updated",
@@ -299,13 +260,61 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         expected_revision: int,
         expected_content_markdown: str,
     ) -> dict:
+        """Compatibility entry point; use the checked acceptance transaction."""
+        from types import SimpleNamespace
+
+        with self.connections.read() as connection:
+            row = connection.execute(
+                """
+                SELECT request_id, actor_target_id, operation_type,
+                       target_note_id, expected_updated_at, title, body
+                FROM ai_receipt_inbox WHERE id = ?
+                """,
+                (receipt_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"AI 回执不存在: {receipt_id}")
+        if row["operation_type"] != "append":
+            raise ValueError("该回执不是末尾追加提案。")
+        expected = SimpleNamespace(**dict(row))
+        return self.accept_pending_modification(
+            receipt_id=receipt_id,
+            expected_receipt=expected,
+            expected_payload=self.pending_operation_payload(receipt_id),
+            accepted_body=accepted_body,
+            canonical_markdown=canonical_markdown,
+            expected_revision=expected_revision,
+            expected_content_markdown=expected_content_markdown,
+        )
+
+    def pending_operation_payload(self, receipt_id: int) -> str | None:
+        with self.connections.read() as connection:
+            row = connection.execute(
+                "SELECT operation_payload FROM ai_receipt_inbox WHERE id = ?",
+                (receipt_id,),
+            ).fetchone()
+        return str(row["operation_payload"]) if row is not None and row["operation_payload"] is not None else None
+
+    def accept_pending_modification(
+        self,
+        *,
+        receipt_id: int,
+        expected_receipt: AiReceiptInboxItem,
+        expected_payload: str | None,
+        accepted_body: str | None = None,
+        canonical_markdown: str | None = None,
+        expected_revision: int | None = None,
+        expected_content_markdown: str | None = None,
+        failure_reason: str | None = None,
+    ) -> dict:
+        """Recheck the proposal and current grants in the write transaction."""
         with self.connections.write() as connection:
             receipt = connection.execute(
                 """
-                SELECT id, status, request_id, actor_target_id, operation_type,
-                       target_note_id, expected_updated_at, title
-                FROM ai_receipt_inbox
-                WHERE id = ?
+                SELECT id, status, parse_status, request_id, actor_target_id,
+                       operation_type, target_note_id, expected_updated_at,
+                       title, body, operation_payload
+                FROM ai_receipt_inbox WHERE id = ?
                 """,
                 (receipt_id,),
             ).fetchone()
@@ -313,92 +322,160 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 raise ValueError(f"AI 回执不存在: {receipt_id}")
             if receipt["status"] != "pending":
                 raise ValueError("该回执已处理，不能重复接受。")
-            if receipt["operation_type"] != "append":
-                raise ValueError("该回执不是末尾追加提案。")
             request_id = str(receipt["request_id"] or "")
             actor_target_id = str(receipt["actor_target_id"] or "")
-            expected_updated_at = str(receipt["expected_updated_at"] or "")
-            if not request_id or not actor_target_id or not expected_updated_at:
-                raise ValueError("追加提案缺少必要的身份或版本信息。")
-            if receipt["target_note_id"] is None:
-                raise ValueError("追加提案缺少目标笔记。")
-            note_id = int(receipt["target_note_id"])
+            operation_type = str(receipt["operation_type"] or "")
+            note_id = (
+                int(receipt["target_note_id"])
+                if receipt["target_note_id"] is not None else None
+            )
+            title = str(receipt["title"] or "")
+
+            def fail(status: str, reason: str) -> dict:
+                return self._finish_pending_modification(
+                    connection, receipt, status=status, reason=reason,
+                    title=title, note_id=note_id,
+                )
+
+            if operation_type not in {"append", "prepend", "metadata"}:
+                return fail("rejected", "不支持的 AI 修改类型。")
+            if (
+                receipt["parse_status"] != "parsed"
+                or request_id != expected_receipt.request_id
+                or actor_target_id != expected_receipt.actor_target_id
+                or operation_type != expected_receipt.operation_type
+                or note_id != expected_receipt.target_note_id
+                or receipt["expected_updated_at"] != expected_receipt.expected_updated_at
+                or title != expected_receipt.title
+                or str(receipt["body"] or "") != expected_receipt.body
+                or receipt["operation_payload"] != expected_payload
+            ):
+                return fail("conflict", "提案已被更新，请刷新后重试。")
+            if not request_id or not actor_target_id or note_id is None or not receipt["expected_updated_at"]:
+                return fail("rejected", "提案缺少必要的身份、目标或版本信息。")
+
+            operation = connection.execute(
+                """
+                SELECT actor_target_id, operation_type, status, result_json
+                FROM ai_operations WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+            if operation is None:
+                return fail("rejected", "提案的操作记录不存在。")
+            try:
+                stored_result = json.loads(operation["result_json"])
+            except (TypeError, ValueError):
+                stored_result = None
+            if (
+                operation["status"] != "pending_confirmation"
+                or operation["actor_target_id"] != actor_target_id
+                or operation["operation_type"] != operation_type
+                or not isinstance(stored_result, dict)
+                or stored_result.get("proposal_id") != receipt_id
+                or stored_result.get("status") != "pending_confirmation"
+            ):
+                return fail("conflict", "提案的操作记录已改变。")
+
             note = connection.execute(
                 "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
                 (note_id,),
             ).fetchone()
             if note is None:
-                raise ValueError("目标笔记不存在。")
-            if not _note_version_matches(
-                note,
-                expected_revision=expected_revision,
-                expected_updated_at=expected_updated_at,
-            ) or str(note["content_markdown"]) != expected_content_markdown:
-                return _result(
-                    "conflict", request_id, note_id, str(note["title"]),
-                    "pending", False, True, "笔记已被更新。",
-                )
+                return fail("rejected", "目标笔记不存在。")
+            if not self._actor_can_modify_note(connection, note, actor_target_id):
+                return fail("rejected", "当前 AI 身份已无权修改此笔记。")
+            if str(note["updated_at"]) != str(receipt["expected_updated_at"]):
+                return fail("conflict", "笔记已被更新。")
+            if expected_revision is not None and int(note["revision"]) != expected_revision:
+                return fail("conflict", "笔记已被更新。")
+            if expected_content_markdown is not None and str(note["content_markdown"]) != expected_content_markdown:
+                return fail("conflict", "笔记已被更新。")
 
-            timestamp = next_note_updated_at(str(note["updated_at"]))
-            self._insert_history(
-                connection,
-                note,
-                actor_target_id,
-                request_id,
-                "append",
-                timestamp,
+            desired_title: str | None = None
+            directory_id: int | None = None
+            location: NoteLocation | None = None
+            tags: tuple[str, ...] | None = None
+            if operation_type == "metadata":
+                if expected_payload is None:
+                    return fail("rejected", "元数据提案内容不存在。")
+                try:
+                    changes = parse_pending_metadata_payload(expected_payload)
+                except ValueError as error:
+                    return fail("rejected", str(error))
+                desired_title = changes.get("title")
+                tags = changes.get("tags")
+                if "directory" in changes:
+                    location = NoteLocation(*changes["directory"])
+                    directory_id = self._active_location_id(connection, location)
+                    if directory_id is None or not self._actor_can_use_directory(
+                        connection, directory_id, actor_target_id
+                    ):
+                        return fail("rejected", "目标目录不可用；只能选择当前身份可见的已有目录。")
+            else:
+                if expected_payload is None:
+                    return fail("rejected", "正文提案内容不存在。")
+                try:
+                    payload = json.loads(expected_payload)
+                except (TypeError, ValueError):
+                    payload = None
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"content"}
+                    or not isinstance(payload["content"], str)
+                    or not payload["content"]
+                    or not isinstance(accepted_body, str)
+                    or not accepted_body
+                ):
+                    return fail("rejected", "正文提案内容无效。")
+                if failure_reason or not isinstance(canonical_markdown, str) or not canonical_markdown.strip():
+                    return fail("rejected", failure_reason or "无法生成稳定的 Markdown 正文。")
+                if expected_revision is None or expected_content_markdown is None:
+                    return fail("conflict", "笔记已被更新。")
+
+            result_title, timestamp = self._apply_modification_in_connection(
+                connection, note, actor_target_id=actor_target_id,
+                request_id=request_id, operation_type=operation_type,
+                expected_revision=int(note["revision"]),
+                canonical_markdown=canonical_markdown,
+                title=desired_title, directory_id=directory_id,
+                location=location, tags=tags,
                 handling_mode="human_approved",
             )
-            self._write_content_in_connection(
-                connection,
-                note,
-                canonical_markdown=canonical_markdown,
-                timestamp=timestamp,
-                expected_revision=expected_revision,
-            )
-            connection.execute(
-                "UPDATE ai_note_history SET after_updated_at = ? WHERE request_id = ?",
-                (timestamp, request_id),
-            )
             result = _result(
-                "updated", request_id, note_id, str(note["title"]),
+                "updated", request_id, note_id, result_title,
                 "human_approved", True, False, "",
             )
             result["proposal_id"] = receipt_id
-            note_uuid = connection.execute(
-                "SELECT note_uuid FROM notes WHERE id = ?",
-                (note_id,),
-            ).fetchone()["note_uuid"]
-            receipt_cursor = connection.execute(
+            note_uuid = str(note["note_uuid"] or "")
+            cursor = connection.execute(
                 """
                 UPDATE ai_receipt_inbox
-                SET status = "accepted", note_id = ?, accepted_note_uuid = ?,
-                    body = ?, result_status = "updated",
-                    updated_at = ?, decided_at = ?
-                WHERE id = ? AND status = "pending"
-                """,
-                (note_id, note_uuid, accepted_body, timestamp, timestamp, receipt_id),
-            )
-            if receipt_cursor.rowcount != 1:
-                raise RuntimeError("AI 回执状态已改变，请刷新后重试。")
-            operation_cursor = connection.execute(
-                """
-                UPDATE ai_operations
-                SET status = "updated", result_json = ?, updated_at = ?
-                WHERE request_id = ? AND actor_target_id = ?
-                  AND operation_type = "append"
-                  AND status = "pending_confirmation"
+                SET status = 'accepted', note_id = ?, accepted_note_uuid = ?,
+                    body = ?, result_status = 'updated', updated_at = ?, decided_at = ?
+                WHERE id = ? AND status = 'pending'
                 """,
                 (
-                    json.dumps(result, ensure_ascii=False),
-                    timestamp,
-                    request_id,
-                    actor_target_id,
+                    note_id, note_uuid,
+                    accepted_body if accepted_body is not None else receipt["body"],
+                    timestamp, timestamp, receipt_id,
                 ),
             )
-            if operation_cursor.rowcount != 1:
-                raise RuntimeError("追加提案的操作记录已改变，请刷新后重试。")
-        return result
+            if cursor.rowcount != 1:
+                raise RuntimeError("AI 回执状态已改变，请刷新后重试。")
+            cursor = connection.execute(
+                """
+                UPDATE ai_operations
+                SET status = 'updated', result_json = ?, updated_at = ?
+                WHERE request_id = ? AND actor_target_id = ?
+                  AND operation_type = ? AND status = 'pending_confirmation'
+                """,
+                (json.dumps(result, ensure_ascii=False), timestamp,
+                 request_id, actor_target_id, operation_type),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("提案的操作记录已改变，请刷新后重试。")
+            return result
 
     def create_pending(
         self,
@@ -477,6 +554,157 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             self._store_operation(
                 connection, actor_target_id, operation_type, result
             )
+        return result
+
+    def _apply_modification_in_connection(
+        self,
+        connection,
+        note,
+        *,
+        actor_target_id: str,
+        request_id: str,
+        operation_type: str,
+        expected_revision: int,
+        canonical_markdown: str | None = None,
+        title: str | None = None,
+        directory_id: int | None = None,
+        location: NoteLocation | None = None,
+        tags: Sequence[str] | None = None,
+        handling_mode: str = "direct",
+    ) -> tuple[str, str]:
+        timestamp = next_note_updated_at(str(note["updated_at"]))
+        self._insert_history(
+            connection, note, actor_target_id, request_id,
+            operation_type, timestamp, handling_mode=handling_mode,
+        )
+        result_title = str(note["title"])
+        if operation_type in {"append", "prepend"}:
+            if canonical_markdown is None:
+                raise ValueError("正文写入缺少 canonical 候选。")
+            self._write_content_in_connection(
+                connection, note, canonical_markdown=canonical_markdown,
+                timestamp=timestamp, expected_revision=expected_revision,
+            )
+        elif operation_type == "metadata":
+            result_title = title if title is not None else str(note["title"])
+            new_directory_id = (
+                directory_id if directory_id is not None else note["directory_id"]
+            )
+            new_location = location or NoteLocation(
+                str(note["main_category"]), str(note["sub_category"]),
+            )
+            main, sub = new_location.values()
+            cursor = connection.execute(
+                """
+                UPDATE notes
+                SET title = ?, directory_id = ?, main_category = ?,
+                    sub_category = ?, revision = revision + 1, updated_at = ?
+                WHERE id = ? AND revision = ?
+                """,
+                (result_title, new_directory_id, main, sub, timestamp,
+                 note["id"], expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("笔记已被更新。")
+            if tags is not None:
+                self.tags.set_for_new_note_in_connection(
+                    connection, int(note["id"]), tags, timestamp,
+                )
+        else:
+            raise ValueError(f"不支持的 AI 修改类型：{operation_type}")
+        connection.execute(
+            "UPDATE ai_note_history SET after_updated_at = ? WHERE request_id = ?",
+            (timestamp, request_id),
+        )
+        return result_title, timestamp
+
+    @staticmethod
+    def _actor_can_modify_note(connection, note, actor_target_id: str) -> bool:
+        actor_id = resolve_target_id(actor_target_id)
+        targets = tuple(
+            str(row["target_id"])
+            for row in connection.execute(
+                "SELECT target_id FROM note_ai_targets WHERE note_id = ?",
+                (note["id"],),
+            ).fetchall()
+        )
+        return (
+            normalize_ai_visibility(note["ai_visibility"]) != AI_VISIBILITY_HIDDEN
+            and is_actor_authorized(actor_id, targets)
+        )
+
+    @classmethod
+    def _actor_can_use_directory(
+        cls, connection, directory_id: int, actor_target_id: str
+    ) -> bool:
+        rows = connection.execute(
+            "SELECT * FROM notes WHERE directory_id = ? AND is_deleted = 0",
+            (directory_id,),
+        ).fetchall()
+        return any(
+            cls._actor_can_modify_note(connection, row, actor_target_id)
+            for row in rows
+        )
+
+    def _active_location_id(self, connection, location: NoteLocation) -> int | None:
+        directories = SQLiteDirectoriesRepository(self.connections)
+        main, sub = location.values()
+        main_id = directories.find_active(connection, main, None)
+        if main_id is None:
+            return None
+        return main_id if sub == DEFAULT_SUB_CATEGORY else directories.find_active(connection, sub, main_id)
+
+    @staticmethod
+    def _finish_pending_modification(
+        connection, receipt, *, status: str, reason: str,
+        title: str, note_id: int | None,
+    ) -> dict:
+        request_id = str(receipt["request_id"] or "")
+        actor_target_id = str(receipt["actor_target_id"] or "")
+        operation_type = str(receipt["operation_type"] or "")
+        timestamp = timestamp_seconds()
+        result = _result(
+            status, request_id, note_id, title, "human_rejected", False, False, reason
+        )
+        result["proposal_id"] = int(receipt["id"])
+        connection.execute(
+            """
+            UPDATE ai_receipt_inbox
+            SET status = 'rejected', result_status = ?,
+                updated_at = ?, decided_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (status, timestamp, timestamp, receipt["id"]),
+        )
+        operation = connection.execute(
+            """
+            SELECT actor_target_id, operation_type, status, result_json
+            FROM ai_operations WHERE request_id = ?
+            """,
+            (request_id,),
+        ).fetchone()
+        if operation is not None:
+            try:
+                previous = json.loads(operation["result_json"])
+            except (TypeError, ValueError):
+                previous = None
+            if (
+                operation["status"] == "pending_confirmation"
+                and operation["actor_target_id"] == actor_target_id
+                and operation["operation_type"] == operation_type
+                and isinstance(previous, dict)
+                and previous.get("proposal_id") == receipt["id"]
+            ):
+                connection.execute(
+                    """
+                    UPDATE ai_operations
+                    SET status = ?, result_json = ?, updated_at = ?
+                    WHERE request_id = ? AND actor_target_id = ?
+                      AND operation_type = ? AND status = 'pending_confirmation'
+                    """,
+                    (status, json.dumps(result, ensure_ascii=False), timestamp,
+                     request_id, actor_target_id, operation_type),
+                )
         return result
 
     @staticmethod

@@ -198,6 +198,47 @@ class ReceiptCard(QFrame):
             parse_error.setWordWrap(True)
             details.addWidget(parse_error)
 
+        self.is_pending_metadata = bool(
+            receipt.pending and receipt.request_id and receipt.operation_type == "metadata"
+        )
+        self.has_final_preview = False
+        self.metadata_preview_ready = False
+        if self.is_pending_metadata:
+            self.accept_button.setEnabled(False)
+            self._metadata_preview_timer = QTimer(self)
+            self._metadata_preview_timer.setSingleShot(True)
+            self._metadata_preview_timer.timeout.connect(self.refresh_metadata_preview)
+            self.metadata_preview_status = QLabel("展开后读取实际提议的资料变化。")
+            self.metadata_preview_status.setWordWrap(True)
+            details.addWidget(self.metadata_preview_status)
+            self.metadata_preview = QLabel()
+            self.metadata_preview.setObjectName("receiptMetadataChanges")
+            self.metadata_preview.setTextFormat(Qt.PlainText)
+            self.metadata_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self.metadata_preview.setWordWrap(True)
+            details.addWidget(self.metadata_preview)
+            self.metadata_preview_refresh = QPushButton("刷新资料预览")
+            self.metadata_preview_refresh.clicked.connect(self.refresh_metadata_preview)
+            details.addWidget(self.metadata_preview_refresh)
+        else:
+            self._build_editable_details(receipt, service, metadata, details)
+
+        if receipt.note_id is not None:
+            linked = QLabel(f"关联正式笔记：#{receipt.note_id}")
+            linked.setObjectName("receiptLinkedNote")
+            details.addWidget(linked)
+
+        self.details.setVisible(False)
+        layout.addWidget(self.details)
+
+    def _build_editable_details(
+        self,
+        receipt: AiReceiptInboxItem,
+        service: AiReceiptInboxService,
+        metadata: AiAccessMetadataService,
+        details: QVBoxLayout,
+    ) -> None:
+
         self.title_input = QLineEdit(receipt.title)
         details.addWidget(self._field("标题", self.title_input))
         category_row = QHBoxLayout()
@@ -252,11 +293,17 @@ class ReceiptCard(QFrame):
         details.addLayout(targets_row)
 
         self.has_final_preview = bool(
-            receipt.pending and receipt.request_id and receipt.operation_type == "append"
+            receipt.pending
+            and receipt.request_id
+            and receipt.operation_type in {"append", "prepend"}
         )
+        self.final_preview_ready = False
         if self.has_final_preview:
             self.accept_button.setEnabled(False)
-        body_label = QLabel("追加内容" if self.has_final_preview else ("正文" if receipt.pending else "正文记录"))
+        body_label = QLabel(
+            ("前置内容" if receipt.operation_type == "prepend" else "追加内容")
+            if self.has_final_preview else ("正文" if receipt.pending else "正文记录")
+        )
         body_label.setObjectName("receiptFieldLabel")
         details.addWidget(body_label)
         self.body_edit = QTextEdit()
@@ -270,11 +317,11 @@ class ReceiptCard(QFrame):
             self._preview_timer.timeout.connect(self.refresh_final_preview)
             preview_label = QLabel("最终正文预览")
             details.addWidget(preview_label)
-            self.preview_status = QLabel("展开后生成完整正文差异；修改追加内容后请刷新预览。")
+            self.preview_status = QLabel("展开后生成完整正文差异；修改提议内容后请刷新预览。")
             self.preview_status.setWordWrap(True)
             details.addWidget(self.preview_status)
             self.legacy_warning = QLabel(
-                "此最终结果除追加内容外，还会规范化这篇旧笔记的既有 Markdown。"
+                "此最终结果除提议内容外，还会规范化这篇旧笔记的既有 Markdown。"
             )
             self.legacy_warning.setObjectName("receiptLegacyCanonicalizationWarning")
             self.legacy_warning.setWordWrap(True)
@@ -292,11 +339,6 @@ class ReceiptCard(QFrame):
             details.addWidget(self.final_preview)
             self.body_edit.textChanged.connect(self.invalidate_final_preview)
 
-        if receipt.note_id is not None:
-            linked = QLabel(f"关联正式笔记：#{receipt.note_id}")
-            linked.setObjectName("receiptLinkedNote")
-            details.addWidget(linked)
-
         for widget in (
             self.title_input,
             self.main_input,
@@ -306,9 +348,10 @@ class ReceiptCard(QFrame):
             self.body_edit,
             *self.target_checks.values(),
         ):
-            widget.setEnabled(receipt.pending)
-        self.details.setVisible(False)
-        layout.addWidget(self.details)
+            widget.setEnabled(
+                receipt.pending
+                and (not self.has_final_preview or widget is self.body_edit)
+            )
 
     @staticmethod
     def _field(label: str, widget: QWidget) -> QWidget:
@@ -333,18 +376,58 @@ class ReceiptCard(QFrame):
                 self._preview_timer.start(0)
             else:
                 self._preview_timer.stop()
+        if self.is_pending_metadata:
+            if expanded:
+                self._metadata_preview_timer.start(0)
+            else:
+                self._metadata_preview_timer.stop()
+
+    def refresh_metadata_preview(self) -> None:
+        if not self.is_pending_metadata:
+            return
+        self._metadata_preview_timer.stop()
+        self.metadata_preview_ready = False
+        self.accept_button.setEnabled(False)
+        self.metadata_preview.clear()
+        try:
+            changes = self._preview_service.pending_metadata_changes(self.receipt_id)
+            labels = {"title": "标题", "directory": "分类", "tags": "标签"}
+            lines = []
+            for key in ("title", "directory", "tags"):
+                if key not in changes:
+                    continue
+                value = changes[key]
+                if key == "directory":
+                    display = " / ".join(value)
+                elif key == "tags":
+                    display = "、".join(value) or "无"
+                else:
+                    display = str(value)
+                lines.append(f"{labels[key]}：{display}")
+            if not lines:
+                raise ValueError("提案没有实际资料变化。")
+            self.metadata_preview.setText("\n".join(lines))
+            self.metadata_preview_status.setText("接受时会再次检查当前权限和笔记版本。")
+            self.metadata_preview_ready = True
+            self.accept_button.setEnabled(True)
+        except ValueError as error:
+            self.metadata_preview_status.setText("资料预览不可用：" + str(error))
+        except Exception:
+            self.metadata_preview_status.setText("资料预览失败，请刷新后重试。")
 
     def invalidate_final_preview(self) -> None:
+        self.final_preview_ready = False
         self.accept_button.setEnabled(False)
         self.final_preview.clear()
         self.legacy_warning.hide()
-        self.preview_status.setText("追加内容已改变，请刷新最终预览。")
+        self.preview_status.setText("提议内容已改变，请刷新最终预览。")
 
     def refresh_final_preview(self) -> None:
         if self._preview_busy:
             return
         self._preview_timer.stop()
         self._preview_busy = True
+        self.final_preview_ready = False
         self.accept_button.setEnabled(False)
         self.preview_refresh.setEnabled(False)
         self.final_preview.clear()
@@ -374,6 +457,7 @@ class ReceiptCard(QFrame):
             self.final_preview.setPlainText(diff or "正文无差异。")
             self.legacy_warning.setVisible(preview.legacy_canonicalization_changed)
             self.preview_status.setText("完整正文差异：− 为删除，+ 为新增。预览不会保存正文。")
+            self.final_preview_ready = True
             self.accept_button.setEnabled(True)
         except ValueError as error:
             if isValid(self):
@@ -387,6 +471,17 @@ class ReceiptCard(QFrame):
                 self.preview_refresh.setEnabled(True)
 
     def form_fields(self) -> AiReceiptAcceptFields:
+        if self.is_pending_metadata:
+            # The service applies the validated stored proposal, never card values.
+            return AiReceiptAcceptFields(
+                title=self.receipt.title,
+                body=self.receipt.body,
+                main_category=self.receipt.main_category,
+                sub_category=self.receipt.sub_category,
+                tags=self.receipt.tags,
+                visibility=self.receipt.ai_visibility,
+                target_ids=(),
+            )
         active_ids = tuple(
             target_id
             for target_id, checkbox in self.target_checks.items()
@@ -565,6 +660,10 @@ class ReceiptInboxView(QWidget):
         card = self.cards.get(receipt_id)
         if card is None:
             return
+        if card.is_pending_metadata and not card.metadata_preview_ready:
+            return
+        if not card.is_pending_metadata and card.has_final_preview and not card.final_preview_ready:
+            return
         fields = card.form_fields()
         if card.receipt.parse_status != "parsed":
             box = QMessageBox(self)
@@ -581,6 +680,7 @@ class ReceiptInboxView(QWidget):
         try:
             result = self.service.accept_receipt(receipt_id, fields)
         except Exception as error:
+            self.refresh_receipts()
             QMessageBox.warning(self.window(), "接受失败", str(error))
             self._activate_host_window()
             return

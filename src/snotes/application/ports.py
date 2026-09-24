@@ -373,6 +373,21 @@ class AiMcpOperationRepository(Protocol):
         expected_content_markdown: str,
     ) -> dict: ...
 
+    def pending_operation_payload(self, receipt_id: int) -> str | None: ...
+
+    def accept_pending_modification(
+        self,
+        *,
+        receipt_id: int,
+        expected_receipt: AiReceiptInboxItem,
+        expected_payload: str | None,
+        accepted_body: str | None = None,
+        canonical_markdown: str | None = None,
+        expected_revision: int | None = None,
+        expected_content_markdown: str | None = None,
+        failure_reason: str | None = None,
+    ) -> dict: ...
+
     def create_pending(
         self,
         *,
