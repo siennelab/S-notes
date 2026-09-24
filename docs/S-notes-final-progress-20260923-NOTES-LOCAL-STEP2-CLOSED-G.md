@@ -1,7 +1,7 @@
 # S-notes 最终进度书｜Markdown Production Closed → GreenCloud Next
 
 **日期：2026-09-22；更新至 2026-09-23**  
-**状态：Markdown Retrofit Package 1–4 全部 CLOSED；3.5-0 Reminder 已 CLOSED；3.5-0 Notes 的 `expected_version` MCP contract 已 CLOSED；下一任务为 `get_note_markdown` → dialect → canonicalizer → `edit_note`。**  
+**状态：Markdown Retrofit Package 1–4 全部 CLOSED；3.5-0 Reminder 已 CLOSED；3.5-0 Notes Local Finalization 的 Step 1（`get_note_markdown` + dialect）与 Step 2（canonicalizer + 本地写入/acceptance/version 收口）均已 CLOSED；当前下一任务为 Step 3 `edit_note`。**  
 **正式仓库：** `/Users/s/Documents/项目/S-notes`  
 **正式 App：** `/Users/s/Documents/项目/S-notes/dist/S-notes.app`
 
@@ -1371,18 +1371,20 @@ Reminder 真正切 Cloud 发生在 **3.5-B**；在那之前，Mac 本地实现�
 
 ## P0｜当前下一任务：3.5-0 Notes Local Finalization
 
-Reminder 小修已经关闭，下一刀只做 Notes MCP / Markdown write：
+Reminder 小修已经关闭；Notes Local Finalization 现已推进到 Step 2 正式封口：
 
 ```text
-1. expected_version-only contract      CLOSED @ c110ada
-2. get_note_markdown                   NEXT
-3. snotes-markdown-v1 dialect contract
-4. Markdown canonicalizer
-5. edit_note
-6. append permission recheck
-7. revision / updated_at / version contract
-8. local round-trip gate
-9. S 真人验收
+1. expected_version-only contract                CLOSED @ c110ada
+2. Step 1: get_note_markdown + dialect           CLOSED @ fbbd51e
+3. Step 2A: read-only round-trip scan             CLOSED @ 079b6e7
+4. Step 2B: fixed-point canonicalizer             CLOSED @ 55f8bc4
+5. Step 2C0: final canonical preview              CLOSED @ 5602684
+6. Step 2C: create/prepend/append write paths     CLOSED @ dbb2f18
+7. Step 2D: revision/updated_at/version invariant CLOSED @ e2df741 + 6dbe1ea
+8. Step 2E: pending acceptance + permission check CLOSED @ b392fe5
+9. candidate build import-boundary blocker        CLOSED @ 3de2543
+10. Step 2 human gate + final closeout            CLOSED @ 8950cb1
+11. Step 3: edit_note                             NEXT
 ```
 
 ### 28.1 `expected_version` MCP contract｜CLOSED
@@ -1739,9 +1741,8 @@ PACKAGE_3=CLOSED
 PACKAGE_4=CLOSED
 
 MARKDOWN_PRODUCTION_FINAL=f2e280fba290805c11ae58e32f8939964cc665a7
-CURRENT_LOCAL_MAIN=c110ada
-LAST_VERIFIED_ORIGIN_MAIN=f2e280fba290805c11ae58e32f8939964cc665a7
-REMOTE_STATUS_AFTER_C110ADA=NOT_REVERIFIED
+CURRENT_LOCAL_MAIN=8950cb12e835343bc3695141a69d4b4810960f00
+ORIGIN_MAIN=8950cb12e835343bc3695141a69d4b4810960f00
 WORKTREE=CLEAN
 
 BODY_AUTHORITY=SQLITE_MARKDOWN
@@ -1751,15 +1752,14 @@ DUAL_FORMAT_RUNTIME=NO
 AUTO_MIGRATION=NO
 
 FORMAL_APP=/Users/s/Documents/项目/S-notes/dist/S-notes.app
+FORMAL_APP_REPLACED_DURING_STEP2=NO
+FORMAL_DB_MUTATED_DURING_STEP2=NO
 
 MCP_MARKDOWN_READ=PASS
 GALE_MARKDOWN_MIRROR=PASS
 GALE_PRODUCTION_PUBLISH=PASS
 REMINDER_HELPER=ACTIVE
 GALE_PULL_HELPER=ACTIVE
-
-PACKAGE_4_UI_HUMAN_SMOKE=PASS
-PACKAGE_4_HUMAN_GATE=PASS
 
 REMINDER_350=CLOSED
 REMINDER_350_COMMIT=67c6022fd51ed8c34a7af5e3d18096a32dcd11f1
@@ -1771,37 +1771,495 @@ NOTES_EXPECTED_VERSION_MCP_COMMIT=c110ada
 MCP_TOOL_COUNT=23
 MCP_SCHEMA_TOP_LEVEL_COMBINATORS=NONE
 MCP_EXPECTED_UPDATED_AT_EXPOSED=NO
-APPEND_SMOKE_NEWLINE_MISMATCH=PRE_EXISTING_NON_BLOCKER
+
+NOTES_STEP1=CLOSED
+NOTES_STEP1_FINAL=fbbd51e4504893b2b058aa55544348f30b3297dc
+GET_NOTE_MARKDOWN=PASS
+SNOTES_MARKDOWN_DIALECT_V1=PASS
+
+NOTES_STEP2=CLOSED
+NOTES_STEP2_CLOSEOUT=8950cb12e835343bc3695141a69d4b4810960f00
+STEP2_HUMAN_GATE=PASS
+PREPEND_HUMAN_GATE=PASS
+METADATA_HUMAN_GATE=PASS
+RESTART_HUMAN_GATE=PASS
+STEP2_FINAL_REGRESSION=39_39_PASS
+APPEND_NEWLINE_CONTRACT=DOUBLE_NEWLINE
+CANONICALIZER_FIXED_POINT=YES
+CANONICALIZER_MAX_PASSES=4
+NODE_RUNTIME_REQUIRED=NO
+LEGACY_NONCANONICAL_DIRECT_MODIFY=FORCED_PENDING
+PREVIEW_ACCEPT_SINGLE_SOURCE=YES
+ACCEPTANCE_PERMISSION_RECHECK=YES
+METADATA_ALLOWLIST=title,directory,tags
+AI_VISIBILITY_METADATA_WRITE=BLOCKED
+AI_TARGETS_METADATA_WRITE=BLOCKED
 
 NEXT_TASK=3_5_0_NOTES_LOCAL_FINALIZATION
-NEXT_SUBTASK=get_note_markdown
+NEXT_SUBTASK=STEP_3_EDIT_NOTE
 NEXT_FEATURE=AI_CAN_EDIT_EXISTING_MARKDOWN_NOTE_LOCALLY
 ```
 
 ---
 
-# 32. 新窗口接班短句
+# 32. 2026-09-23｜Notes Local Finalization Step 1 CLOSED
 
-> G，继续 S-notes 3.5。以《S-notes 最终进度书｜Markdown Production Closed → GreenCloud Next｜更新至 2026-09-23》和《S-notes GreenCloud 3.5｜最终架构与施工方案 v2.1 FINAL》为当前基线。Markdown Retrofit Package 1–4 已全 CLOSED；3.5-0 Reminder 已 CLOSED，commit=`67c6022fd51ed8c34a7af5e3d18096a32dcd11f1`。Notes Local Finalization 的第一刀 `expected_version` MCP contract 也已 CLOSED，commit=`c110ada`：Claude Code 重连后实测 23 个工具全部可见，`prepend_note / append_note / update_note_metadata` 已恢复；MCP 层只暴露必填 `expected_version`，不再暴露 `expected_updated_at`，顶层 `anyOf / oneOf / allOf` 为 0；application 内部兼容逻辑未动，worktree clean。该项不要重复。当前下一步从 `get_note_markdown` 开始，随后是 `snotes-markdown-v1` dialect → Markdown canonicalizer → `edit_note` → append permission/version contract → local round-trip + S 真人验收。另有一个 pre-existing 非 blocker：append smoke 当前得到 `base\n\n-end`，旧测试期望 `base\n-end`；原版代码同样失败，留到 canonicalizer / append contract 一起判定，不回滚 `c110ada`。Notes authority 继续只在 Mac；当前任务不要进入 3.5-A / B / C / D，也不要恢复 HTML dual runtime。
+Step 1 完成 `get_note_markdown + snotes-markdown-v1 dialect`，最终封口：
+
+```text
+FINAL_STEP1_COMMIT=fbbd51e4504893b2b058aa55544348f30b3297dc
+MAIN=fbbd51e4504893b2b058aa55544348f30b3297dc
+ORIGIN_MAIN=fbbd51e4504893b2b058aa55544348f30b3297dc
+WORKTREE=CLEAN
+```
+
+正式语义：
+
+```text
+get_note_markdown(note_id)
+→ 只对 full 且 caller actor 具备修改能力的 Note 返回 raw content_markdown
+→ 返回 note_id + version + dialect
+
+redacted / hidden / unauthorized / deleted / nonexistent
+→ 一律 not_found
+```
+
+真人 Gate：
+
+- Claude Code 重连后可发现 `get_note_markdown`；
+- Note 308 的 raw Markdown 能读到 `:size[## 已确定]{size="20"}`，而普通 `get_note` 只得到派生纯文本 `## 已确定`，证明 raw Markdown 与 safe/plain read 的边界正确；
+- 测试 Note 318 设为 `redacted` 后，`get_note_markdown` 返回 `not_found`，普通 `get_note` 仍只走安全派生读；
+- hidden Note 同样 `not_found`。
+
+因此 Step 1 验收的是：
+
+> redacted Note 不允许通过 `get_note_markdown` 读取 Markdown 源码。
+
+它**不等于**当前 redaction 已具备完整 PII 自动识别能力；该项见 §35。
+
 ---
 
-# 33. 当前一句
+# 33. 2026-09-23｜Notes Local Finalization Step 2 CLOSED
 
-2026-09-22 解决了“正文到底是什么”。
+Step 2 最终：
 
-2026-09-23 先把 Reminder 上云前的本地业务语义收了口，又把 Notes MCP 的 `expected_version` 契约收口到 `c110ada`。
+```text
+STEP2=CLOSED
+HUMAN_GATE=PASS
+PREPEND=PASS
+METADATA=PASS
+RESTART=PASS
+FINAL_REGRESSION=39/39 PASS
+CLOSEOUT_COMMIT=8950cb1
+MAIN=8950cb12e835343bc3695141a69d4b4810960f00
+ORIGIN_MAIN=8950cb12e835343bc3695141a69d4b4810960f00
+MERGE_MODE=FAST_FORWARD_ONLY
+PUSH=PASS
+WORKTREE=CLEAN
+TASK_BRANCH=DELETED_LOCAL_AFTER_MERGE
+FORMAL_APP_REPLACED=NO
+FORMAL_DB_MUTATED=NO
+```
 
-现在下一刀非常明确：
+## 33.1 Step 2A｜只读 round-trip scan
+
+正式 DB 只读扫描：
+
+```text
+SCANNED_NOTES=84
+ZERO_DIFF=4
+DIFF_NOTES=80
+SECOND_PASS_UNSTABLE=1
+```
+
+首次差异粗分类：
+
+```text
+Markdown escaping        46
+other                    20
+list / heading            5
+trailing / final newline  5
+link                       3
+:size                      1
+```
+
+关键结论：
+
+- 80/84 首次 Milkdown round-trip 有字节差异，不代表 80 篇坏数据；
+- 因此不能让一次小 append / prepend 静默顺带重写整篇旧正文；
+- 不做存量批量 canonicalization；
+- legacy non-canonical Note 真正被修改时，必须进入 human review；
+- 1 篇第二轮仍变化的是 Note 315 尾部独立 `<br />` 空块：第一次去 `<br />`，第二次再收敛末尾换行，随后稳定，不是持续正文漂移。
+
+Append 虚构 probe 证明 Milkdown 会保留单换行与双换行差异，因此最终正式拍板：
+
+```text
+APPEND_NEWLINE_CONTRACT=DOUBLE_NEWLINE
+old + "\n\n" + appended_block
+```
+
+## 33.2 Step 2B｜fixed-point canonicalizer
+
+commit：
+
+```text
+55f8bc4641da70ba6e37e32ff563a8efd461e6a3
+```
+
+完成：
+
+```text
+CANONICALIZER=PASS
+FIXED_POINT=PASS
+MAX_PASSES=4
+DIALECT_FIXTURES=13/13 PASS
+LEGACY_DIFF_DETECTION=PASS
+NODE_RUNTIME_REQUIRED=NO
+```
+
+正式 canonicalizer：
+
+- 复用 bundled Milkdown；
+- 不另写 Python Markdown serializer；
+- 不要求用户安装 Node；
+- 最多 4 passes 收敛到 fixed point；
+- 超过上限仍不稳定则 fail closed。
+
+## 33.3 Step 2C0 / 2C｜final preview + write-path integration
+
+关键 commits：
+
+```text
+5602684  Final canonical preview foundation
+dbb2f18  Wire canonicalizer into existing write paths
+```
+
+正式策略：
+
+```text
+新 Note
+→ canonicalize fixed point
+→ DB
+
+已有 canonical Note
+→ 沿用 modify confirmation 设置，可 direct / pending
+
+已有 legacy non-canonical Note
+→ 即使 modify confirmation 关闭，也强制 pending
+→ AI Center 显示 before full body → actual canonical final body
+→ S 明确接受后才落库
+```
+
+preview / accept / direct 共享同一 candidate builder，不维护第二份正式正文。
+
+Step 2C targeted：
+
+```text
+CREATE_CANONICALIZED=PASS
+APPEND_CANONICALIZED=PASS
+PREPEND_CANONICALIZED=PASS
+LEGACY_DIRECT_WRITE_BLOCKED=PASS
+LEGACY_FORCED_PENDING=PASS
+PENDING_APPEND_ACCEPT_CANONICALIZED=PASS
+PREVIEW_ACCEPT_SINGLE_SOURCE=PASS
+STALE_ACCEPT_ZERO_WRITE=PASS
+CANONICALIZER_FAILURE_ZERO_WRITE=PASS
+TARGETED_TESTS=45/45 PASS
+```
+
+## 33.4 Step 2D｜version / timestamp invariant
+
+审计发现一个真实 blocker：
+
+```text
+GUI body save
+→ updated_at=09:00:00.123456
+→ tags save 使用秒精度 09:00:00
+→ token 竟恢复旧 V1
+```
+
+根因：metadata 秒精度 timestamp 覆盖正文微秒 timestamp。
+
+修复 commits：
+
+```text
+e2df741
+6dbe1ea
+```
+
+只把现实可达的：
+
+```text
+tags
+ai_visibility
+ai_targets
+```
+
+三个 mutation 入口接回已有 `next_note_updated_at` 单调 helper；没有改 token 算法、MCP `expected_version`、schema 或 migration。
+
+结果：
+
+```text
+TIMESTAMP_MONOTONIC=PASS
+GUI_BODY_TAG_SEQUENCE=PASS
+VERSION_TOKEN_NO_REVERSION=PASS
+ACTIVE_BODY_WRITE_PATHS=7/7
+BODY_WRITE_REVISION_BUMP=PASS
+BODY_WRITE_UPDATED_AT_BUMP=PASS
+VERSION_TOKEN_CHANGES=PASS
+FAILED_WRITE_ZERO_MUTATION=PASS
+READ_ZERO_NOTE_MUTATION=PASS
+MISSING_INVARIANT_PATHS=NONE
+TARGETED_TESTS=40/40 PASS
+```
+
+## 33.5 Step 2E｜pending acceptance + current permission recheck
+
+commit：
+
+```text
+b392fe5
+```
+
+完成：
+
+- pending append 接受时重新检查 actor 当前权限；
+- pending prepend 可正式 Accept；
+- pending metadata 可正式 Accept；
+- metadata allowlist 仅 `title / directory / tags`；
+- `ai_visibility / ai_targets` 即使恶意进入 pending payload，也不能通过 acceptance 修改；
+- stale / permission revoked / canonicalizer failure 均 zero Note mutation；
+- terminal request idempotent，不重复执行。
+
+最终：
+
+```text
+APPEND_PERMISSION_RECHECK=PASS
+PREPEND_ACCEPTANCE=PASS
+PREPEND_STALE_ZERO_WRITE=PASS
+PREPEND_REVOKED_ZERO_WRITE=PASS
+METADATA_ACCEPTANCE=PASS
+METADATA_BODY_UNCHANGED=PASS
+METADATA_STALE_ZERO_WRITE=PASS
+METADATA_REVOKED_ZERO_WRITE=PASS
+METADATA_VISIBILITY_TARGETS_BLOCKED=PASS
+IDEMPOTENCY=PASS
+REVISION_UPDATED_AT_VERSION=PASS
+TARGETED_TESTS=68/68 PASS
+```
+
+## 33.6 Candidate build blocker
+
+第一次 candidate build 暴露 packaging boundary：
+
+```text
+shared application module 顶层 import canonicalizer
+→ 间接加载 QtWidgets
+→ helper --version 也被迫加载 GUI stack
+→ helper bundle 明确排除该模块
+→ ModuleNotFoundError
+```
+
+修复 commit：
+
+```text
+3de2543
+```
+
+处理：
+
+> 共享 application 模块不再无条件顶层加载 GUI canonicalizer，只在真正正文写入路径按需 import。
+
+没有给 helper 硬塞 QtWidgets，也没有新建第二套 canonicalizer。
+
+结果：
+
+```text
+IMPORT_BOUNDARY_TEST=PASS
+STEP2_NEARBY_REGRESSION=27/27 PASS
+CANDIDATE_BUILD=PASS
+HELPER_VERSION_SMOKE=PASS
+NO_NODE_LAUNCH_SMOKE=PASS
+FORMAL_APP_UNCHANGED=YES
+FORMAL_DB_TOUCHED=NO
+```
+
+## 33.7 S 真人 Gate
+
+隔离 candidate：
+
+```text
+CANDIDATE_APP=/Users/s/Documents/项目/S-notes/dist-d1-candidate/S-notes.app
+CANDIDATE_DATA_ROOT=/Users/s/Documents/项目/S-notes/data/gc35-step2-candidate-b392fe5
+```
+
+S 真人完成：
+
+```text
+PREPEND=PASS
+METADATA=PASS
+RESTART=PASS
+```
+
+确认：
+
+- AI Center prepend proposal Accept 成功；
+- prepend 内容出现在正文开头；heading / bold / link / 原有字号显示正常；
+- metadata proposal Accept 成功；title / tags 正确更新；正文不被 metadata acceptance 改写；
+- 退出 candidate，再用同一隔离启动器重开后，结果保留；
+- 已接受 proposal 不重新回到 pending。
+
+Step 2 因此正式 CLOSED。
+
+---
+
+# 34. Step 2 之后不要重新做的事
+
+以下已经在 Notes Local Finalization 中正式收口，后续 agent 不要从旧进度书捞出来重做：
+
+```text
+expected_version-only MCP contract
+get_note_markdown
+snotes-markdown-v1 dialect
+whole-body Milkdown canonicalizer
+fixed-point convergence
+append single/double newline debate
+legacy non-canonical silent direct write
+full canonical final preview
+create/prepend/append canonicalization
+pending append acceptance canonicalization
+revision / updated_at / token invariant
+append acceptance-time permission recheck
+prepend pending acceptance
+metadata pending acceptance
+metadata ai_visibility / ai_targets blocking
+candidate helper Qt import-boundary bug
+Step 2 candidate human gate
+```
+
+当前正式 append contract 已经是：
+
+```text
+old + "\n\n" + appended_block
+```
+
+旧 smoke 的单换行 expectation 已在 Step 2 正式契约阶段退出，不再作为 pre-existing unresolved issue。
+
+---
+
+# 35. 两个必须带到后续施工的观察点
+
+## 35.1 redacted ≠ 自动识别所有隐私
+
+Step 1 真人测试 Note 318 使用了虚构姓名、手机号、邮箱、地址、银行卡、身份证、password、API key、server IP 等内容。
+
+当 Note 设置为 `redacted` 后：
 
 ```text
 get_note_markdown
-→ AI 读取 canonical Markdown + current version + dialect
-→ canonicalizer 把所有 AI Markdown 收敛成 S-notes 唯一规范形态
-→ edit_note 精准修改已有 Note
-→ Milkdown round-trip ZERO DIFF
-→ S 真人确认
+→ not_found
 ```
 
-append 的单换行 / 空行差异作为同一条 canonicalization contract 一起判定。
+这已经满足 Step 1 的目标：
 
-这一步完成以后，才开始把 Notes 安全送上 GreenCloud。
+> redacted Note 不允许 AI 读取 raw Markdown 源码。
+
+但普通 `get_note` 的 safe/plain 派生读显示：现有 redaction 规则明显是**规则驱动**，不是通用 PII detector；测试中只有部分模式被遮掉，不能因此向用户暗示“redacted 会自动识别所有手机号 / 身份证 / API key / 地址等隐私”。
+
+当前结论：
+
+```text
+STEP1_BLOCKER=NO
+STEP2_BLOCKER=NO
+RECHECK_BEFORE_3_5_A=YES
+```
+
+在 **3.5-A Notes Cloud Read 真正把 redacted `safe_text` 送上 GreenCloud 之前**，必须单独复查：
+
+- 当前 redaction rule coverage；
+- 产品上对 `redacted` 的真实承诺；
+- 哪些敏感模式必须 fail-safe；
+- 是否需要新增规则或收紧上云边界。
+
+这项不要拖到数据已经上云后再看。
+
+## 35.2 `:size` 临时测试笔记不是编辑器 bug
+
+Step 1 时曾看到测试 Note 318 的普通 `get_note` 里出现两行裸 `:size`，当时先记为待 Step 2 判断，**没有立即修**。
+
+Step 2A 已给出结论：
+
+```text
+Note 318 = ZERO DIFF
+unescaped :size[ count = 0
+bare unescaped :size count = 0
+escaped \:size count = 2
+```
+
+也就是 318 实际存的是字面量：
+
+```text
+\:size
+```
+
+Milkdown 正确把它当 literal text 保留；这不是正常 size directive 被 renderer 弄坏。
+
+同时 Note 308 已证明合法正式形态：
+
+```text
+raw get_note_markdown:
+:size[## 已确定]{size="20"}
+
+ordinary get_note:
+## 已确定
+```
+
+说明正常存储的 `:size[...]` 在普通派生读里会正确去掉 directive，只留下正文文本。
+
+因此：
+
+```text
+SIZE_PLAIN_TEXT_BUG=NO
+NOTE_318_FIX=NO
+AUTO_UNESCAPE_LEGACY_TEXT=NO
+```
+
+不要为了 318 单独开修复支线，也不要批量自动反转义历史 Notes。
+
+---
+
+# 36. 新窗口接班短句
+
+> G，继续 S-notes GreenCloud 3.5。当前正式 repo `/Users/s/Documents/项目/S-notes` 已推进到 `main == origin/main == 8950cb12e835343bc3695141a69d4b4810960f00`，worktree clean。Markdown Retrofit Package 1–4、3.5-0 Reminder、Notes `expected_version` contract、Notes Local Finalization Step 1 与 Step 2 均已 CLOSED。Step 1 已有 `get_note_markdown + snotes-markdown-v1 dialect`；Step 2 已完成 fixed-point Milkdown canonicalizer、append 双换行契约、legacy non-canonical forced pending、完整 final preview、create/prepend/append canonical write、version/timestamp invariant、acceptance-time permission recheck、prepend/metadata pending acceptance，并通过 candidate App 真人 Gate：`PREPEND=PASS / METADATA=PASS / RESTART=PASS`。Step 2 closeout commit=`8950cb1`，final regression `39/39 PASS`，正式 App 未替换、正式 DB 未因 Step 2 测试改动。当前下一刀是 **Step 3 `edit_note`**，不要重做 Step 1/2，也不要提前进入 3.5-A/B/C/D。另保留两个后续边界：① `redacted` 目前是按现有规则脱敏，不是自动 PII detector，必须在 3.5-A 把 redacted `safe_text` 上云前复查；② Note 318 的两行 `:size` 已由 Step 2A 判定为 escaped `\:size` literal、ZERO DIFF，不是 renderer bug，不修、不自动反转义；Note 308 已证明正常 `:size[...]` 会在普通 `get_note` 中正确派生为纯正文。
+
+---
+
+# 37. 当前一句
+
+2026-09-22 解决了“正文到底是什么”。
+
+2026-09-23 先把 Reminder 上云前本地语义收口，再把 Notes 本地 AI 写入基础真正封死：
+
+```text
+expected_version
+→ get_note_markdown + dialect
+→ fixed-point canonicalizer
+→ safe direct / pending write paths
+→ preview / accept single source
+→ version + permission invariants
+→ prepend / metadata acceptance
+→ candidate build
+→ S 真人 PASS
+```
+
+当前下一刀：
+
+```text
+Step 3 edit_note
+→ AI 对已有 canonical Markdown 做精确 old → new 修改 proposal
+→ AI Center diff
+→ accept transaction
+→ 3.5-0 Notes Local Finalization 最终封口
+```
+
+Step 3 之后，才进入 3.5-A Notes Cloud Read；而在任何 redacted `safe_text` 真正上云之前，先复查 redaction coverage。
