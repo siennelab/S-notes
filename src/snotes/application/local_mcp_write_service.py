@@ -18,9 +18,14 @@ from src.snotes.application.ai_safe_read_service import (
 )
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
+from src.snotes.application.note_canonical_candidate import (
+    build_canonical_note_candidate,
+    canonicalize_new_note,
+)
 from src.snotes.application.ports import TagRecord
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, Note, NoteLocation
+from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,11 +139,21 @@ class LocalMcpWriteService:
                 target_ids=targets,
             )
         else:
+            try:
+                canonical_content = canonicalize_new_note(content)
+            except CanonicalizationError:
+                return self._terminal(
+                    "create",
+                    _result(
+                        "failed", request_id, None, clean_title, "none", False,
+                        False, "无法生成稳定的 Markdown 正文。",
+                    ),
+                )
             result = self._receipt_inbox.mcp_create_direct(
                 actor_target_id=self.actor_target_id,
                 request_id=request_id,
                 title=clean_title,
-                content_markdown=content,
+                content_markdown=canonical_content,
                 directory_id=target_directory_id,
                 location=location,
                 tags=clean_tags,
@@ -291,7 +306,25 @@ class LocalMcpWriteService:
             if desired_tags is not None:
                 payload["tags"] = desired_tags
 
-        if self._receipt_inbox.mcp_confirmation_required(operation_type):
+        canonical_candidate = None
+        canonicalization_failed = False
+        if operation_type in {"prepend", "append"}:
+            try:
+                canonical_candidate = build_canonical_note_candidate(
+                    note.content_markdown, content, operation_type
+                )
+            except CanonicalizationError:
+                # A body whose safety cannot be established may only be reviewed.
+                canonicalization_failed = True
+
+        requires_confirmation = self._receipt_inbox.mcp_confirmation_required(
+            operation_type
+        )
+        if canonical_candidate is not None:
+            requires_confirmation |= canonical_candidate.legacy_canonicalization_changed
+        requires_confirmation |= canonicalization_failed
+
+        if requires_confirmation:
             metadata = self._ai_metadata.get_note_metadata(note.id)
             result = self._receipt_inbox.mcp_create_pending(
                 actor_target_id=self.actor_target_id,
@@ -320,6 +353,16 @@ class LocalMcpWriteService:
                     content
                     if operation_type in {"prepend", "append"}
                     else ""
+                ),
+                canonical_markdown=(
+                    canonical_candidate.final_markdown
+                    if canonical_candidate is not None
+                    else None
+                ),
+                expected_content_markdown=(
+                    note.content_markdown
+                    if operation_type in {"prepend", "append"}
+                    else None
                 ),
                 title=desired_title,
                 directory_id=desired_directory_id,

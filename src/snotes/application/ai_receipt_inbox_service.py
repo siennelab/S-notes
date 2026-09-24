@@ -14,6 +14,7 @@ from src.snotes.application.ai_actor_registry import (
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.note_canonical_candidate import (
     build_canonical_note_candidate,
+    canonicalize_new_note,
 )
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
@@ -296,10 +297,23 @@ class AiReceiptInboxService:
             actor_id = resolve_target_id(receipt.actor_target_id)
             if actor_id not in AI_ACTOR_IDS:
                 raise ValueError("回执中的 AI 身份未知或不可用。")
+            if receipt.target_note_id is None or not receipt.expected_updated_at:
+                raise ValueError("追加提案缺少目标笔记或版本信息。")
+            current_note = notes.get_note(receipt.target_note_id)
+            if current_note is None:
+                raise ValueError("目标笔记不存在。")
+            if current_note.updated_at != receipt.expected_updated_at:
+                raise ValueError("笔记已被更新。")
+            candidate = build_canonical_note_candidate(
+                current_note.content_markdown, fields.body, "append"
+            )
             result = self.mcp_accept_pending_append(
                 receipt_id=receipt.id,
                 addition_markdown=fields.body,
                 accepted_body=fields.body,
+                canonical_markdown=candidate.final_markdown,
+                expected_revision=current_note.revision,
+                expected_content_markdown=current_note.content_markdown,
             )
             if result["status"] == "conflict":
                 raise ValueError(result["reason"])
@@ -335,7 +349,7 @@ class AiReceiptInboxService:
 
         command = AiReceiptAcceptCommand(
             title=fields.title.strip() or "未命名 AI 回执",
-            content_markdown=fields.body,
+            content_markdown=canonicalize_new_note(fields.body),
             location=location,
             tags=tags_value,
             visibility=visibility,

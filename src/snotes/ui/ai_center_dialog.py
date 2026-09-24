@@ -254,6 +254,8 @@ class ReceiptCard(QFrame):
         self.has_final_preview = bool(
             receipt.pending and receipt.request_id and receipt.operation_type == "append"
         )
+        if self.has_final_preview:
+            self.accept_button.setEnabled(False)
         body_label = QLabel("追加内容" if self.has_final_preview else ("正文" if receipt.pending else "正文记录"))
         body_label.setObjectName("receiptFieldLabel")
         details.addWidget(body_label)
@@ -266,7 +268,7 @@ class ReceiptCard(QFrame):
             self._preview_timer = QTimer(self)
             self._preview_timer.setSingleShot(True)
             self._preview_timer.timeout.connect(self.refresh_final_preview)
-            preview_label = QLabel("最终 canonical 落库预览（写入接入待 2C）")
+            preview_label = QLabel("最终正文预览")
             details.addWidget(preview_label)
             self.preview_status = QLabel("展开后生成完整正文差异；修改追加内容后请刷新预览。")
             self.preview_status.setWordWrap(True)
@@ -333,6 +335,7 @@ class ReceiptCard(QFrame):
                 self._preview_timer.stop()
 
     def invalidate_final_preview(self) -> None:
+        self.accept_button.setEnabled(False)
         self.final_preview.clear()
         self.legacy_warning.hide()
         self.preview_status.setText("追加内容已改变，请刷新最终预览。")
@@ -342,6 +345,7 @@ class ReceiptCard(QFrame):
             return
         self._preview_timer.stop()
         self._preview_busy = True
+        self.accept_button.setEnabled(False)
         self.preview_refresh.setEnabled(False)
         self.final_preview.clear()
         self.legacy_warning.hide()
@@ -370,6 +374,7 @@ class ReceiptCard(QFrame):
             self.final_preview.setPlainText(diff or "正文无差异。")
             self.legacy_warning.setVisible(preview.legacy_canonicalization_changed)
             self.preview_status.setText("完整正文差异：− 为删除，+ 为新增。预览不会保存正文。")
+            self.accept_button.setEnabled(True)
         except ValueError as error:
             if isValid(self):
                 self.preview_status.setText("预览不可用：" + str(error))

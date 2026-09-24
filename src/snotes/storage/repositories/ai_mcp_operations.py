@@ -174,11 +174,17 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         expected_revision: int,
         expected_updated_at: str,
         addition_markdown: str = "",
+        canonical_markdown: str | None = None,
+        expected_content_markdown: str | None = None,
         title: str | None = None,
         directory_id: int | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
     ) -> dict:
+        if operation_type in {"append", "prepend"} and (
+            canonical_markdown is None or expected_content_markdown is None
+        ):
+            raise ValueError("正文写入缺少 canonical 候选或原正文校验。")
         with self.connections.write() as connection:
             existing = self._operation_from_connection(connection, request_id)
             if existing is not None:
@@ -200,6 +206,9 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 note,
                 expected_revision=expected_revision,
                 expected_updated_at=expected_updated_at,
+            ) or (
+                operation_type in {"append", "prepend"}
+                and str(note["content_markdown"]) != expected_content_markdown
             ):
                 result = _result(
                     "conflict", request_id, note_id, str(note["title"]),
@@ -220,29 +229,13 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 timestamp,
             )
             result_title = str(note["title"])
-            if operation_type == "append":
-                self._append_content_in_connection(
+            if operation_type in {"append", "prepend"}:
+                self._write_content_in_connection(
                     connection,
                     note,
-                    addition_markdown=addition_markdown,
+                    canonical_markdown=canonical_markdown,
                     timestamp=timestamp,
                     expected_revision=expected_revision,
-                )
-            elif operation_type == "prepend":
-                content_markdown = addition_markdown + "\n\n" + str(note["content_markdown"])
-                connection.execute(
-                    """
-                    UPDATE notes
-                    SET content_markdown = ?,
-                        revision = revision + 1, updated_at = ?
-                    WHERE id = ? AND revision = ?
-                    """,
-                    (
-                        content_markdown,
-                        timestamp,
-                        note_id,
-                        expected_revision,
-                    ),
                 )
             elif operation_type == "metadata":
                 result_title = title if title is not None else str(note["title"])
@@ -302,6 +295,9 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         receipt_id: int,
         addition_markdown: str,
         accepted_body: str,
+        canonical_markdown: str,
+        expected_revision: int,
+        expected_content_markdown: str,
     ) -> dict:
         with self.connections.write() as connection:
             receipt = connection.execute(
@@ -333,12 +329,11 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             ).fetchone()
             if note is None:
                 raise ValueError("目标笔记不存在。")
-            expected_revision = int(note["revision"])
             if not _note_version_matches(
                 note,
                 expected_revision=expected_revision,
                 expected_updated_at=expected_updated_at,
-            ):
+            ) or str(note["content_markdown"]) != expected_content_markdown:
                 return _result(
                     "conflict", request_id, note_id, str(note["title"]),
                     "pending", False, True, "笔记已被更新。",
@@ -354,10 +349,10 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 timestamp,
                 handling_mode="human_approved",
             )
-            self._append_content_in_connection(
+            self._write_content_in_connection(
                 connection,
                 note,
-                addition_markdown=addition_markdown,
+                canonical_markdown=canonical_markdown,
                 timestamp=timestamp,
                 expected_revision=expected_revision,
             )
@@ -572,15 +567,14 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         )
 
     @staticmethod
-    def _append_content_in_connection(
+    def _write_content_in_connection(
         connection,
         note,
         *,
-        addition_markdown: str,
+        canonical_markdown: str,
         timestamp: str,
         expected_revision: int,
     ) -> None:
-        content_markdown = str(note["content_markdown"]) + "\n\n" + addition_markdown
         cursor = connection.execute(
             """
             UPDATE notes
@@ -589,7 +583,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             WHERE id = ? AND revision = ?
             """,
             (
-                content_markdown,
+                canonical_markdown,
                 timestamp,
                 note["id"],
                 expected_revision,

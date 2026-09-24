@@ -88,7 +88,7 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.assertEqual(receipt.status, "accepted")
         note = self.window.note_service.get_note(receipt.note_id)
         self.assertEqual(note.title, "Accepted from UI")
-        self.assertEqual(note.content_markdown, "UI line one\nUI line two")
+        self.assertEqual(note.content_markdown, "UI line one\nUI line two\n")
         self.assertEqual(note.main_category, "项目")
         self.assertEqual(note.sub_category, "UI验收")
         self.assertIn(note.id, [item.id for item in self.window.visible_notes])

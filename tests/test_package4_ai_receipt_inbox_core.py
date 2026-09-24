@@ -252,7 +252,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.assertEqual(note.title, "Accepted fictional note")
         self.assertEqual(
             note.content_markdown,
-            "# Heading\n\n这是 **重点**\n\n- item",
+            "# Heading\n\n这是&#32;**重点**\n\n* item\n",
         )
         self.assertEqual(note.location, NoteLocation("项目", "验收"))
         self.assertEqual(self.tags.get_note_tags(note.id), ["one", "two"])

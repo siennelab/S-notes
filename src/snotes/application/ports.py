@@ -354,6 +354,8 @@ class AiMcpOperationRepository(Protocol):
         expected_revision: int,
         expected_updated_at: str,
         addition_markdown: str = "",
+        canonical_markdown: str | None = None,
+        expected_content_markdown: str | None = None,
         title: str | None = None,
         directory_id: int | None = None,
         location: NoteLocation | None = None,
@@ -366,6 +368,9 @@ class AiMcpOperationRepository(Protocol):
         receipt_id: int,
         addition_markdown: str,
         accepted_body: str,
+        canonical_markdown: str,
+        expected_revision: int,
+        expected_content_markdown: str,
     ) -> dict: ...
 
     def create_pending(

@@ -18,6 +18,16 @@ class CanonicalNoteCandidate:
     operation_type: str
 
 
+def canonicalize_new_note(markdown: str) -> str:
+    """Canonicalize a new AI body before any formal note is inserted."""
+    if not isinstance(markdown, str):
+        raise TypeError("Markdown body must be a string")
+    from src.snotes.ui.markdown_canonicalizer import MarkdownCanonicalizer
+
+    with MarkdownCanonicalizer() as milkdown:
+        return milkdown.canonicalize_markdown(markdown)
+
+
 def build_canonical_note_candidate(
     before_markdown: str,
     addition_markdown: str,
