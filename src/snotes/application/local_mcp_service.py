@@ -10,6 +10,8 @@ from src.snotes.application.ai_actor_registry import AI_ACTOR_IDS
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_FULL,
+    is_actor_authorized,
     AiSafeReadResult,
     AiSafeReadService,
     AiSafeReadSource,
@@ -207,6 +209,40 @@ class LocalMcpService:
             "has_more": end < total,
             "next_offset": end if end < total else None,
             "total_safe_chars": total,
+        }
+
+    def get_note_markdown(
+        self, note_id: int, *, modification_allowed: bool = False,
+    ) -> dict:
+        """Read stored Markdown verbatim; the transport supplies its existing capability gate."""
+        note = self._notes.get_note(note_id) if modification_allowed else None
+        allowed = False
+        if note is not None:
+            metadata = self._ai_metadata.get_note_metadata(note.id)
+            allowed = (
+                metadata.visibility == AI_VISIBILITY_FULL
+                and is_actor_authorized(self.actor_target_id, metadata.target_ids)
+            )
+        # As with get_note, only metadata goes to the existing call audit.
+        self._audit.record_event(
+            self.actor_target_id,
+            "get_note",
+            request_id=uuid.uuid4().hex,
+            note_id=note_id,
+            result_count=1 if allowed else 0,
+            status="success",
+        )
+        if not allowed:
+            return {
+                "status": "not_found", "note_id": note_id,
+                "reason": "未找到可访问的笔记。",
+            }
+        return {
+            "status": "ok",
+            "note_id": note.id,
+            "version": note_version_token(note.id, note.updated_at),
+            "markdown": note.content_markdown,
+            "dialect": "snotes-markdown-v1",
         }
 
     def list_directories(self) -> dict:

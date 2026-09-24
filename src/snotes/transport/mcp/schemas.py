@@ -299,6 +299,15 @@ class GetNoteResponse(StrictModel):
     reason: str = ""
 
 
+class GetNoteMarkdownResponse(StrictModel):
+    status: Literal["ok", "not_found", "failed"]
+    note_id: int
+    version: str = ""
+    markdown: str = ""
+    dialect: Literal["snotes-markdown-v1"] = "snotes-markdown-v1"
+    reason: str = ""
+
+
 class DirectoryRecord(StrictModel):
     directory_id: int
     directory: str

@@ -8,6 +8,34 @@ the isolated Package 5 protocol tests:
 .venv/bin/python -m unittest tests.test_package5_local_mcp_protocol -v
 ```
 
+## GreenCloud 3.5 step 1: raw Markdown read
+
+The unrestricted local MCP tool list now also includes `get_note_markdown(note_id)`.
+It returns `note_id`, `version`, verbatim `markdown`, and
+`dialect: "snotes-markdown-v1"` (with the usual response `status`). See
+[S-notes Markdown dialect v1](SNOTES_MARKDOWN_DIALECT_V1.md).
+
+Access requires full visibility for the fixed actor and an existing note-modification
+capability in the effective server profile (`prepend_note`, `append_note`, or
+`update_note_metadata`). Read-only mode cannot grant it. Redacted, hidden,
+unauthorized, deleted, missing, and capability-denied notes return `not_found`.
+Existing restricted profile allowlists are unchanged; this step does not expand
+Gale or other restricted profiles. `search_notes` and `get_note` still return safe
+plain text.
+
+No renderer, canonicalizer, note write, or version bump runs during this read.
+The existing metadata-only `get_note` call audit records the access. This is the
+sole database write: the audit repository inserts into `ai_call_logs` in its own
+transaction. “No write transaction” applies to the note-reading path; it cannot
+literally apply to the entire audited request while preserving existing audit.
+Tests verify both a read with all writes forbidden when audit is stubbed and a
+real audited call whose only database mutation is the call log.
+
+Real Claude Code discovery and human checks remain a separate acceptance gate:
+refresh the client tools, read a full note containing bold/link/size Markdown,
+and confirm a redacted note returns `not_found`. Server registration and stdio
+protocol tests are not evidence of real Claude Code discovery.
+
 ## Yan local Codex profile
 
 Use the dedicated local stdio wrapper for Yan:

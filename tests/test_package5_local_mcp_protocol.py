@@ -34,6 +34,7 @@ from src.snotes.storage.schema import initialize_database
 
 ROOT = Path(__file__).resolve().parents[1]
 NORMAL_TOOLS = {
+    "get_note_markdown",
     "search_notes",
     "get_note",
     "list_reminder_labels",
@@ -59,6 +60,7 @@ NORMAL_TOOLS = {
     "resume_reminder_item",
 }
 READ_ONLY_TOOLS = {
+    "get_note_markdown",
     "search_notes",
     "get_note",
     "list_reminder_labels",
@@ -260,6 +262,33 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         if tool_allowlist is not None:
             values["SNOTES_MCP_TOOL_ALLOWLIST"] = ",".join(sorted(tool_allowlist))
         return values
+
+    async def test_get_note_markdown_stdio_contract(self) -> None:
+        note = self.notes.get_note(self.ids["common"])
+        body = '**bold** [link](https://example.test)\n\n:size[字]{size="15"}\n'
+        self.notes.save_note(note.id, title=note.title, content_markdown=body,
+                             location=note.location, expected_revision=note.revision)
+        before = self.notes.get_note(note.id)
+        async with self.session(read_only=False, actor="claude-code") as session:
+            listed = {tool.name: tool for tool in (await session.list_tools()).tools}
+            tool = listed["get_note_markdown"]
+            self.assertNotIn("anyOf", tool.inputSchema)
+            self.assertNotIn("oneOf", tool.inputSchema)
+            self.assertTrue(tool.annotations.readOnlyHint)
+            result = await self.call(session, "get_note_markdown", {"note_id": note.id})
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["markdown"].encode(), body.encode())
+            self.assertEqual(result["dialect"], "snotes-markdown-v1")
+            plain = await self.call(session, "get_note", {"note_id": note.id})
+            self.assertEqual(result["version"], plain["version"])
+            for key in ("redacted", "hidden", "clawbot"):
+                denied = await self.call(session, "get_note_markdown", {"note_id": self.ids[key]})
+                self.assertEqual(denied["status"], "not_found")
+                self.assertEqual(denied["markdown"], "")
+        self.assertEqual(before, self.notes.get_note(note.id))
+        async with self.session(read_only=True, actor="claude-code") as session:
+            denied = await self.call(session, "get_note_markdown", {"note_id": note.id})
+            self.assertEqual(denied["status"], "not_found")
 
     @asynccontextmanager
     async def session(
@@ -1470,7 +1499,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             after = await self.call(
                 session, "get_note", {"note_id": created["note_id"]}
             )
-            self.assertEqual(after["content"], "base\n-end")
+            self.assertEqual(after["content"], "base\n\n-end")
             prepended = await self.call(
                 session,
                 "prepend_note",
@@ -1485,7 +1514,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             after_prepend = await self.call(
                 session, "get_note", {"note_id": created["note_id"]}
             )
-            self.assertEqual(after_prepend["content"], "start-\nbase\n-end")
+            self.assertEqual(after_prepend["content"], "start-\n\nbase\n\n-end")
             conflict = await self.call(
                 session,
                 "append_note",

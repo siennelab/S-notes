@@ -16,6 +16,7 @@ from src.snotes.transport.mcp.schemas import (
     CategoryText,
     ContentText,
     GetNoteResponse,
+    GetNoteMarkdownResponse,
     GetReminderItemResponse,
     GetReminderTableResponse,
     LifecycleText,
@@ -54,6 +55,7 @@ READ_TOOL_NAMES = frozenset(
     {
         "search_notes",
         "get_note",
+        "get_note_markdown",
         "list_reminder_labels",
         "list_reminder_tables",
         "get_reminder_table",
@@ -93,8 +95,11 @@ WRITE_RULES = (
 
 
 class LocalMcpToolAdapter:
-    def __init__(self, service: LocalMcpService) -> None:
+    def __init__(
+        self, service: LocalMcpService, *, modification_allowed: bool = False,
+    ) -> None:
         self.service = service
+        self.modification_allowed = modification_allowed
 
     def search_notes(
         self,
@@ -126,6 +131,20 @@ class LocalMcpToolAdapter:
                 total_visible_matches=0,
                 has_more=False,
                 results=[],
+                reason="本地数据库暂时不可用；没有返回笔记数据。",
+            )
+
+    def get_note_markdown(self, note_id: PositiveId) -> GetNoteMarkdownResponse:
+        try:
+            return GetNoteMarkdownResponse.model_validate(
+                self.service.get_note_markdown(
+                    note_id, modification_allowed=self.modification_allowed,
+                )
+            )
+        except Exception as error:
+            _log_safe_failure("get_note_markdown", error)
+            return GetNoteMarkdownResponse(
+                status="failed", note_id=note_id,
                 reason="本地数据库暂时不可用；没有返回笔记数据。",
             )
 
@@ -644,7 +663,12 @@ def register_tools(
     enabled_tools = READ_TOOL_NAMES if read_only else READ_TOOL_NAMES | WRITE_TOOL_NAMES
     if allowed_tools is not None:
         enabled_tools = ALL_TOOL_NAMES & allowed_tools
-    adapter = LocalMcpToolAdapter(service)
+    adapter = LocalMcpToolAdapter(
+        service,
+        modification_allowed=not read_only and bool(
+            enabled_tools & {"prepend_note", "append_note", "update_note_metadata"}
+        ),
+    )
 
     def add_enabled_tool(function, *, name, description, annotations):
         if name in enabled_tools:
@@ -682,6 +706,20 @@ def register_tools(
             "Read a bounded range of one visible note's safe text. Hidden, deleted, and "
             "unauthorized IDs all return not_found; redacted notes return only redacted text. "
             "Its opaque version is the preferred round-trip credential for a later modification."
+        ),
+        annotations=read_annotations,
+    )
+    add_enabled_tool(
+        adapter.get_note_markdown,
+        name="get_note_markdown",
+        description=(
+            "Read stored Markdown verbatim only for full-authorized notes when this actor's "
+            "server profile permits note modification. Otherwise return not_found. "
+            "Dialect snotes-markdown-v1: CommonMark + GFM strikethrough, task lists, tables; "
+            'S-notes :size[...]{size="15"} or :size[...]{size="20"} (only 15 and 20). '
+            "Lists may start with paragraphs or headings. Never delete unknown S-notes "
+            "directives or invalid size directives; preserve them as literal text. "
+            "Reading never canonicalizes or changes the note or its version."
         ),
         annotations=read_annotations,
     )
