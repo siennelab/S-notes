@@ -211,6 +211,11 @@ class ReceiptCard(QFrame):
                 receipt.request_id, receipt.actor_target_id
             )
             self._operation_status = operation.get("status") if operation else None
+            if self._operation_status == "conflict":
+                self.summary_label.setText(
+                    f"来源：{receipt.source or '未知'} · 状态：版本冲突 · 未写入 · "
+                    f"{receipt.created_at.replace('T', ' ')[:19]}"
+                )
             reason = operation.get("reason") if operation is not None else None
             if reason:
                 prefix = "版本冲突：" if self._operation_status == "conflict" else "处理结果："
@@ -828,7 +833,8 @@ class ReceiptInboxView(QWidget):
                         pass
                 conflict = operation is not None and operation.get("status") == "conflict"
                 reason = str(error)
-                card.show_accept_error(("版本冲突：" if conflict else "") + reason)
+                display_reason = f"版本冲突：{reason} AI 修改未写入。" if conflict else reason
+                card.show_accept_error(display_reason)
                 if conflict:
                     self.list_filter = "processed"
                     self.expanded_receipt_id = receipt_id
@@ -838,7 +844,7 @@ class ReceiptInboxView(QWidget):
                     # Keep the original service error visible if refreshing also fails.
                     pass
                 QMessageBox.warning(
-                    self.window(), "版本冲突" if conflict else "接受失败", reason
+                    self.window(), "版本冲突" if conflict else "接受失败", display_reason
                 )
                 self._activate_host_window()
                 return

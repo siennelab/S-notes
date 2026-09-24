@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,7 +29,7 @@ from src.snotes.storage.repositories.directories import SQLiteDirectoriesReposit
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
-from src.snotes.ui.ai_center_dialog import ReceiptInboxView
+from src.snotes.ui.ai_center_dialog import ReceiptCard, ReceiptInboxView
 
 
 class Step03FollowupTests(unittest.TestCase):
@@ -151,7 +152,10 @@ class Step03FollowupTests(unittest.TestCase):
                 with patch.object(QMessageBox, "warning") as warning:
                     QTest.mouseClick(card.accept_button, Qt.LeftButton)
                 warning.assert_called_once()
-                self.assertIn("笔记已被更新", str(warning.call_args))
+                popup = warning.call_args.args[2]
+                self.assertIn("版本冲突", popup)
+                self.assertIn("AI 修改未写入", popup)
+                self.assertIn("笔记已被更新", popup)
                 self.assertEqual(self._formal_state(), formal_state)
                 self.assertEqual(self.notes.get_note(note.id), edited)
                 with self.connections.read() as connection:
@@ -176,8 +180,23 @@ class Step03FollowupTests(unittest.TestCase):
                 if not view.cards[receipt_id].details.isVisible():
                     view.toggle_card(receipt_id)
                 processed = view.cards[receipt_id]
+                self.assertIn("状态：版本冲突", processed.summary_label.text())
+                self.assertNotIn("已拒绝", processed.summary_label.text())
+                self.assertEqual(operation["reason"], "笔记已被更新。")
                 self.assertIn("Before", processed.edit_diff.toPlainText())
                 self.assertIn("After", processed.edit_diff.toPlainText())
+
+    def test_nonconflict_rejection_keeps_rejected_label(self) -> None:
+        note = self._note()
+        receipt_id = self._edit(note, "ordinary-rejection-label")
+        receipt = replace(self.receipts.get_receipt(receipt_id), status="rejected")
+        with patch.object(self.receipts, "mcp_get_operation", return_value={
+            "status": "rejected", "reason": "用户已拒绝。",
+        }):
+            card = ReceiptCard(receipt, self.receipts, self.metadata)
+        self.addCleanup(card.close)
+        self.assertIn("状态：已拒绝", card.summary_label.text())
+        self.assertNotIn("版本冲突", card.summary_label.text())
 
     def test_stale_preview_keeps_pair_visible_without_final_diff(self) -> None:
         note = self._note()
