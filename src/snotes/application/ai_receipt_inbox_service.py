@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -13,10 +14,17 @@ from src.snotes.application.ai_actor_registry import (
 )
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.note_canonical_candidate import (
+    apply_exact_markdown_edits,
+    build_canonical_edit_candidate,
     build_canonical_note_candidate,
     canonicalize_new_note,
 )
 from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
+from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_FULL,
+    is_actor_authorized,
+    normalize_ai_visibility,
+)
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
     AiReceiptInboxRepository,
@@ -148,8 +156,8 @@ class AiReceiptInboxService:
             raise ValueError("该回执已处理，不能预览最终正文。")
         if receipt.parse_status != "parsed":
             raise ValueError("该回执解析失败，需要人工确认后才能入库。")
-        if receipt.operation_type not in {"append", "prepend"}:
-            raise UnsupportedReceiptOperationError("该回执不是正文追加提案。")
+        if receipt.operation_type not in {"append", "prepend", "edit"}:
+            raise UnsupportedReceiptOperationError("该回执不是正文修改提案。")
         if not receipt.request_id or not receipt.expected_updated_at:
             raise ValueError("追加提案缺少必要的身份或版本信息。")
         if resolve_target_id(receipt.actor_target_id) not in AI_ACTOR_IDS:
@@ -162,12 +170,16 @@ class AiReceiptInboxService:
         if note.updated_at != receipt.expected_updated_at:
             raise ValueError("笔记已被更新。")
 
-        addition = receipt.body if addition_markdown is None else addition_markdown
-        candidate = build_canonical_note_candidate(
-            note.content_markdown,
-            addition,
-            receipt.operation_type,
-        )
+        if receipt.operation_type == "edit":
+            edits = self.pending_note_edits(receipt_id)
+            candidate = build_canonical_edit_candidate(note.content_markdown, edits)
+        else:
+            addition = receipt.body if addition_markdown is None else addition_markdown
+            candidate = build_canonical_note_candidate(
+                note.content_markdown,
+                addition,
+                receipt.operation_type,
+            )
 
         # Milkdown runs a nested Qt event loop. During that time the receipt or
         # note can change; never show a result for a stale snapshot.
@@ -187,6 +199,39 @@ class AiReceiptInboxService:
                 candidate.legacy_canonicalization_changed
             ),
         )
+
+    def pending_note_edits(self, receipt_id: int) -> list[dict[str, str]]:
+        """Read the immutable edit pairs stored with a pending local proposal."""
+        notes = self._notes
+        metadata = self._ai_metadata
+        if notes is None or metadata is None:
+            raise RuntimeError("笔记服务不可用，无法读取修改提案。")
+        receipt = self._receipts.get(receipt_id)
+        if receipt is None or not receipt.pending or receipt.operation_type != "edit":
+            raise ValueError("该回执不是待确认的正文修改提案。")
+        if receipt.target_note_id is None or not receipt.expected_updated_at:
+            raise ValueError("修改提案缺少目标笔记或版本信息。")
+        note = notes.get_note(receipt.target_note_id)
+        if note is None or note.updated_at != receipt.expected_updated_at:
+            raise ValueError("笔记已被更新。")
+        actor_id = resolve_target_id(receipt.actor_target_id)
+        grants = metadata.get_note_metadata(note.id)
+        if (
+            actor_id not in AI_ACTOR_IDS
+            or normalize_ai_visibility(grants.visibility) != AI_VISIBILITY_FULL
+            or not is_actor_authorized(actor_id, grants.target_ids)
+        ):
+            raise ValueError("当前 AI 身份已无权修改此笔记。")
+        raw = self._require_mcp_operations().pending_operation_payload(receipt_id)
+        try:
+            payload = json.loads(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            payload = None
+        if not isinstance(payload, dict) or set(payload) != {"edits"}:
+            raise ValueError("正文修改提案内容无效。")
+        edits = payload["edits"]
+        apply_exact_markdown_edits(note.content_markdown, edits)
+        return edits
 
     def import_gale_submission(
         self, submission: GaleReceiptImport
@@ -303,7 +348,7 @@ class AiReceiptInboxService:
                 raise ValueError("人工确认入库前，主分类不能为空。")
 
         if receipt.operation_type in {
-            "append", "prepend", "metadata"
+            "append", "prepend", "edit", "metadata"
         }:
             raw_payload = self._require_mcp_operations().pending_operation_payload(
                 receipt.id
@@ -318,6 +363,7 @@ class AiReceiptInboxService:
                 else None
             )
             candidate = None
+            raw_candidate = None
             failure_reason = None
             if (
                 accepted_body is not None
@@ -342,6 +388,7 @@ class AiReceiptInboxService:
                 canonical_markdown=(
                     candidate.final_markdown if candidate is not None else None
                 ),
+                raw_candidate_markdown=raw_candidate,
                 expected_revision=(
                     current_note.revision if current_note is not None else None
                 ),

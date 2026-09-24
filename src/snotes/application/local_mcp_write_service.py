@@ -12,13 +12,17 @@ from src.snotes.application.ai_actor_registry import target_definition
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_FULL,
     AiSafeReadService,
     AiSafeReadSource,
     RedactionUnavailableError as SafeReadUnavailableError,
+    normalize_ai_visibility,
 )
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.note_canonical_candidate import (
+    apply_exact_markdown_edits,
+    build_canonical_edit_candidate,
     build_canonical_note_candidate,
     canonicalize_new_note,
 )
@@ -170,6 +174,107 @@ class LocalMcpWriteService:
 
     def append_note(self, **arguments) -> dict:
         return self._modify("append", **arguments)
+
+    def edit_note(
+        self,
+        *,
+        request_id: str,
+        note_id: int,
+        expected_version: str,
+        edits: list[dict[str, str]],
+    ) -> dict:
+        operation_type = "edit"
+        duplicate = self._duplicate(request_id, operation_type)
+        if duplicate is not None:
+            return duplicate
+        note = self._notes.get_note(note_id)
+        if note is None:
+            return self._terminal(operation_type, _result(
+                "not_found", request_id, note_id, "", "none", False, False,
+                "未找到笔记。",
+            ))
+        metadata = self._ai_metadata.get_note_metadata(note.id)
+        if normalize_ai_visibility(metadata.visibility) != AI_VISIBILITY_FULL:
+            return self._terminal(operation_type, _result(
+                "not_found", request_id, note_id, "", "none", False, False,
+                "未找到笔记。",
+            ))
+        context = self._materialize(note)
+        if context is None:
+            return self._terminal(operation_type, _result(
+                "not_found", request_id, note_id, "", "none", False, False,
+                "未找到笔记。",
+            ))
+        if not str(expected_version or "").strip():
+            return self._terminal(operation_type, _result(
+                "rejected", request_id, note_id, note.title, "none", False,
+                False, "缺少版本凭证；请先重新读取笔记。",
+            ))
+        if not _version_credentials_match(
+            note.id, note.updated_at,
+            expected_updated_at=None, expected_version=expected_version,
+        ):
+            return self._terminal(operation_type, _result(
+                "conflict", request_id, note_id, note.title, "none", False,
+                False, "笔记已被更新。",
+            ))
+        try:
+            raw_candidate = apply_exact_markdown_edits(note.content_markdown, edits)
+        except (TypeError, ValueError) as error:
+            return self._terminal(operation_type, _result(
+                "rejected", request_id, note_id, note.title, "none", False,
+                False, str(error),
+            ))
+        if raw_candidate == note.content_markdown:
+            return self._terminal(operation_type, _result(
+                "no_change", request_id, note_id, note.title, "none", False,
+                False, "请求没有产生实际变化。",
+            ))
+        from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
+
+        try:
+            candidate = build_canonical_edit_candidate(note.content_markdown, edits)
+        except (CanonicalizationError, ValueError, TypeError):
+            return self._terminal(operation_type, _result(
+                "failed", request_id, note_id, note.title, "none", False,
+                False, "无法生成稳定的 Markdown 正文。",
+            ))
+        needs_confirmation = self._receipt_inbox.mcp_confirmation_required(operation_type)
+        needs_confirmation |= candidate.legacy_canonicalization_changed
+        if needs_confirmation:
+            result = self._receipt_inbox.mcp_create_pending(
+                actor_target_id=self.actor_target_id,
+                actor_display=self._actor_display(),
+                request_id=request_id,
+                operation_type=operation_type,
+                title=note.title,
+                note_id=note_id,
+                expected_updated_at=note.updated_at,
+                payload={"edits": edits},
+                location=note.location,
+                tags=[name for _tag_id, name in context.tag_records],
+                body="\n\n".join(
+                    f"[{index}] {item['old_markdown']} → {item['new_markdown']}"
+                    for index, item in enumerate(edits, 1)
+                ),
+                visibility=metadata.visibility,
+                target_ids=metadata.target_ids,
+            )
+        else:
+            result = self._receipt_inbox.mcp_modify_direct(
+                actor_target_id=self.actor_target_id,
+                request_id=request_id,
+                note_id=note_id,
+                operation_type=operation_type,
+                expected_revision=note.revision,
+                expected_updated_at=note.updated_at,
+                expected_content_markdown=note.content_markdown,
+                raw_candidate_markdown=raw_candidate,
+                canonical_markdown=candidate.final_markdown,
+                edits=edits,
+            )
+        self._audit_write(operation_type, result)
+        return result
 
     def update_note_metadata(self, **arguments) -> dict:
         return self._modify("metadata", **arguments)

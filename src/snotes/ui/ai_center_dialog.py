@@ -67,6 +67,7 @@ AUDIT_OPERATION_LABELS = {
     "create": "新建笔记",
     "prepend": "前置追加",
     "append": "追加内容",
+    "edit": "精确修改正文",
     "metadata": "修改资料",
     "restore": "恢复笔记",
     "operation_status": "查询操作状态",
@@ -295,11 +296,21 @@ class ReceiptCard(QFrame):
         self.has_final_preview = bool(
             receipt.pending
             and receipt.request_id
-            and receipt.operation_type in {"append", "prepend"}
+            and receipt.operation_type in {"append", "prepend", "edit"}
         )
         self.final_preview_ready = False
         if self.has_final_preview:
             self.accept_button.setEnabled(False)
+        self.is_edit_proposal = receipt.pending and receipt.operation_type == "edit"
+        if self.is_edit_proposal:
+            self.edit_diff = QTextEdit()
+            self.edit_diff.setObjectName("receiptExactEditDiff")
+            self.edit_diff.setReadOnly(True)
+            self.edit_diff.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+            self.edit_diff.setLineWrapMode(QTextEdit.NoWrap)
+            self.edit_diff.setMinimumHeight(180)
+            details.addWidget(QLabel("逐组精确修改：old_markdown → new_markdown"))
+            details.addWidget(self.edit_diff)
         body_label = QLabel(
             ("前置内容" if receipt.operation_type == "prepend" else "追加内容")
             if self.has_final_preview else ("正文" if receipt.pending else "正文记录")
@@ -310,6 +321,9 @@ class ReceiptCard(QFrame):
         self.body_edit.setPlainText(receipt.body)
         self.body_edit.setMinimumHeight(210)
         details.addWidget(self.body_edit)
+        if self.is_edit_proposal:
+            body_label.hide()
+            self.body_edit.hide()
 
         if self.has_final_preview:
             self._preview_timer = QTimer(self)
@@ -350,6 +364,7 @@ class ReceiptCard(QFrame):
         ):
             widget.setEnabled(
                 receipt.pending
+                and not self.is_edit_proposal
                 and (not self.has_final_preview or widget is self.body_edit)
             )
 
@@ -435,8 +450,17 @@ class ReceiptCard(QFrame):
         self.preview_status.setText("正在生成完整正文差异…")
         fragment = self.body_edit.toPlainText()
         try:
+            if self.is_edit_proposal:
+                self.edit_diff.clear()
+                edits = self._preview_service.pending_note_edits(self.receipt_id)
+                self.edit_diff.setPlainText("\n\n".join(
+                    f"第 {index} 组\n--- old_markdown\n{edit['old_markdown']}"
+                    f"\n→\n+++ new_markdown\n{edit['new_markdown']}"
+                    for index, edit in enumerate(edits, 1)
+                ))
             preview = self._preview_service.build_pending_note_preview(
-                self.receipt_id, addition_markdown=fragment,
+                self.receipt_id,
+                addition_markdown=None if self.is_edit_proposal else fragment,
             )
             if not isValid(self):
                 return

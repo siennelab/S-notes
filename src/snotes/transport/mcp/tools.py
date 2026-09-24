@@ -27,6 +27,7 @@ from src.snotes.transport.mcp.schemas import (
     ListDirectoriesResponse,
     ListTagsResponse,
     MaxChars,
+    MarkdownEdits,
     OffsetValue,
     OperationStatusResponse,
     PageNumber,
@@ -69,6 +70,7 @@ WRITE_TOOL_NAMES = frozenset(
         "list_tags",
         "list_ai_metadata_options",
         "create_note",
+        "edit_note",
         "prepend_note",
         "append_note",
         "update_note_metadata",
@@ -267,6 +269,25 @@ class LocalMcpToolAdapter:
                 ai_visibility=_optional_text(ai_visibility),
                 ai_targets=_optional_list(ai_targets),
             ),
+        )
+
+    def edit_note(
+        self,
+        request_id: RequestId,
+        note_id: PositiveId,
+        expected_version: VersionToken,
+        edits: MarkdownEdits,
+    ) -> WriteReceipt:
+        return self._write(
+            "edit_note",
+            request_id,
+            lambda: self.service.edit_note(
+                request_id=request_id,
+                note_id=note_id,
+                expected_version=expected_version,
+                edits=[edit.model_dump() for edit in edits],
+            ),
+            note_id,
         )
 
     def prepend_note(
@@ -666,7 +687,7 @@ def register_tools(
     adapter = LocalMcpToolAdapter(
         service,
         modification_allowed=not read_only and bool(
-            enabled_tools & {"prepend_note", "append_note", "update_note_metadata"}
+            enabled_tools & {"edit_note", "prepend_note", "append_note", "update_note_metadata"}
         ),
     )
 
@@ -808,6 +829,19 @@ def register_tools(
             "subcategory, and tags metadata. "
             "A restricted server profile may place the request in AI Center for human "
             "confirmation before the formal note is created. "
+            + WRITE_RULES,
+            write_annotations,
+        ),
+        (
+            adapter.edit_note,
+            "edit_note",
+            "Apply an atomic batch of exact old_markdown → new_markdown edits to a "
+            "full-authorized note. Input follows snotes-markdown-v1. First use "
+            "get_note_markdown, copy its version as expected_version, and take each "
+            "old_markdown exactly from the current Markdown. Each old fragment must "
+            "match exactly once; overlapping edits are rejected. Never remove unknown "
+            "S-notes directives. Full-document rewrite is unsupported. The existing "
+            "modify confirmation setting controls AI Center review or direct canonical write. "
             + WRITE_RULES,
             write_annotations,
         ),

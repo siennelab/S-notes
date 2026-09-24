@@ -326,6 +326,9 @@ class LocalMcpService:
     def create_note(self, *arguments, **keywords) -> dict:
         return self._writes.create_note(*arguments, **keywords)
 
+    def edit_note(self, **arguments) -> dict:
+        return self._writes.edit_note(**arguments)
+
     def prepend_note(self, **arguments) -> dict:
         return self._writes.prepend_note(**arguments)
 

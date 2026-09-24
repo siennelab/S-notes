@@ -11,6 +11,17 @@ QueryText = Annotated[str, Field(max_length=500)]
 RequestId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^\S+$")]
 TitleText = Annotated[str, Field(min_length=1, max_length=500)]
 ContentText = Annotated[str, Field(min_length=1, max_length=50_000)]
+
+
+class MarkdownEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    old_markdown: Annotated[str, Field(min_length=1, max_length=50_000)]
+    new_markdown: Annotated[str, Field(max_length=50_000)]
+
+
+MarkdownEdits = Annotated[list[MarkdownEdit], Field(min_length=1, max_length=100)]
+
 VersionText = Annotated[str, Field(min_length=1, max_length=80)]
 VersionToken = Annotated[
     str,

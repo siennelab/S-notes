@@ -46,6 +46,7 @@ NORMAL_TOOLS = {
     "list_tags",
     "list_ai_metadata_options",
     "create_note",
+    "edit_note",
     "prepend_note",
     "append_note",
     "update_note_metadata",
@@ -290,6 +291,60 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             denied = await self.call(session, "get_note_markdown", {"note_id": note.id})
             self.assertEqual(denied["status"], "not_found")
 
+    async def test_edit_note_stdio_contract_and_direct_write(self) -> None:
+        with self.connections.write() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO app_settings(setting_key, setting_value, updated_at) "
+                "VALUES ('ai_modify_requires_confirmation', '0', '2026-01-01T00:00:00')"
+            )
+        async with self.session(read_only=False, actor="claude-code") as session:
+            listed = {tool.name: tool for tool in (await session.list_tools()).tools}
+            self.assertTrue({"get_note_markdown", "edit_note", "prepend_note",
+                             "append_note", "update_note_metadata"} <= listed.keys())
+            self.assertNotIn("delete_note", listed)
+            schema = listed["edit_note"].inputSchema
+            self.assertEqual(set(schema["required"]),
+                             {"request_id", "note_id", "expected_version", "edits"})
+            for combinator in ("anyOf", "oneOf", "allOf"):
+                self.assertNotIn(combinator, schema)
+            self.assertNotIn("new_body", schema["properties"])
+            created = await self.call(session, "create_note", {
+                "request_id": "edit-create", "title": "Fictional edit",
+                "content": "**before**\n\n[old](https://example.test)\n",
+            })
+            note_id = created["note_id"]
+            before = await self.call(session, "get_note_markdown", {"note_id": note_id})
+            arguments = {
+                "request_id": "edit-direct", "note_id": note_id,
+                "expected_version": before["version"],
+                "edits": [
+                    {"old_markdown": "**before**", "new_markdown": "**after**"},
+                    {"old_markdown": "[old](https://example.test)",
+                     "new_markdown": "[new](https://example.test/new)"},
+                ],
+            }
+            for invalid in (
+                {**arguments, "new_body": "forbidden"},
+                {**arguments, "edits": []},
+                {**arguments, "edits": [{"old_markdown": "", "new_markdown": "x"}]},
+                {**arguments, "edits": [{"old_markdown": "before", "new_markdown": "x", "extra": 1}]},
+            ):
+                response = await session.call_tool("edit_note", invalid)
+                self.assertTrue(response.isError)
+            result = await self.call(session, "edit_note", arguments)
+            self.assertEqual(result["status"], "updated")
+            after = await self.call(session, "get_note_markdown", {"note_id": note_id})
+            self.assertEqual(after["markdown"], "**after**\n\n[new](https://example.test/new)\n")
+            self.assertNotEqual(before["version"], after["version"])
+            duplicate = await self.call(session, "edit_note", arguments)
+            self.assertEqual(duplicate["status"], "already_processed")
+            stale = await self.call(session, "edit_note", {**arguments, "request_id": "edit-stale"})
+            self.assertEqual(stale["status"], "conflict")
+            denied = await self.call(session, "edit_note", {
+                **arguments, "request_id": "edit-redacted", "note_id": self.ids["redacted"],
+            })
+            self.assertEqual(denied["status"], "not_found")
+
     @asynccontextmanager
     async def session(
         self,
@@ -383,7 +438,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "tags",
             ):
                 self.assertIn(name, create_properties)
-            for name in ("prepend_note", "append_note", "update_note_metadata"):
+            for name in ("edit_note", "prepend_note", "append_note", "update_note_metadata"):
                 schema = by_name[name].inputSchema
                 for combinator in ("anyOf", "oneOf", "allOf"):
                     self.assertNotIn(combinator, schema)
@@ -1099,7 +1154,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(accepted.created)
             self.assertEqual(len(self.notes.list_active_notes()), formal_before + 1)
             self.assertEqual(accepted.note.title, "Clawde fictional pending")
-            self.assertEqual(accepted.note.content_markdown, "fictional base body")
+            self.assertEqual(accepted.note.content_markdown, "fictional base body\n")
             self.assertEqual(receipt_service.list_pending_receipts(), [])
 
             found = await self.call(
@@ -1283,7 +1338,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     ),
                 )
             self.assertEqual(
-                receipt_service.get_receipt(stale_receipt.id).status, "pending"
+                receipt_service.get_receipt(stale_receipt.id).status, "rejected"
             )
             after_conflict = await self.call(
                 session, "get_note", {"note_id": accepted.note.id}

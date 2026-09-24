@@ -16,7 +16,7 @@ It returns `note_id`, `version`, verbatim `markdown`, and
 [S-notes Markdown dialect v1](SNOTES_MARKDOWN_DIALECT_V1.md).
 
 Access requires full visibility for the fixed actor and an existing note-modification
-capability in the effective server profile (`prepend_note`, `append_note`, or
+capability in the effective server profile (`edit_note`, `prepend_note`, `append_note`, or
 `update_note_metadata`). Read-only mode cannot grant it. Redacted, hidden,
 unauthorized, deleted, missing, and capability-denied notes return `not_found`.
 Existing restricted profile allowlists are unchanged; this step does not expand
@@ -35,6 +35,45 @@ Real Claude Code discovery and human checks remain a separate acceptance gate:
 refresh the client tools, read a full note containing bold/link/size Markdown,
 and confirm a redacted note returns `not_found`. Server registration and stdio
 protocol tests are not evidence of real Claude Code discovery.
+
+## GreenCloud 3.5 step 3: precise Markdown edits (candidate)
+
+The unrestricted local MCP profile adds
+`edit_note(request_id, note_id, expected_version, edits)`, where `edits` is a
+nonempty array of `{old_markdown, new_markdown}` objects. First call
+`get_note_markdown`; copy its opaque `version` and exact Markdown fragments.
+Input follows `snotes-markdown-v1`. Preserve unknown S-notes directives.
+
+Every old fragment must occur exactly once in the same original Markdown.
+Zero matches, multiple matches, overlapping edits, and whole-document rewrites
+are rejected. Edits are applied together or none are applied; no fuzzy matching,
+section merge, or `new_body` parameter exists. Edits introducing raw HTML are
+rejected instead of silently losing it during canonicalization. Keep `request_id`
+stable on retry.
+Only full-authorized active notes are eligible; inaccessible notes use the
+existing `not_found` response, without revealing their existence.
+
+The existing modify-confirmation setting selects AI Center pending review or
+direct execution. Both paths use the existing Milkdown canonicalizer. Legacy
+noncanonical content still requires review. AI Center shows each old → new pair
+and the full final canonical diff. Accept rechecks the stored edits, current
+actor authorization, and version before saving; a failure leaves formal body,
+history, revision, and timestamp unchanged. A successful change updates history,
+revision, timestamp, version, and receipt through the existing transaction.
+
+Candidate verification uses temporary HOME and databases only. The formal App
+is not replaced. Human acceptance must cover:
+
+1. Edit bold text and a link on a test note; inspect AI Center diff, Accept, open.
+2. Submit an edit, then manually change the note; Accept must conflict without
+   overwriting the manual change.
+3. Attempt an edit on a redacted note; it must be denied.
+4. Run one simple create / append / prepend / metadata regression each.
+5. In a fresh Claude Code session, discover `get_note_markdown`, `edit_note`,
+   `prepend_note`, `append_note`, and `update_note_metadata` together.
+
+This remains a candidate until S passes that human gate. Do not close 3.5-0,
+fast-forward main, replace the formal App, or push before the closeout gate.
 
 ## Yan local Codex profile
 

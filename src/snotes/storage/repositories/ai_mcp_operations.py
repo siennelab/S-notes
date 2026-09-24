@@ -12,7 +12,12 @@ from src.snotes.application.ports import (
 )
 from src.snotes.application.ai_actor_registry import resolve_target_id
 from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
+from src.snotes.application.note_canonical_candidate import (
+    apply_exact_markdown_edits,
+    build_canonical_edit_candidate,
+)
 from src.snotes.application.ai_safe_read_service import (
+    AI_VISIBILITY_FULL,
     AI_VISIBILITY_HIDDEN,
     is_actor_authorized,
     normalize_ai_visibility,
@@ -185,15 +190,19 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         addition_markdown: str = "",
         canonical_markdown: str | None = None,
         expected_content_markdown: str | None = None,
+        raw_candidate_markdown: str | None = None,
+        edits: list[dict[str, str]] | None = None,
         title: str | None = None,
         directory_id: int | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
     ) -> dict:
-        if operation_type in {"append", "prepend"} and (
+        if operation_type in {"append", "prepend", "edit"} and (
             canonical_markdown is None or expected_content_markdown is None
         ):
             raise ValueError("正文写入缺少 canonical 候选或原正文校验。")
+        if operation_type == "edit" and (edits is None or raw_candidate_markdown is None):
+            raise ValueError("正文修改缺少精确替换候选。")
         with self.connections.write() as connection:
             existing = self._operation_from_connection(connection, request_id)
             if existing is not None:
@@ -216,7 +225,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 expected_revision=expected_revision,
                 expected_updated_at=expected_updated_at,
             ) or (
-                operation_type in {"append", "prepend"}
+                operation_type in {"append", "prepend", "edit"}
                 and str(note["content_markdown"]) != expected_content_markdown
             ):
                 result = _result(
@@ -227,6 +236,33 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     connection, actor_target_id, operation_type, result
                 )
                 return result
+
+            if operation_type == "edit":
+                if not self._actor_can_edit_note(connection, note, actor_target_id):
+                    result = _result(
+                        "not_found", request_id, note_id, "", "direct", False,
+                        False, "未找到笔记。",
+                    )
+                    self._store_operation(connection, actor_target_id, operation_type, result)
+                    return result
+                try:
+                    current_candidate = apply_exact_markdown_edits(
+                        str(note["content_markdown"]), edits
+                    )
+                except (TypeError, ValueError) as error:
+                    result = _result(
+                        "rejected", request_id, note_id, str(note["title"]),
+                        "direct", False, False, str(error),
+                    )
+                    self._store_operation(connection, actor_target_id, operation_type, result)
+                    return result
+                if current_candidate != raw_candidate_markdown:
+                    result = _result(
+                        "conflict", request_id, note_id, str(note["title"]),
+                        "direct", False, False, "笔记已被更新。",
+                    )
+                    self._store_operation(connection, actor_target_id, operation_type, result)
+                    return result
 
             result_title, _timestamp = self._apply_modification_in_connection(
                 connection, note, actor_target_id=actor_target_id,
@@ -303,6 +339,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         expected_payload: str | None,
         accepted_body: str | None = None,
         canonical_markdown: str | None = None,
+        raw_candidate_markdown: str | None = None,
         expected_revision: int | None = None,
         expected_content_markdown: str | None = None,
         failure_reason: str | None = None,
@@ -337,7 +374,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     title=title, note_id=note_id,
                 )
 
-            if operation_type not in {"append", "prepend", "metadata"}:
+            if operation_type not in {"append", "prepend", "edit", "metadata"}:
                 return fail("rejected", "不支持的 AI 修改类型。")
             if (
                 receipt["parse_status"] != "parsed"
@@ -383,7 +420,12 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             ).fetchone()
             if note is None:
                 return fail("rejected", "目标笔记不存在。")
-            if not self._actor_can_modify_note(connection, note, actor_target_id):
+            can_modify = (
+                self._actor_can_edit_note(connection, note, actor_target_id)
+                if operation_type == "edit"
+                else self._actor_can_modify_note(connection, note, actor_target_id)
+            )
+            if not can_modify:
                 return fail("rejected", "当前 AI 身份已无权修改此笔记。")
             if str(note["updated_at"]) != str(receipt["expected_updated_at"]):
                 return fail("conflict", "笔记已被更新。")
@@ -419,7 +461,61 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     payload = json.loads(expected_payload)
                 except (TypeError, ValueError):
                     payload = None
-                if (
+                if operation_type == "edit":
+                    if not isinstance(payload, dict) or set(payload) != {"edits"}:
+                        return fail("rejected", "正文修改提案内容无效。")
+                    try:
+                        current_candidate = apply_exact_markdown_edits(
+                            str(note["content_markdown"]), payload["edits"]
+                        )
+                    except (TypeError, ValueError) as error:
+                        return fail("rejected", str(error))
+                    if (
+                        raw_candidate_markdown is not None
+                        and current_candidate != raw_candidate_markdown
+                    ):
+                        return fail("conflict", "笔记已被更新。")
+                    if failure_reason:
+                        return fail("rejected", failure_reason)
+                    from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
+
+                    try:
+                        transaction_candidate = build_canonical_edit_candidate(
+                            str(note["content_markdown"]), payload["edits"]
+                        )
+                    except (CanonicalizationError, TypeError, ValueError):
+                        return fail("rejected", "无法生成稳定的 Markdown 正文。")
+                    if (
+                        canonical_markdown is not None
+                        and transaction_candidate.final_markdown != canonical_markdown
+                    ):
+                        return fail("conflict", "提案预览已改变，请刷新后重试。")
+                    canonical_markdown = transaction_candidate.final_markdown
+                    current_note = connection.execute(
+                        "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
+                        (note_id,),
+                    ).fetchone()
+                    current_receipt = connection.execute(
+                        "SELECT status, operation_payload FROM ai_receipt_inbox WHERE id = ?",
+                        (receipt_id,),
+                    ).fetchone()
+                    if (
+                        current_note is None
+                        or not _note_version_matches(
+                            current_note,
+                            expected_revision=int(note["revision"]),
+                            expected_updated_at=str(note["updated_at"]),
+                        )
+                        or str(current_note["content_markdown"]) != str(note["content_markdown"])
+                        or not self._actor_can_edit_note(
+                            connection, current_note, actor_target_id
+                        )
+                        or current_receipt is None
+                        or current_receipt["status"] != "pending"
+                        or current_receipt["operation_payload"] != expected_payload
+                    ):
+                        return fail("conflict", "提案或笔记已被更新，请刷新后重试。")
+                elif (
                     not isinstance(payload, dict)
                     or set(payload) != {"content"}
                     or not isinstance(payload["content"], str)
@@ -499,6 +595,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             "create": "新建",
             "prepend": "开头追加",
             "append": "末尾追加",
+            "edit": "精确修改",
             "metadata": "修改元数据",
         }[operation_type]
         with self.connections.write() as connection:
@@ -578,7 +675,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             operation_type, timestamp, handling_mode=handling_mode,
         )
         result_title = str(note["title"])
-        if operation_type in {"append", "prepend"}:
+        if operation_type in {"append", "prepend", "edit"}:
             if canonical_markdown is None:
                 raise ValueError("正文写入缺少 canonical 候选。")
             self._write_content_in_connection(
@@ -631,6 +728,13 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         return (
             normalize_ai_visibility(note["ai_visibility"]) != AI_VISIBILITY_HIDDEN
             and is_actor_authorized(actor_id, targets)
+        )
+
+    @classmethod
+    def _actor_can_edit_note(cls, connection, note, actor_target_id: str) -> bool:
+        return (
+            normalize_ai_visibility(note["ai_visibility"]) == AI_VISIBILITY_FULL
+            and cls._actor_can_modify_note(connection, note, actor_target_id)
         )
 
     @classmethod
