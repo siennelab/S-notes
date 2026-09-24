@@ -3,7 +3,7 @@
 - 基线：`9c261f32ae6f906400cd3847138871d8efdc87c3`，开工时 `main == origin/main`、工作区干净；未回退历史起点。
 - 分支：`codex/gc35-step01-markdown-read`。
 - 实现 commit：`27dee36cc1637eae78fc028c4e70b10836ca11e6`。后续报告与审计范围修正提交不改变生产实现。
-- 状态：第 1 步自动实现主体审计通过；定向测试 PASS，附近 MCP 回归保留既有非阻塞换行 mismatch，暂不 merge；Claude Code 真实 discovery / S 真人验收为 HUMAN_GATE，尚未宣称整步人工封口。
+- 状态：STEP1=CLOSED；自动实现主体审计通过，6 项定向测试 PASS，附近 MCP 回归保留既有非阻塞换行 mismatch；S 已确认 HUMAN_GATE=PASS，并授权 fast-forward main、push origin 与删除已合并 task branch。
 
 ## 改动文件
 
@@ -40,14 +40,39 @@ git diff --check
 - 修改能力沿用 profile 中 prepend/append/metadata 任一能力，且 read_only 必须为 false；create-only 或 read-only 不授予。受限 allowlist 不自动增加新工具，Gale/Clawbot/Yan profile 范围未扩张。
 - 附近 MCP 回归仅剩 `test_normal_create_get_append_and_operation_status_smoke` 的已知 append newline mismatch：runtime 为 `base\n\n-end`，原测试期望 `base\n-end`。原版代码同样存在此 mismatch，属于 pre-existing non-blocker，非 Step 1 regression。两处历史预期保持施工前基线；append contract 留待 Step 2 canonicalizer 与 Milkdown round-trip 一起判定，不为全绿修改实现或旧预期。运行中有依赖库 lifespan forward-reference 警告，不影响结果，未扩修依赖。
 
-## 真人验收与部署
+## 真人验收与封口
 
-CLIENT_DISCOVERY=HUMAN_GATE。本机存在 claude 可执行文件，但本次没有运行已认证真实 Claude Code 会话进行 discovery；临时 DB 的标准 MCP stdio 测试不是该验收的替代。
+以下结果由 S 的真实 Claude Code 会话验收确认，本次封口不重新读取真实数据库。
 
-待 S：在有 Notes 修改能力、允许新工具的本地 Claude Code 会话刷新工具，确认发现 get_note_markdown；读取一篇含粗体/链接/字号的 full 笔记确认原始 Markdown；读取 redacted 确认 not_found。不得仅凭本报告将真人验收标 PASS。
+- DISCOVERY=PASS：真实客户端可发现 `get_note_markdown`。
+- FULL_MARKDOWN_READ=PASS：note 308 的 `get_note_markdown` 可见原始 `:size[...]`，普通 `get_note` 仅返回派生纯文本；note 84 的 `get_note_markdown` 可见 `**...**` 粗体 Markdown 原文。
+- REDACTED_NOT_FOUND=PASS：note 318《GC35 Step 1｜Redacted 测试笔记》，S 确认 DB 为 `ai_visibility=redacted`；`get_note_markdown` 返回 `not_found`，普通 `get_note` 仍按现有 redaction 规则返回 safe plain text。
 
-本步施工书明确 build=否，未构建 App。无部署、无 VPS 变更、无 push、未 merge main。未触及 canonicalizer、edit_note、AI Center 写入、Gale、Reminder 或 GreenCloud 实现。
+CLIENT_DISCOVERY=PASS
 
-APPEND_NEWLINE_MISMATCH=PRE_EXISTING_DEFERRED_TO_STEP2
+HUMAN_GATE=PASS
 
-NEXT=HUMAN_GATE（STEP_2_NOT_STARTED）
+### Non-blocking discoveries（Step 1 不修）
+
+- Redaction 仅按现有规则集处理，不等于自动 PII 检测；在 3.5-A Cloud redacted safe_text 上云前重新确认规则覆盖范围。
+- Note 318 的普通 `get_note` 出现裸 `:size` 文本。其他正式笔记的正常 `:size` 派生已验证无此问题；留待 Step 2 round-trip scan / canonicalizer 判定，不在本步提前修复。
+- Append newline mismatch 继续按 pre-existing non-blocker 保留，留待 Step 2 与 Milkdown round-trip 一起判定。
+
+### 提交链与交付
+
+- `27dee36`：Step 1 实现、方言与测试。
+- `95bd082`：自动验证报告及当时的真人 gate。
+- `696a9dd`：恢复两处历史换行预期到施工前基线，明确 deferred to Step 2。
+- 本报告所在最终封口提交：仅更新本报告，记录 S 真人 PASS 和上述非阻塞发现；生产实现未改。
+- 封口审计确认：分支源自 `9c261f3`；生产源码与实现提交 `27dee36` 相同；历史两处换行断言与基线一致；净改动仅 Step 1 的 8 个文件。整段 diff 检查发现新测试文件末尾多一个空行，无行为影响，本次报告封口不扩改测试。
+- 按 S 授权，本报告提交后 fast-forward 到 main、push origin/main，确认远端同一提交后删除已完全合并的本步 task branch；实际交付 hash 与同步结果以封口最终回复为准。
+
+本步施工书明确 build=否，未构建 App。无部署、无 VPS 变更。未触及 canonicalizer、edit_note、AI Center 写入、Gale、Reminder 或 GreenCloud 实现。本次仅文档封口，沿用上次已执行的测试证据，不重复跑测试。
+
+APPEND_NEWLINE_MISMATCH=DEFERRED_TO_STEP2
+
+SIZE_PLAIN_TEXT_DISCOVERY=DEFERRED_TO_STEP2
+
+REDACTION_RULE_COVERAGE=RECHECK_BEFORE_3_5_A
+
+NEXT=STEP_2_NOT_STARTED
