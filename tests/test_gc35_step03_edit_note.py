@@ -136,6 +136,51 @@ class EditNoteTests(unittest.TestCase):
             self.assertEqual(milkdown._serialize_once(body), body)
             self.assertEqual(milkdown.canonicalize_markdown(body), body)
 
+    def test_conflict_outbound_query_and_retry_semantics(self):
+        from src.snotes.transport.mcp.tools import _operation_response, _write_response
+        note = self._note("Before\n")
+        edits = [{"old_markdown": "Before", "new_markdown": "After"}]
+        pending = self._edit(note, edits)
+        self.notes.save_note(note.id, title=note.title, content_markdown="S edited\n",
+                             location=note.location, expected_revision=note.revision)
+        with self.assertRaisesRegex(ValueError, "笔记已被更新"):
+            self._accept(pending["proposal_id"])
+        stored = self.writes.get_operation_status("edit")
+        self.assertEqual(stored["handling_mode"], "human_rejected")
+        query = _operation_response(stored)
+        self.assertEqual(query.status, "conflict")
+        self.assertEqual(query.processing_mode, "none")
+        self.assertTrue(query.failure_or_conflict_reason)
+        retry = _write_response(self._edit(note, edits))
+        self.assertEqual((retry.status, retry.previous_status, retry.processing_mode),
+                         ("already_processed", "conflict", "none"))
+        self.assertFalse(retry.changed_formal_note)
+        self.assertEqual((retry.note_id, retry.proposal_id), (note.id, pending["proposal_id"]))
+
+    def test_rejected_edit_outbound_preserves_linkage(self):
+        from src.snotes.transport.mcp.tools import _operation_response, _write_response
+        note = self._note("Before\n")
+        edits = [{"old_markdown": "Before", "new_markdown": "After"}]
+        pending = self._edit(note, edits)
+        self.receipts.discard_receipt(pending["proposal_id"])
+        for response in (_operation_response(self.writes.get_operation_status("edit")),
+                         _write_response(self._edit(note, edits))):
+            self.assertEqual(response.processing_mode, "human_rejected")
+            self.assertEqual((response.note_id, response.proposal_id),
+                             (note.id, pending["proposal_id"]))
+
+    def test_rejected_create_preserves_proposal_without_formal_note(self):
+        from src.snotes.transport.mcp.tools import _operation_response, _write_response
+        with patch.object(self.receipts, "mcp_confirmation_required", return_value=True):
+            pending = self.writes.create_note("create-rejected", "Fictional", "Before")
+        self.assertEqual(pending["status"], "pending_confirmation")
+        self.receipts.discard_receipt(pending["proposal_id"])
+        for response in (_operation_response(self.writes.get_operation_status("create-rejected")),
+                         _write_response(self.writes.create_note("create-rejected", "Fictional", "Before"))):
+            self.assertIsNone(response.note_id)
+            self.assertEqual(response.proposal_id, pending["proposal_id"])
+            self.assertEqual(response.processing_mode, "human_rejected")
+
     def test_direct_edits_common_milkdown_constructs_and_updates_version(self):
         self._confirmation(False)
         cases = (

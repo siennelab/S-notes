@@ -267,7 +267,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 self._store_operation(
                     connection,
                     receipt,
-                    receipt.note_id,
+                    receipt.target_note_id if receipt.target_note_id is not None else receipt.note_id,
                     receipt.title,
                     timestamp,
                     status="rejected",
@@ -415,6 +415,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
         result = {
             "status": status,
             "request_id": receipt.request_id,
+            "proposal_id": receipt.id,
             "note_id": note_id,
             "title": title,
             "handling_mode": "human_approved" if status == "created" else "human_rejected",
