@@ -45,6 +45,8 @@ class AiReceiptInboxItem:
     operation_type: str | None
     external_submission_id: str | None
     idempotency_key: str | None
+    target_note_id: int | None = None
+    expected_updated_at: str | None = None
 
     @property
     def pending(self) -> bool:

@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from collections.abc import Sequence
 from dataclasses import replace
+from difflib import unified_diff
+from shiboken6 import isValid
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCloseEvent, QKeyEvent, QMouseEvent, QPalette
+from PySide6.QtGui import QColor, QCloseEvent, QFontDatabase, QKeyEvent, QMouseEvent, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -132,6 +134,8 @@ class ReceiptCard(QFrame):
     ) -> None:
         super().__init__(parent)
         self.receipt = receipt
+        self._preview_service = service
+        self._preview_busy = False
         self.receipt_id = receipt.id
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
@@ -247,13 +251,44 @@ class ReceiptCard(QFrame):
         targets_row.addStretch(1)
         details.addLayout(targets_row)
 
-        body_label = QLabel("正文" if receipt.pending else "正文记录")
+        self.has_final_preview = bool(
+            receipt.pending and receipt.request_id and receipt.operation_type == "append"
+        )
+        body_label = QLabel("追加内容" if self.has_final_preview else ("正文" if receipt.pending else "正文记录"))
         body_label.setObjectName("receiptFieldLabel")
         details.addWidget(body_label)
         self.body_edit = QTextEdit()
         self.body_edit.setPlainText(receipt.body)
         self.body_edit.setMinimumHeight(210)
         details.addWidget(self.body_edit)
+
+        if self.has_final_preview:
+            self._preview_timer = QTimer(self)
+            self._preview_timer.setSingleShot(True)
+            self._preview_timer.timeout.connect(self.refresh_final_preview)
+            preview_label = QLabel("最终 canonical 落库预览（写入接入待 2C）")
+            details.addWidget(preview_label)
+            self.preview_status = QLabel("展开后生成完整正文差异；修改追加内容后请刷新预览。")
+            self.preview_status.setWordWrap(True)
+            details.addWidget(self.preview_status)
+            self.legacy_warning = QLabel(
+                "此最终结果除追加内容外，还会规范化这篇旧笔记的既有 Markdown。"
+            )
+            self.legacy_warning.setObjectName("receiptLegacyCanonicalizationWarning")
+            self.legacy_warning.setWordWrap(True)
+            self.legacy_warning.hide()
+            details.addWidget(self.legacy_warning)
+            self.preview_refresh = QPushButton("刷新最终预览")
+            self.preview_refresh.clicked.connect(self.refresh_final_preview)
+            details.addWidget(self.preview_refresh)
+            self.final_preview = QTextEdit()
+            self.final_preview.setObjectName("receiptFinalCanonicalDiff")
+            self.final_preview.setReadOnly(True)
+            self.final_preview.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+            self.final_preview.setLineWrapMode(QTextEdit.NoWrap)
+            self.final_preview.setMinimumHeight(240)
+            details.addWidget(self.final_preview)
+            self.body_edit.textChanged.connect(self.invalidate_final_preview)
 
         if receipt.note_id is not None:
             linked = QLabel(f"关联正式笔记：#{receipt.note_id}")
@@ -290,6 +325,61 @@ class ReceiptCard(QFrame):
         self.details.setVisible(expanded)
         self.setProperty("expanded", expanded)
         repolish(self)
+        if self.has_final_preview:
+            if expanded:
+                # Finish building/replacing cards before Milkdown processes Qt events.
+                self._preview_timer.start(0)
+            else:
+                self._preview_timer.stop()
+
+    def invalidate_final_preview(self) -> None:
+        self.final_preview.clear()
+        self.legacy_warning.hide()
+        self.preview_status.setText("追加内容已改变，请刷新最终预览。")
+
+    def refresh_final_preview(self) -> None:
+        if self._preview_busy:
+            return
+        self._preview_timer.stop()
+        self._preview_busy = True
+        self.preview_refresh.setEnabled(False)
+        self.final_preview.clear()
+        self.legacy_warning.hide()
+        self.preview_status.setText("正在生成完整正文差异…")
+        fragment = self.body_edit.toPlainText()
+        try:
+            preview = self._preview_service.build_pending_note_preview(
+                self.receipt_id, addition_markdown=fragment,
+            )
+            if not isValid(self):
+                return
+            if fragment != self.body_edit.toPlainText():
+                self.invalidate_final_preview()
+                return
+            # Retain line terminators so a missing final newline is a visible diff.
+            chunks = unified_diff(
+                preview.before_markdown.splitlines(keepends=True),
+                preview.final_markdown.splitlines(keepends=True),
+                fromfile="当前完整正文", tofile="最终 canonical 正文",
+                n=max(len(preview.before_markdown.splitlines()), len(preview.final_markdown.splitlines())),
+            )
+            diff = "".join(
+                line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                for line in chunks
+            )
+            self.final_preview.setPlainText(diff or "正文无差异。")
+            self.legacy_warning.setVisible(preview.legacy_canonicalization_changed)
+            self.preview_status.setText("完整正文差异：− 为删除，+ 为新增。预览不会保存正文。")
+        except ValueError as error:
+            if isValid(self):
+                self.preview_status.setText("预览不可用：" + str(error))
+        except Exception:
+            if isValid(self):
+                self.preview_status.setText("预览失败：无法生成稳定的 canonical 正文，请刷新后重试。")
+        finally:
+            self._preview_busy = False
+            if isValid(self):
+                self.preview_refresh.setEnabled(True)
 
     def form_fields(self) -> AiReceiptAcceptFields:
         active_ids = tuple(

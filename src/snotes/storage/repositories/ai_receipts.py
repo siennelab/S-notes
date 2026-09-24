@@ -36,7 +36,8 @@ SELECT id, parse_status, status, source, action, title,
        main_category, sub_category, tags,
        ai_visibility, ai_targets, body, note_id, created_at,
        updated_at, parse_error, request_id, actor_target_id,
-       operation_type, external_submission_id, idempotency_key
+       operation_type, external_submission_id, idempotency_key,
+       target_note_id, expected_updated_at
 FROM ai_receipt_inbox
 """
 
@@ -497,6 +498,16 @@ def _receipt_from_row(row) -> AiReceiptInboxItem:
         idempotency_key=(
             str(row["idempotency_key"])
             if row["idempotency_key"] is not None
+            else None
+        ),
+        target_note_id=(
+            int(row["target_note_id"])
+            if row["target_note_id"] is not None
+            else None
+        ),
+        expected_updated_at=(
+            str(row["expected_updated_at"])
+            if row["expected_updated_at"] is not None
             else None
         ),
     )

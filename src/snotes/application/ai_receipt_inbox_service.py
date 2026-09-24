@@ -12,6 +12,9 @@ from src.snotes.application.ai_actor_registry import (
     target_definition,
 )
 from src.snotes.application.note_service import NoteService
+from src.snotes.application.note_canonical_candidate import (
+    build_canonical_note_candidate,
+)
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
     AiReceiptInboxRepository,
@@ -78,6 +81,18 @@ class ReceiptTargetState:
     legacy_target_names: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PendingNotePreview:
+    receipt_id: int
+    note_id: int
+    note_revision: int
+    expected_updated_at: str
+    operation_type: str
+    before_markdown: str
+    final_markdown: str
+    legacy_canonicalization_changed: bool
+
+
 class UnsupportedReceiptOperationError(ValueError):
     pass
 
@@ -108,6 +123,68 @@ class AiReceiptInboxService:
 
     def get_receipt(self, receipt_id: int) -> AiReceiptInboxItem | None:
         return self._receipts.get(receipt_id)
+
+    def build_pending_note_preview(
+        self,
+        receipt_id: int,
+        *,
+        addition_markdown: str | None = None,
+    ) -> PendingNotePreview:
+        """Preview a pending body operation against the current formal note.
+
+        The edited fragment, when supplied, is exactly the one the existing
+        acceptance UI would submit. Both reads and canonicalization are
+        side-effect free. A second read catches changes during the Qt round trip.
+        """
+        notes = self._notes
+        if notes is None:
+            raise RuntimeError("笔记服务不可用，无法预览最终正文。")
+        receipt = self._receipts.get(receipt_id)
+        if receipt is None:
+            raise ValueError(f"AI 回执不存在: {receipt_id}")
+        if not receipt.pending:
+            raise ValueError("该回执已处理，不能预览最终正文。")
+        if receipt.parse_status != "parsed":
+            raise ValueError("该回执解析失败，需要人工确认后才能入库。")
+        if receipt.operation_type not in {"append", "prepend"}:
+            raise UnsupportedReceiptOperationError("该回执不是正文追加提案。")
+        if not receipt.request_id or not receipt.expected_updated_at:
+            raise ValueError("追加提案缺少必要的身份或版本信息。")
+        if resolve_target_id(receipt.actor_target_id) not in AI_ACTOR_IDS:
+            raise ValueError("回执中的 AI 身份未知或不可用。")
+        if receipt.target_note_id is None:
+            raise ValueError("追加提案缺少目标笔记。")
+        note = notes.get_note(receipt.target_note_id)
+        if note is None:
+            raise ValueError("目标笔记不存在。")
+        if note.updated_at != receipt.expected_updated_at:
+            raise ValueError("笔记已被更新。")
+
+        addition = receipt.body if addition_markdown is None else addition_markdown
+        candidate = build_canonical_note_candidate(
+            note.content_markdown,
+            addition,
+            receipt.operation_type,
+        )
+
+        # Milkdown runs a nested Qt event loop. During that time the receipt or
+        # note can change; never show a result for a stale snapshot.
+        current_receipt = self._receipts.get(receipt_id)
+        current_note = notes.get_note(receipt.target_note_id)
+        if current_receipt != receipt or current_note != note:
+            raise ValueError("提案或笔记已被更新，请刷新后重新预览。")
+        return PendingNotePreview(
+            receipt_id=receipt_id,
+            note_id=note.id,
+            note_revision=note.revision,
+            expected_updated_at=receipt.expected_updated_at,
+            operation_type=receipt.operation_type,
+            before_markdown=candidate.before_markdown,
+            final_markdown=candidate.final_markdown,
+            legacy_canonicalization_changed=(
+                candidate.legacy_canonicalization_changed
+            ),
+        )
 
     def import_gale_submission(
         self, submission: GaleReceiptImport
