@@ -146,8 +146,14 @@ class SQLiteNotesRepository(NotesRepository):
         note_id: int,
         visibility: str,
     ) -> tuple[Note, tuple[str, ...]]:
-        timestamp = timestamp_seconds(self.clock)
         with self.connections.write() as connection:
+            current = connection.execute(
+                "SELECT updated_at FROM notes WHERE id = ? AND is_deleted = 0",
+                (note_id,),
+            ).fetchone()
+            if current is None:
+                raise NoteNotFoundError(note_id)
+            timestamp = next_note_updated_at(current["updated_at"], self.clock)
             cursor = connection.execute(
                 """
                 UPDATE notes
@@ -168,14 +174,14 @@ class SQLiteNotesRepository(NotesRepository):
         target_ids: Sequence[str],
         target_catalog: Sequence[AiTargetCatalogEntry],
     ) -> tuple[Note, tuple[str, ...]]:
-        timestamp = timestamp_seconds(self.clock)
         with self.connections.write() as connection:
-            exists = connection.execute(
-                "SELECT id FROM notes WHERE id = ? AND is_deleted = 0",
+            current = connection.execute(
+                "SELECT updated_at FROM notes WHERE id = ? AND is_deleted = 0",
                 (note_id,),
             ).fetchone()
-            if exists is None:
+            if current is None:
                 raise NoteNotFoundError(note_id)
+            timestamp = next_note_updated_at(current["updated_at"], self.clock)
             sync_ai_target_catalog(connection, target_catalog, timestamp)
             replace_note_ai_targets(connection, note_id, target_ids, timestamp)
             connection.execute(

@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from src.snotes.application.ports import TagRecord, TagsRepository
 from src.snotes.domain.errors import NoteNotFoundError
 from src.snotes.storage.connection import SQLiteConnectionFactory
-from src.snotes.storage.support import Clock, normalize_tags, now_shanghai, timestamp_seconds
+from src.snotes.storage.support import Clock, next_note_updated_at, normalize_tags, now_shanghai
 
 
 class SQLiteTagsRepository(TagsRepository):
@@ -22,13 +22,13 @@ class SQLiteTagsRepository(TagsRepository):
 
     def set_for_note(self, note_id: int, tags: Sequence[str]) -> list[str]:
         normalized = normalize_tags(tags)
-        timestamp = timestamp_seconds(self.clock)
         with self.connections.write() as connection:
-            exists = connection.execute(
-                "SELECT id FROM notes WHERE id = ? AND is_deleted = 0", (note_id,)
+            current = connection.execute(
+                "SELECT updated_at FROM notes WHERE id = ? AND is_deleted = 0", (note_id,)
             ).fetchone()
-            if exists is None:
+            if current is None:
                 raise NoteNotFoundError(note_id)
+            timestamp = next_note_updated_at(current["updated_at"], self.clock)
             self.replace_for_note_in_connection(
                 connection,
                 note_id,
