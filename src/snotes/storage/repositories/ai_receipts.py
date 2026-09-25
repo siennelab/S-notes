@@ -27,6 +27,9 @@ from src.snotes.storage.ai_metadata import (
 )
 from src.snotes.storage.connection import SQLiteConnectionFactory
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
+from src.snotes.storage.repositories.ai_mcp_operations import (
+    store_receipt_decision_operation_result,
+)
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.support import Clock, now_shanghai, timestamp_seconds
 
@@ -221,12 +224,12 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 result_status="created",
             )
             if receipt.request_id:
-                self._store_operation(
+                store_receipt_decision_operation_result(
                     connection,
-                    receipt,
-                    note_id,
-                    command.title,
-                    timestamp,
+                    receipt=receipt,
+                    note_id=note_id,
+                    title=command.title,
+                    timestamp=timestamp,
                     status="created",
                     reason="",
                 )
@@ -264,12 +267,16 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
             if cursor.rowcount != 1:
                 raise RuntimeError("AI 回执状态已改变，请刷新后重试。")
             if receipt.request_id:
-                self._store_operation(
+                store_receipt_decision_operation_result(
                     connection,
-                    receipt,
-                    receipt.target_note_id if receipt.target_note_id is not None else receipt.note_id,
-                    receipt.title,
-                    timestamp,
+                    receipt=receipt,
+                    note_id=(
+                        receipt.target_note_id
+                        if receipt.target_note_id is not None
+                        else receipt.note_id
+                    ),
+                    title=receipt.title,
+                    timestamp=timestamp,
                     status="rejected",
                     reason="用户已丢弃。",
                 )
@@ -398,54 +405,6 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
         if row is None:
             raise ValueError("幂等记录关联的正式笔记不存在。")
         return str(row["note_uuid"] or "")
-
-    @staticmethod
-    def _store_operation(
-        connection,
-        receipt: AiReceiptInboxItem,
-        note_id: int | None,
-        title: str,
-        timestamp: str,
-        *,
-        status: str,
-        reason: str,
-    ) -> None:
-        if not receipt.request_id:
-            return
-        result = {
-            "status": status,
-            "request_id": receipt.request_id,
-            "proposal_id": receipt.id,
-            "note_id": note_id,
-            "title": title,
-            "handling_mode": "human_approved" if status == "created" else "human_rejected",
-            "changed": status == "created",
-            "pending_confirmation": False,
-            "reason": reason,
-        }
-        connection.execute(
-            """
-            INSERT INTO ai_operations (
-                request_id, actor_target_id, operation_type, status,
-                result_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(request_id) DO UPDATE SET
-                actor_target_id = excluded.actor_target_id,
-                operation_type = excluded.operation_type,
-                status = excluded.status,
-                result_json = excluded.result_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                receipt.request_id,
-                receipt.actor_target_id or "",
-                receipt.operation_type or "create",
-                status,
-                json.dumps(result, ensure_ascii=False, sort_keys=True),
-                timestamp,
-                timestamp,
-            ),
-        )
 
     @staticmethod
     def _read_from_connection(connection, receipt_id: int) -> AiReceiptInboxItem:

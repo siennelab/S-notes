@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
@@ -12,6 +12,11 @@ from src.snotes.application.ports import (
 )
 from src.snotes.application.ai_actor_registry import resolve_target_id
 from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
+from src.snotes.application.notes_operation_result import (
+    deserialize_operation_result_json,
+    notes_operation_result as _result,
+    serialize_notes_operation_result,
+)
 from src.snotes.application.note_canonical_candidate import (
     apply_exact_markdown_edits,
     build_canonical_edit_candidate,
@@ -559,17 +564,14 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("AI 回执状态已改变，请刷新后重试。")
-            cursor = connection.execute(
-                """
-                UPDATE ai_operations
-                SET status = 'updated', result_json = ?, updated_at = ?
-                WHERE request_id = ? AND actor_target_id = ?
-                  AND operation_type = ? AND status = 'pending_confirmation'
-                """,
-                (json.dumps(result, ensure_ascii=False), timestamp,
-                 request_id, actor_target_id, operation_type),
+            rowcount = replace_pending_notes_operation_result(
+                connection,
+                actor_target_id=actor_target_id,
+                operation_type=operation_type,
+                result=result,
+                timestamp=timestamp,
             )
-            if cursor.rowcount != 1:
+            if rowcount != 1:
                 raise RuntimeError("提案的操作记录已改变，请刷新后重试。")
             return result
 
@@ -799,28 +801,18 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 and isinstance(previous, dict)
                 and previous.get("proposal_id") == receipt["id"]
             ):
-                connection.execute(
-                    """
-                    UPDATE ai_operations
-                    SET status = ?, result_json = ?, updated_at = ?
-                    WHERE request_id = ? AND actor_target_id = ?
-                      AND operation_type = ? AND status = 'pending_confirmation'
-                    """,
-                    (status, json.dumps(result, ensure_ascii=False), timestamp,
-                     request_id, actor_target_id, operation_type),
+                replace_pending_notes_operation_result(
+                    connection,
+                    actor_target_id=actor_target_id,
+                    operation_type=operation_type,
+                    result=result,
+                    timestamp=timestamp,
                 )
         return result
 
     @staticmethod
     def _operation_result(row) -> dict | None:
-        if row is None:
-            return None
-        return {
-            **json.loads(row["result_json"]),
-            "operation_type": str(row["operation_type"]),
-            "created_at": str(row["created_at"]),
-            "updated_at": str(row["updated_at"]),
-        }
+        return read_operation_result_row(row)
 
     def _operation_from_connection(self, connection, request_id: str) -> dict | None:
         row = connection.execute(
@@ -840,22 +832,12 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         result: dict,
     ) -> None:
         timestamp = timestamp_seconds()
-        connection.execute(
-            """
-            INSERT INTO ai_operations (
-                request_id, actor_target_id, operation_type, status,
-                result_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                result["request_id"],
-                actor_target_id,
-                operation_type,
-                result["status"],
-                json.dumps(result, ensure_ascii=False),
-                timestamp,
-                timestamp,
-            ),
+        insert_notes_operation_result(
+            connection,
+            actor_target_id=actor_target_id,
+            operation_type=operation_type,
+            result=result,
+            timestamp=timestamp,
         )
 
     @staticmethod
@@ -937,26 +919,144 @@ def _note_version_matches(
     )
 
 
-def _result(
-    status: str,
-    request_id: str,
+def read_operation_result_row(row) -> dict[str, object] | None:
+    """Compatibility reader shared by Notes operation status lookups."""
+
+    if row is None:
+        return None
+    return {
+        **deserialize_operation_result_json(str(row["result_json"])),
+        "operation_type": str(row["operation_type"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+    }
+
+
+def insert_notes_operation_result(
+    connection,
+    *,
+    actor_target_id: str,
+    operation_type: str,
+    result: Mapping[str, object],
+    timestamp: str,
+) -> None:
+    """Persist a fresh Notes result using the canonical serializer."""
+
+    connection.execute(
+        """
+        INSERT INTO ai_operations (
+            request_id, actor_target_id, operation_type, status,
+            result_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            result["request_id"],
+            actor_target_id,
+            operation_type,
+            result["status"],
+            serialize_notes_operation_result(result),
+            timestamp,
+            timestamp,
+        ),
+    )
+
+
+def upsert_notes_operation_result(
+    connection,
+    *,
+    actor_target_id: str,
+    operation_type: str,
+    result: Mapping[str, object],
+    timestamp: str,
+) -> None:
+    """Persist a receipt decision without changing its original creation time."""
+
+    connection.execute(
+        """
+        INSERT INTO ai_operations (
+            request_id, actor_target_id, operation_type, status,
+            result_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(request_id) DO UPDATE SET
+            actor_target_id = excluded.actor_target_id,
+            operation_type = excluded.operation_type,
+            status = excluded.status,
+            result_json = excluded.result_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            result["request_id"],
+            actor_target_id,
+            operation_type,
+            result["status"],
+            serialize_notes_operation_result(result),
+            timestamp,
+            timestamp,
+        ),
+    )
+
+
+def store_receipt_decision_operation_result(
+    connection,
+    *,
+    receipt: AiReceiptInboxItem,
     note_id: int | None,
     title: str,
-    handling_mode: str,
-    changed: bool,
-    pending: bool,
+    timestamp: str,
+    status: str,
     reason: str,
-) -> dict:
-    return {
-        "status": status,
-        "request_id": request_id,
-        "note_id": note_id,
-        "title": title,
-        "handling_mode": handling_mode,
-        "modified_formal_note": changed,
-        "entered_confirmation": pending,
-        "reason": reason,
-    }
+) -> None:
+    """Own the business result and persistence for a Notes receipt decision."""
+
+    if not receipt.request_id:
+        return
+    result = _result(
+        status,
+        receipt.request_id,
+        note_id,
+        title,
+        "human_approved" if status == "created" else "human_rejected",
+        status == "created",
+        False,
+        reason,
+        proposal_id=receipt.id,
+    )
+    upsert_notes_operation_result(
+        connection,
+        actor_target_id=receipt.actor_target_id or "",
+        operation_type=receipt.operation_type or "create",
+        result=result,
+        timestamp=timestamp,
+    )
+
+
+def replace_pending_notes_operation_result(
+    connection,
+    *,
+    actor_target_id: str,
+    operation_type: str,
+    result: Mapping[str, object],
+    timestamp: str,
+) -> int:
+    """Replace exactly the pending Notes result selected by the transaction."""
+
+    cursor = connection.execute(
+        """
+        UPDATE ai_operations
+        SET status = ?, result_json = ?, updated_at = ?
+        WHERE request_id = ? AND actor_target_id = ?
+          AND operation_type = ? AND status = 'pending_confirmation'
+        """,
+        (
+            result["status"],
+            serialize_notes_operation_result(result),
+            timestamp,
+            result["request_id"],
+            actor_target_id,
+            operation_type,
+        ),
+    )
+    return int(cursor.rowcount)
 
 
 def _already_processed(existing: dict) -> dict:

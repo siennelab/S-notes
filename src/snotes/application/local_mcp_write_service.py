@@ -26,6 +26,9 @@ from src.snotes.application.note_canonical_candidate import (
     build_canonical_note_candidate,
     canonicalize_new_note,
 )
+from src.snotes.application.notes_operation_result import (
+    notes_operation_result as _result,
+)
 from src.snotes.application.ports import TagRecord
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, Note, NoteLocation
@@ -673,25 +676,3 @@ def _parse_timestamp(value: object) -> datetime | None:
         return datetime.fromisoformat(text)
     except ValueError:
         return None
-
-
-def _result(
-    status: str,
-    request_id: str,
-    note_id: int | None,
-    title: str,
-    handling_mode: str,
-    changed: bool,
-    pending: bool,
-    reason: str,
-) -> dict:
-    return {
-        "status": status,
-        "request_id": request_id,
-        "note_id": note_id,
-        "title": title,
-        "handling_mode": handling_mode,
-        "modified_formal_note": changed,
-        "entered_confirmation": pending,
-        "reason": reason,
-    }
