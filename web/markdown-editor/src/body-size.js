@@ -74,9 +74,9 @@ export const setBodySize = $command(
     const { from, to, empty } = state.selection;
     const blocks = [];
     state.doc.nodesBetween(from, to, (node, pos) => {
-      if (node.isTextblock) blocks.push({ node, pos });
+      if (["paragraph", "heading"].includes(node.type.name)) blocks.push({ node, pos });
     });
-    if (!blocks.length || blocks.some(({ node }) => !["paragraph", "heading"].includes(node.type.name))) return false;
+    if (!blocks.length) return false;
     const headings = blocks.filter(({ node }) => node.type.name === "heading");
     if (empty && !headings.length) return false;
     const type = bodySize.type(ctx);
@@ -84,8 +84,13 @@ export const setBodySize = $command(
     for (const { pos } of headings) tr.setNodeMarkup(pos, state.schema.nodes.paragraph);
     const start = empty ? headings[0].pos + 1 : from;
     const end = empty ? start + headings[0].node.content.size : to;
-    tr.removeMark(start, end, type);
-    if (size !== 17) tr.addMark(start, end, type.create({ size: String(size) }));
+    for (const { node, pos } of blocks) {
+      const blockStart = Math.max(start, pos + 1);
+      const blockEnd = Math.min(end, pos + 1 + node.content.size);
+      if (blockStart >= blockEnd) continue;
+      tr.removeMark(blockStart, blockEnd, type);
+      if (size !== 17) tr.addMark(blockStart, blockEnd, type.create({ size: String(size) }));
+    }
     tr.removeStoredMark(type);
     if (empty && start === end && size !== 17) tr.addStoredMark(type.create({ size: String(size) }));
     dispatch?.(tr.scrollIntoView());

@@ -217,6 +217,7 @@ def run_smoke(app, window):
             assert not js("[...document.querySelectorAll('#toolbar button')].some(b=>b.dataset.command==='正文')")
             assert js("[...document.querySelectorAll('#toolbar button')].slice(0,6).map(b=>b.textContent).join('|')") == 'H1|H2|H3|15|17|20'
             passed('BODY_BUTTON_REMOVED')
+            check_code_button(editor, load, js, click, select_all, passed)
             from src.snotes.ui.markdown_list_smoke import check_list_styles
             check_list_styles(editor, load, js, click, wait, passed)
             load('find **me** and find me')
@@ -293,3 +294,96 @@ def run_smoke(app, window):
         app.exit(code)
 
     QTimer.singleShot(0, execute)
+
+
+def check_code_button(editor, load, js, click, select_all, passed):
+    """Actual toolbar, DOM selection and final Markdown; no private editor API."""
+    def select(selector, start, end=None, end_selector=None):
+        end = start if end is None else end
+        js(f"""(() => {{
+          const root=document.querySelector('.ProseMirror'); root.focus();
+          function point(selector, offset) {{
+            const el=root.querySelector(selector), walker=document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            let node; while (node=walker.nextNode()) {{
+              if (offset <= node.length) return [node, offset]; offset-=node.length;
+            }}
+            return [el, 0];
+          }}
+          const r=document.createRange();
+          r.setStart(...point({json.dumps(selector)}, {start}));
+          r.setEnd(...point({json.dumps(end_selector or selector)}, {end}));
+          const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        }})()""")
+        QTest.qWait(40)
+
+    def exact(expected):
+        assert editor.latest_markdown == expected, (editor.latest_markdown, expected)
+
+    def toggle_case(name, source, expected, selector=None, start=0, end=None, end_selector=None):
+        before = load(source)
+        if selector is None:
+            select_all()
+        else:
+            select(selector, start, end, end_selector)
+        click('Code block')
+        exact(expected)
+        click('Undo')
+        exact(before)
+        passed(name + '_AND_SINGLE_UNDO')
+
+    source = 'alpha\n\n```js\none\ntwo\n```\n\nomega\n'
+    load(source)
+    for size in ('15', '20', '17'):
+        select_all()
+        click(size)
+        text = lambda s: s if size == '17' else f':size[{s}]{{size="{size}"}}'
+        exact(text('alpha') + '\n\n```js\none\ntwo\n```\n\n' + text('omega') + '\n')
+    for size in ('15', '20', '17'):
+        select('pre code', 2)
+        click(size)
+        exact(source)
+    passed('CODE_SKIPPED_BY_SIZE_15_20_17_AND_CARET_NOOP')
+
+    toggle_case('TEXT_SELECTION', '**alpha**\n\n## beta', '```\nalpha\nbeta\n```\n', 'p', 2, 2, 'h2')
+    toggle_case('CODE_SELECTION', '```js\none\ntwo\n```', 'one\n\ntwo\n')
+    toggle_case('PARTIAL_CODE', '```js\none\ntwo\nthree\n```', '```js\none\n```\n\ntwo\n\n```js\nthree\n```\n', 'pre code', 5, 6)
+    toggle_case('UNSELECTED_BLANK_CODE_LINES', '```js\n\ntwo\n\n```', '```js\n```\n\ntwo\n\n```js\n```\n', 'pre code', 2, 3)
+    toggle_case('CODE_LINE_BOUNDARY', '```js\none\ntwo\nthree\n```', 'one\n\n```js\ntwo\nthree\n```\n', 'pre code', 1, 4)
+    toggle_case('MIXED_SELECTION', '**alpha**\n\n```js\none\ntwo\n```\n\n## omega', '**alpha**\n\none\n\ntwo\n\n## omega\n')
+    toggle_case('MULTIPLE_CODE', '```js\none\n```\n\nnormal\n\n```py\ntwo\n```', 'one\n\nnormal\n\ntwo\n')
+    for offset, expected in [(0, '```\nabcdef\n```\n'), (3, 'abc\n\n```\ndef\n```\n'), (6, 'abcdef\n\n```\n```\n')]:
+        toggle_case(f'BODY_CARET_{offset}', 'abcdef', expected, 'p', offset)
+    for offset, expected in [(0, 'one\n\ntwo\n'), (2, '```js\non\n```\n\ne\n\ntwo\n'), (7, '```js\none\ntwo\n```\n\n')]:
+        toggle_case(f'CODE_CARET_{offset}', '```js\none\ntwo\n```', expected, 'pre code', offset)
+    toggle_case('HEADING_CARET', '## abcdef', '## abc\n\n```\ndef\n```\n', 'h2', 3)
+    toggle_case('EMPTY_BODY', '', '```\n```\n', 'p')
+    toggle_case('EMPTY_CODE', '```\n```', '', 'pre code')
+
+    # Each consecutive click is its own history event, and the new right block receives typing.
+    load('tail')
+    select('p', 4)
+    click('Code block')
+    first = editor.latest_markdown
+    click('Code block')
+    second = editor.latest_markdown
+    click('Undo')
+    exact(first)
+    click('Redo')
+    exact(second)
+    js("document.execCommand('insertText',false,'outside')")
+    QTest.qWait(80)
+    exact('tail\n\noutside\n')
+    passed('CONSECUTIVE_BUTTON_UNDO_AND_RIGHT_CARET')
+
+    load('```js\none\n```')
+    select('pre code', 3)
+    js("document.querySelector('.ProseMirror').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}))")
+    QTest.qWait(80)
+    exact('```js\none\n\n```\n')
+    passed('CODE_ENTER_REMAINS_NEWLINE')
+    for source in ('- one\n- two', '> one\n\noutside', '> one\n\n> > two'):
+        before = load(source)
+        select_all()
+        click('Code block')
+        exact(before)
+    passed('CROSS_CONTAINER_NOOP')

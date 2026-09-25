@@ -9,6 +9,7 @@ import { EditorState, Plugin, TextSelection } from "@milkdown/kit/prose/state";
 import "@milkdown/kit/prose/view/style/prosemirror.css";
 import "./style.css";
 import { bodySizeExtension, setBodySize, setHeading } from "./body-size.js";
+import { toggleCodeBlock } from "./code-block.js";
 import { listStyleExtension, toggleList } from "./list-style.js";
 import { connectQt } from "./qt-bridge.js";
 
@@ -76,7 +77,7 @@ async function ensureEditor() {
         }));
       })
       .use(cm.commonmark).use(gfm).use(history).use(clipboard)
-      .use(listItemBlockComponent).use(bodySizeExtension).use(listStyleExtension).use(changes);
+      .use(listItemBlockComponent).use(bodySizeExtension).use(toggleCodeBlock).use(listStyleExtension).use(changes);
     await candidate.create();
     editor = candidate;
   } catch (error) {
@@ -190,7 +191,7 @@ const commands = [
   ['Bold', 'B', '加粗', cm.toggleStrongCommand], ['Italic', 'I', '斜体', cm.toggleEmphasisCommand], ['Strike', 'S', '删除线', toggleStrikethroughCommand],
   ['Bullet list', '', '无序列表', toggleList, 'bullet_list', 'bullet'], ['Ordered list', '', '有序列表', toggleList, 'ordered_list', 'ordered'],
   ['Quote', '', '引用', cm.wrapInBlockquoteCommand, undefined, 'quote'], ['Inline code', '', '行内代码', cm.toggleInlineCodeCommand, undefined, 'inline'],
-  ['Code block', '', '代码块', cm.createCodeBlockCommand, undefined, 'code'],
+  ['Code block', '', '代码块', toggleCodeBlock, undefined, 'code'],
 ];
 for (const [key, label, tooltip, command, payload, icon] of commands) {
   button(key, label, tooltip, () => {

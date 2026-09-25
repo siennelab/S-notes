@@ -21,6 +21,8 @@ from src.snotes.ui.markdown_canonicalizer import (
 # Expected bytes are the formal editor's dialect, not another serializer.
 FIXTURES = (
     ("paragraph", "first\n\nsecond", "first\n\nsecond\n"),
+    ("code", "```js\none\ntwo\n```", "```js\none\ntwo\n```\n"),
+    ("mixed_code", "before\n\n```py\nx = 1\n```\n\nafter", "before\n\n```py\nx = 1\n```\n\nafter\n"),
     ("heading", "# Heading", "# Heading\n"),
     # The shipped text handler encodes spaces at text-node boundaries.
     ("marks", "**bold** *italic* ~~strike~~", "**bold**&#32;*italic*&#32;~~strike~~\n"),
