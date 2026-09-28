@@ -8,16 +8,19 @@ from collections.abc import Mapping, Sequence
 
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
+    AcceptanceCommitFact,
+    AcceptanceCommitResult,
     AiNoteFingerprint,
     AiTargetCatalogEntry,
 )
 from src.snotes.domain.notes_operation_result import (
+    OperationStatus, HandlingMode,
     deserialize_operation_result_json,
     notes_operation_result as _result,
     serialize_notes_operation_result,
 )
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
-from src.snotes.domain.models import NoteLocation
+from src.snotes.domain.models import Directory, NoteLocation
 from src.snotes.storage.ai_metadata import (
     replace_note_ai_targets,
     sync_ai_target_catalog,
@@ -112,11 +115,11 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             ).fetchone()
             if directory is None:
                 result = _result(
-                    "failed",
+                    OperationStatus.FAILED,
                     request_id,
                     None,
                     title,
-                    "direct",
+                    HandlingMode.DIRECT,
                     False,
                     False,
                     "目标目录不存在，AI 不能创建目录。",
@@ -153,7 +156,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             sync_ai_target_catalog(connection, target_catalog, timestamp)
             replace_note_ai_targets(connection, note_id, target_ids, timestamp)
             result = _result(
-                "created", request_id, note_id, title, "direct", True, False, ""
+                OperationStatus.CREATED, request_id, note_id, title, HandlingMode.DIRECT, True, False, ""
             )
             self._store_operation(connection, actor_target_id, "create", result)
         return result
@@ -177,6 +180,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
         expected_note_fingerprint: AiNoteFingerprint | None = None,
+        terminal_results: Mapping[AcceptanceCommitFact, dict],
     ) -> dict:
         if operation_type in {"append", "prepend", "edit"} and (
             canonical_markdown is None or expected_content_markdown is None
@@ -191,10 +195,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 (note_id,),
             ).fetchone()
             if note is None:
-                result = _result(
-                    "not_found", request_id, note_id, "", "direct", False, False,
-                    "未找到笔记。",
-                )
+                result = dict(terminal_results[AcceptanceCommitFact.NOTE_MISSING])
                 self._store_operation(
                     connection, actor_target_id, operation_type, result
                 )
@@ -212,10 +213,10 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     connection, expected_note_fingerprint, note
                 )
             ):
-                result = _result(
-                    "conflict", request_id, note_id, str(note["title"]),
-                    "direct", False, False, "笔记已被更新。",
-                )
+                result = {
+                    **terminal_results[AcceptanceCommitFact.NOTE_CHANGED],
+                    "title": str(note["title"]),
+                }
                 self._store_operation(
                     connection, actor_target_id, operation_type, result
                 )
@@ -229,11 +230,11 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 directory_id=directory_id, location=location, tags=tags,
             )
             result = _result(
-                "updated",
+                OperationStatus.UPDATED,
                 request_id,
                 note_id,
                 result_title,
-                "direct",
+                HandlingMode.DIRECT,
                 True,
                 False,
                 "",
@@ -261,13 +262,13 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         canonical_markdown: str | None = None,
         expected_note_fingerprint: AiNoteFingerprint | None = None,
         expected_directory_id: int | None = None,
-        expected_directory_fingerprints: Sequence[AiNoteFingerprint] = (),
+        expected_directory_snapshot: Sequence[Directory] = (),
+        terminal_results: Mapping[AcceptanceCommitFact, dict],
         desired_title: str | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
-        outcome_status: str = "updated",
-        failure_reason: str | None = None,
-    ) -> dict:
+        apply_modification: bool = True,
+    ) -> AcceptanceCommitResult:
         """Atomically compare prepared snapshots and persist one decision."""
         with self.connections.write() as connection:
             receipt = connection.execute(
@@ -279,10 +280,9 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 """,
                 (receipt_id,),
             ).fetchone()
-            if receipt is None:
-                raise ValueError(f"AI 回执不存在: {receipt_id}")
-            if receipt["status"] != "pending":
-                raise ValueError("该回执已处理，不能重复接受。")
+            if receipt is None or receipt["status"] != "pending":
+                fact = AcceptanceCommitFact.RECEIPT_CHANGED
+                return AcceptanceCommitResult(fact, terminal_results[fact])
             request_id = str(receipt["request_id"] or "")
             actor_target_id = str(receipt["actor_target_id"] or "")
             operation_type = str(receipt["operation_type"] or "")
@@ -292,11 +292,14 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             )
             receipt_title = str(receipt["title"] or "")
 
-            def fail(status: str, reason: str) -> dict:
-                return self._finish_pending_modification(
-                    connection, receipt, status=status, reason=reason,
+            def fail(fact: AcceptanceCommitFact) -> AcceptanceCommitResult:
+                decision = terminal_results[fact]
+                operation = self._finish_pending_modification(
+                    connection, receipt, status=decision["status"],
+                    reason=decision["reason"], handling_mode=decision["handling_mode"],
                     title=receipt_title, note_id=note_id,
                 )
+                return AcceptanceCommitResult(fact, operation)
 
             if (
                 request_id != expected_receipt.request_id
@@ -310,7 +313,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 or receipt["operation_payload"] != expected_payload
                 or receipt["updated_at"] != expected_receipt.updated_at
             ):
-                return fail("conflict", "提案已被更新，请刷新后重试。")
+                return fail(AcceptanceCommitFact.RECEIPT_CHANGED)
             operation = connection.execute(
                 """
                 SELECT actor_target_id, operation_type, status, result_json
@@ -319,58 +322,54 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 (request_id,),
             ).fetchone()
             if operation is None:
-                return fail("rejected", "提案的操作记录不存在。")
+                return fail(AcceptanceCommitFact.OPERATION_MISSING)
             try:
                 stored_result = json.loads(operation["result_json"])
             except (TypeError, ValueError):
                 stored_result = None
             if (
-                operation["status"] != "pending_confirmation"
+                operation["status"] != OperationStatus.PENDING_CONFIRMATION
                 or operation["actor_target_id"] != actor_target_id
                 or operation["operation_type"] != operation_type
                 or not isinstance(stored_result, dict)
                 or stored_result.get("proposal_id") != receipt_id
-                or stored_result.get("status") != "pending_confirmation"
+                or stored_result.get("status") != OperationStatus.PENDING_CONFIRMATION
             ):
-                return fail("conflict", "提案的操作记录已改变。")
+                return fail(AcceptanceCommitFact.OPERATION_CHANGED)
 
-            if outcome_status != "updated":
-                return fail(outcome_status, failure_reason or "接受修改提案失败。")
+            if not apply_modification:
+                return fail(AcceptanceCommitFact.PREPARED_DECISION)
 
             note = connection.execute(
                 "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
                 (note_id,),
             ).fetchone()
             if note is None:
-                return fail("rejected", "目标笔记不存在。")
+                return fail(AcceptanceCommitFact.NOTE_MISSING)
             if str(note["updated_at"]) != str(receipt["expected_updated_at"]):
-                return fail("conflict", "笔记已被更新。")
+                return fail(AcceptanceCommitFact.NOTE_CHANGED)
             if (
                 expected_note_fingerprint is None
                 or not self._fingerprint_matches(
                     connection, expected_note_fingerprint, note
                 )
             ):
-                return fail("conflict", "笔记已被更新。")
+                return fail(AcceptanceCommitFact.NOTE_CHANGED)
 
             if location is not None:
-                directory = connection.execute(
-                    "SELECT id FROM directories WHERE id = ? AND is_deleted = 0",
-                    (expected_directory_id,),
-                ).fetchone()
-                if directory is None or not expected_directory_fingerprints:
-                    return fail("conflict", "目标目录已被更新，请刷新后重试。")
-                for fingerprint in expected_directory_fingerprints:
-                    witness = connection.execute(
-                        "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
-                        (fingerprint.note_id,),
+                # Compare the actual directory rows selected by application,
+                # including the parent, instead of unrelated note grants.
+                if not expected_directory_snapshot:
+                    return fail(AcceptanceCommitFact.DIRECTORY_CHANGED)
+                for expected in expected_directory_snapshot:
+                    directory = connection.execute(
+                        "SELECT id, name, parent_id, updated_at FROM directories "
+                        "WHERE id = ? AND is_deleted = 0", (expected.id,),
                     ).fetchone()
-                    if (
-                        witness is None
-                        or fingerprint.directory_id != expected_directory_id
-                        or not self._fingerprint_matches(connection, fingerprint, witness)
-                    ):
-                        return fail("conflict", "目标目录已被更新，请刷新后重试。")
+                    if directory is None or (
+                        directory["name"], directory["parent_id"], directory["updated_at"]
+                    ) != (expected.name, expected.parent_id, expected.updated_at):
+                        return fail(AcceptanceCommitFact.DIRECTORY_CHANGED)
 
             result_title, timestamp = self._apply_modification_in_connection(
                 connection, note, actor_target_id=actor_target_id,
@@ -379,11 +378,11 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 canonical_markdown=canonical_markdown,
                 title=desired_title, directory_id=expected_directory_id,
                 location=location, tags=tags,
-                handling_mode="human_approved",
+                handling_mode=HandlingMode.HUMAN_APPROVED,
             )
             result = _result(
-                "updated", request_id, note_id, result_title,
-                "human_approved", True, False, "",
+                OperationStatus.UPDATED, request_id, note_id, result_title,
+                HandlingMode.HUMAN_APPROVED, True, False, "",
             )
             result["proposal_id"] = receipt_id
             note_uuid = str(note["note_uuid"] or "")
@@ -411,7 +410,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             )
             if rowcount != 1:
                 raise RuntimeError("提案的操作记录已改变，请刷新后重试。")
-            return result
+            return AcceptanceCommitResult(AcceptanceCommitFact.COMMITTED, result)
 
     def create_pending(
         self,
@@ -478,11 +477,11 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 ),
             )
             result = _result(
-                "pending_confirmation",
+                OperationStatus.PENDING_CONFIRMATION,
                 request_id,
                 note_id,
                 title,
-                "pending",
+                HandlingMode.PENDING,
                 False,
                 True,
                 "",
@@ -507,7 +506,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         directory_id: int | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
-        handling_mode: str = "direct",
+        handling_mode: str = HandlingMode.DIRECT,
     ) -> tuple[str, str]:
         timestamp = next_note_updated_at(str(note["updated_at"]))
         self._insert_history(
@@ -582,7 +581,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
 
     @staticmethod
     def _finish_pending_modification(
-        connection, receipt, *, status: str, reason: str,
+        connection, receipt, *, status: str, reason: str, handling_mode: str,
         title: str, note_id: int | None,
     ) -> dict:
         request_id = str(receipt["request_id"] or "")
@@ -590,7 +589,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         operation_type = str(receipt["operation_type"] or "")
         timestamp = timestamp_seconds()
         result = _result(
-            status, request_id, note_id, title, "human_rejected", False, False, reason
+            status, request_id, note_id, title, handling_mode, False, False, reason
         )
         result["proposal_id"] = int(receipt["id"])
         connection.execute(
@@ -615,7 +614,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             except (TypeError, ValueError):
                 previous = None
             if (
-                operation["status"] == "pending_confirmation"
+                operation["status"] == OperationStatus.PENDING_CONFIRMATION
                 and operation["actor_target_id"] == actor_target_id
                 and operation["operation_type"] == operation_type
                 and isinstance(previous, dict)
@@ -669,7 +668,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         operation_type: str,
         timestamp: str,
         *,
-        handling_mode: str = "direct",
+        handling_mode: str = HandlingMode.DIRECT,
     ) -> None:
         snapshot = {
             "title": note["title"],
@@ -835,8 +834,8 @@ def store_receipt_decision_operation_result(
         receipt.request_id,
         note_id,
         title,
-        "human_approved" if status == "created" else "human_rejected",
-        status == "created",
+        HandlingMode.HUMAN_APPROVED if status == OperationStatus.CREATED else HandlingMode.HUMAN_REJECTED,
+        status == OperationStatus.CREATED,
         False,
         reason,
         proposal_id=receipt.id,
@@ -882,6 +881,6 @@ def replace_pending_notes_operation_result(
 def _already_processed(existing: dict) -> dict:
     return {
         **existing,
-        "status": "already_processed",
+        "status": OperationStatus.ALREADY_PROCESSED,
         "previous_status": existing.get("status"),
     }

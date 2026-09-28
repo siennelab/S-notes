@@ -10,10 +10,13 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_acceptance_outcome import AcceptanceKind
 from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
     AiReceiptInboxService,
 )
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.reminder_service import ReminderService
 from src.snotes.application.tag_service import TagService
@@ -485,6 +488,9 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.connections, self.tags_repository
             ),
             canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
+            authorization=AiWriteAuthorization(
+                directories=DirectoryService(self.directories_repository)
+            ),
         )
         formal_before = len(self.notes.list_active_notes())
 
@@ -649,6 +655,9 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.connections, self.tags_repository
             ),
             canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
+            authorization=AiWriteAuthorization(
+                directories=DirectoryService(self.directories_repository)
+            ),
         )
         formal_before = len(self.notes.list_active_notes())
 
@@ -748,9 +757,67 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata.visibility, "redacted")
         self.assertEqual(metadata.target_ids, ("gale", "antigravity"))
 
+    async def test_create_directory_selectors_share_empty_and_nonempty_semantics(self) -> None:
+        empty_main = self.directories_repository.create("Selector Empty Main")
+        empty_child = self.directories_repository.create(
+            "Selector Empty Child", empty_main.id
+        )
+
+        async with self.session(read_only=False) as session:
+            by_name = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "selector-empty-by-name",
+                    "title": "Empty directory by name",
+                    "content": "body by name",
+                    "main_category": empty_main.name,
+                    "sub_category": empty_child.name,
+                },
+            )
+        self.assertEqual(by_name["status"], "created")
+        self.assertEqual(
+            self.notes.get_note(by_name["note_id"]).directory_id,
+            empty_child.id,
+        )
+
+        # Restore the same directory to an active-note-empty state, then select
+        # it by id. Directory validity must not depend on a readable note witness.
+        self.notes.soft_delete_note(by_name["note_id"])
+        async with self.session(read_only=False) as session:
+            by_id = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "selector-empty-by-id",
+                    "title": "Empty directory by id",
+                    "content": "body by id",
+                    "directory_id": empty_child.id,
+                },
+            )
+            nonempty_by_id = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "selector-nonempty-by-id",
+                    "title": "Nonempty directory by id",
+                    "content": "nonempty body",
+                    "directory_id": self.notes.get_note(
+                        self.ids["common"]
+                    ).directory_id,
+                },
+            )
+
+        self.assertEqual(by_id["status"], "created")
+        self.assertEqual(
+            self.notes.get_note(by_id["note_id"]).directory_id,
+            empty_child.id,
+        )
+        self.assertEqual(nonempty_by_id["status"], "created")
+
     async def test_create_note_rejects_deleted_or_mismatched_category(self) -> None:
         deleted_main = self.directories_repository.create("已删除测试主分类")
-        self.directories_repository.create("已删除测试子分类", deleted_main.id)
+        deleted_child = self.directories_repository.create("已删除测试子分类", deleted_main.id)
         self.directories_repository.soft_delete_tree(deleted_main.id)
 
         async with self.session(read_only=False) as session:
@@ -763,6 +830,37 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                     "content": "body",
                     "main_category": "已删除测试主分类",
                     "sub_category": "已删除测试子分类",
+                },
+            )
+            deleted_by_id = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "normal-deleted-directory-id",
+                    "title": "Deleted directory id create",
+                    "content": "body",
+                    "directory_id": deleted_child.id,
+                },
+            )
+            missing_by_name = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "normal-missing-category",
+                    "title": "Missing category create",
+                    "content": "body",
+                    "main_category": "不存在主分类",
+                    "sub_category": "不存在子分类",
+                },
+            )
+            missing_by_id = await self.call(
+                session,
+                "create_note",
+                {
+                    "request_id": "normal-missing-directory-id",
+                    "title": "Missing directory id create",
+                    "content": "body",
+                    "directory_id": 999999999,
                 },
             )
             mismatched = await self.call(
@@ -781,6 +879,9 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(deleted["status"], "rejected")
+        self.assertEqual(deleted_by_id["status"], "rejected")
+        self.assertEqual(missing_by_name["status"], "rejected")
+        self.assertEqual(missing_by_id["status"], "rejected")
         self.assertEqual(mismatched["status"], "rejected")
 
     async def test_antigravity_can_query_create_and_readback_metadata(self) -> None:
@@ -900,6 +1001,9 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.connections, self.tags_repository
             ),
             canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
+            authorization=AiWriteAuthorization(
+                directories=DirectoryService(self.directories_repository)
+            ),
         )
         formal_before = len(self.notes.list_active_notes())
 
@@ -1329,19 +1433,22 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 location=current_note.location,
                 expected_revision=current_note.revision,
             )
-            with self.assertRaisesRegex(ValueError, "笔记已被更新"):
-                receipt_service.accept_receipt(
-                    stale_receipt.id,
-                    AiReceiptAcceptFields(
-                        title=stale_receipt.title,
-                        body=stale_receipt.body,
-                        main_category=stale_receipt.main_category,
-                        sub_category=stale_receipt.sub_category,
-                        tags=stale_receipt.tags,
-                        visibility=stale_receipt.ai_visibility,
-                        target_ids=("clawbot",),
-                    ),
-                )
+            stale_acceptance = receipt_service.accept_receipt(
+                stale_receipt.id,
+                AiReceiptAcceptFields(
+                    title=stale_receipt.title,
+                    body=stale_receipt.body,
+                    main_category=stale_receipt.main_category,
+                    sub_category=stale_receipt.sub_category,
+                    tags=stale_receipt.tags,
+                    visibility=stale_receipt.ai_visibility,
+                    target_ids=("clawbot",),
+                ),
+            )
+            self.assertEqual(
+                stale_acceptance.outcome.kind,
+                AcceptanceKind.CONFLICT,
+            )
             self.assertEqual(
                 receipt_service.get_receipt(stale_receipt.id).status, "rejected"
             )
@@ -1424,6 +1531,9 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.connections, self.tags_repository
             ),
             canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
+            authorization=AiWriteAuthorization(
+                directories=DirectoryService(self.directories_repository)
+            ),
         )
 
         async with self.session(

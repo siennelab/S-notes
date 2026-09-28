@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from src.snotes.domain.ai_receipts import (
     AiReceiptAcceptCommand,
@@ -65,6 +66,23 @@ class AiNoteFingerprint:
     ai_visibility: str
     target_ids: tuple[str, ...]
     directory_id: int | None
+
+
+class AcceptanceCommitFact(StrEnum):
+    COMMITTED = "committed"
+    PREPARED_DECISION = "prepared_decision"
+    RECEIPT_CHANGED = "receipt_changed"
+    OPERATION_MISSING = "operation_missing"
+    OPERATION_CHANGED = "operation_changed"
+    NOTE_MISSING = "note_missing"
+    NOTE_CHANGED = "note_changed"
+    DIRECTORY_CHANGED = "directory_changed"
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptanceCommitResult:
+    fact: AcceptanceCommitFact
+    operation: dict
 
 
 class AiReceiptInboxRepository(Protocol):
@@ -383,6 +401,7 @@ class AiMcpOperationRepository(Protocol):
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
         expected_note_fingerprint: AiNoteFingerprint | None = None,
+        terminal_results: Mapping[AcceptanceCommitFact, dict],
     ) -> dict: ...
 
     def pending_operation_payload(self, receipt_id: int) -> str | None: ...
@@ -397,13 +416,13 @@ class AiMcpOperationRepository(Protocol):
         canonical_markdown: str | None = None,
         expected_note_fingerprint: AiNoteFingerprint | None = None,
         expected_directory_id: int | None = None,
-        expected_directory_fingerprints: Sequence[AiNoteFingerprint] = (),
+        expected_directory_snapshot: Sequence[Directory] = (),
+        terminal_results: Mapping[AcceptanceCommitFact, dict],
         desired_title: str | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
-        outcome_status: str = "updated",
-        failure_reason: str | None = None,
-    ) -> dict: ...
+        apply_modification: bool = True,
+    ) -> AcceptanceCommitResult: ...
 
     def create_pending(
         self,

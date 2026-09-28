@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
     AiReceiptInboxService,
@@ -93,6 +95,7 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
         self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             receipt_repository,
+            authorization=AiWriteAuthorization(directories=DirectoryService(directories)),
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,

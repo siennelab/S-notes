@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_audit_service import AiAuditService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
 from src.snotes.application.directory_service import DirectoryService
@@ -70,6 +71,7 @@ class Step03FollowupTests(unittest.TestCase):
         self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directory_repository, tag_repository),
+            authorization=AiWriteAuthorization(directories=DirectoryService(directory_repository)),
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
@@ -152,12 +154,12 @@ class Step03FollowupTests(unittest.TestCase):
             edits=[{"old_markdown": "Before", "new_markdown": "After"}],
         )
         self.assertEqual(retry["previous_status"], "conflict")
-        self.assertEqual(retry["handling_mode"], "human_rejected")
+        self.assertEqual(retry["handling_mode"], "none")
         self.assertTrue(retry["reason"])
         audit, center = self._audit_center()
         rows = audit.list_call_logs()
         index = next(i for i, row in enumerate(rows) if row.is_duplicate)
-        self.assertEqual(rows[index].handling_mode, "human_rejected")
+        self.assertEqual(rows[index].handling_mode, "none")
         self.assertEqual(center.log_table.item(index, 6).text(), "版本冲突 · 未写入")
         self.assertEqual(self.notes.get_note(note.id).content_markdown, "S later edit\n")
 

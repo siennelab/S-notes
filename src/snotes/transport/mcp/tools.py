@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from src.snotes.application.ai_acceptance_outcome import normalize_operation_outcome
 from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.transport.mcp.schemas import (
     AiTargetList,
@@ -959,19 +960,13 @@ def _enforce_strict_input_schemas(mcp: FastMCP) -> None:
 
 
 def _write_response(result: dict) -> WriteReceipt:
+    result = normalize_operation_outcome(result)
     return WriteReceipt(
         status=result["status"],
         request_id=result["request_id"],
         note_id=result.get("note_id"),
         title=result.get("title", ""),
-        processing_mode=(
-            "none"
-            if result["status"] == "conflict" or (
-                result["status"] == "already_processed"
-                and result.get("previous_status") == "conflict"
-            )
-            else result.get("handling_mode", "none")
-        ),
+        processing_mode=result.get("handling_mode", "none"),
         changed_formal_note=bool(result.get("modified_formal_note")),
         pending_confirmation=bool(result.get("entered_confirmation")),
         failure_or_conflict_reason=result.get("reason", ""),
@@ -997,20 +992,14 @@ def _reminder_write_response(result: dict) -> ReminderWriteReceipt:
 
 
 def _operation_response(result: dict) -> OperationStatusResponse:
+    result = normalize_operation_outcome(result)
     return OperationStatusResponse(
         status=result["status"],
         request_id=result["request_id"],
         operation_type=result.get("operation_type", ""),
         note_id=result.get("note_id"),
         title=result.get("title", ""),
-        processing_mode=(
-            "none"
-            if result["status"] == "conflict" or (
-                result["status"] == "already_processed"
-                and result.get("previous_status") == "conflict"
-            )
-            else result.get("handling_mode", "")
-        ),
+        processing_mode=result.get("handling_mode", ""),
         changed_formal_note=bool(result.get("modified_formal_note")),
         pending_confirmation=bool(result.get("entered_confirmation")),
         failure_or_conflict_reason=result.get("reason", ""),

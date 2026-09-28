@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.snotes.domain.notes_operation_result import OperationStatus
+
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
@@ -362,15 +364,15 @@ class ListAiMetadataOptionsResponse(StrictModel):
 
 
 WriteStatus = Literal[
-    "created",
-    "updated",
-    "pending_confirmation",
-    "already_processed",
-    "conflict",
-    "not_found",
-    "rejected",
-    "no_change",
-    "failed",
+    OperationStatus.CREATED,
+    OperationStatus.UPDATED,
+    OperationStatus.PENDING_CONFIRMATION,
+    OperationStatus.ALREADY_PROCESSED,
+    OperationStatus.CONFLICT,
+    OperationStatus.NOT_FOUND,
+    OperationStatus.REJECTED,
+    OperationStatus.NO_CHANGE,
+    OperationStatus.FAILED,
 ]
 
 

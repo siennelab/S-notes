@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_audit_service import AiAuditService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
 from src.snotes.application.directory_service import DirectoryService
@@ -71,6 +72,7 @@ class PendingModificationUiTests(unittest.TestCase):
         )
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directory_repository, tag_repository),
+            authorization=AiWriteAuthorization(directories=self.directories),
             notes=self.notes,
             tags=TagService(tag_repository),
             ai_metadata=self.metadata,

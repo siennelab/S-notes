@@ -40,6 +40,7 @@ from src.snotes.application.ai_receipt_inbox_service import (
 )
 from src.snotes.application.gale_service import GaleControlService
 from src.snotes.application.reminder_service import ReminderService
+from src.snotes.domain.notes_operation_result import OperationStatus, HandlingMode
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.floating_combo import FloatingComboBox
@@ -77,24 +78,24 @@ AUDIT_OPERATION_LABELS = {
 AUDIT_STATUS_LABELS = {
     "success": "成功",
     "cancelled": "已取消",
-    "failed": "失败",
-    "created": "已创建",
-    "updated": "已更新",
-    "not_found": "未找到",
-    "conflict": "发生冲突",
-    "rejected": "已拒绝",
-    "accepted": "已接受",
-    "pending_confirmation": "待人工确认",
-    "no_change": "无变化",
+    OperationStatus.FAILED: "失败",
+    OperationStatus.CREATED: "已创建",
+    OperationStatus.UPDATED: "已更新",
+    OperationStatus.NOT_FOUND: "未找到",
+    OperationStatus.CONFLICT: "发生冲突",
+    OperationStatus.REJECTED: "已拒绝",
+    OperationStatus.ACCEPTED: "已接受",
+    OperationStatus.PENDING_CONFIRMATION: "待人工确认",
+    OperationStatus.NO_CHANGE: "无变化",
 }
 
 AUDIT_HANDLING_MODE_LABELS = {
     "read": "读取",
-    "direct": "直接执行",
-    "pending": "待人工确认",
-    "human_approved": "人工确认",
-    "human_rejected": "人工拒绝",
-    "none": "无",
+    HandlingMode.DIRECT: "直接执行",
+    HandlingMode.PENDING: "待人工确认",
+    HandlingMode.HUMAN_APPROVED: "人工确认",
+    HandlingMode.HUMAN_REJECTED: "人工拒绝",
+    HandlingMode.NONE: "无",
 }
 
 AUDIT_FAILURE_REASON_LABELS = {
@@ -139,7 +140,7 @@ class ReceiptCard(QFrame):
         self._preview_service = service
         self._preview_busy = False
         self._processing = False
-        self._operation_status = None
+        self._outcome = service.receipt_outcome(receipt)
         self.receipt_id = receipt.id
         self.setObjectName("receiptCard")
         self.setProperty("expanded", False)
@@ -207,18 +208,14 @@ class ReceiptCard(QFrame):
             parse_error.setWordWrap(True)
             details.addWidget(parse_error)
         if receipt.processed and receipt.request_id:
-            operation = service.mcp_get_operation(
-                receipt.request_id, receipt.actor_target_id
-            )
-            self._operation_status = operation.get("status") if operation else None
-            if self._operation_status == "conflict":
+            if self._outcome.is_conflict:
                 self.summary_label.setText(
                     f"来源：{receipt.source or '未知'} · 状态：版本冲突 · 未写入 · "
                     f"{receipt.created_at.replace('T', ' ')[:19]}"
                 )
-            reason = operation.get("reason") if operation is not None else None
+            reason = self._outcome.reason
             if reason:
-                prefix = "版本冲突：" if self._operation_status == "conflict" else "处理结果："
+                prefix = "版本冲突：" if self._outcome.is_conflict else "处理结果："
                 operation_error = QLabel(prefix + str(reason))
                 operation_error.setObjectName("receiptOperationReason")
                 operation_error.setWordWrap(True)
@@ -409,7 +406,7 @@ class ReceiptCard(QFrame):
             self.final_preview.setMinimumHeight(240)
             details.addWidget(self.final_preview)
             self.body_edit.textChanged.connect(self.invalidate_final_preview)
-        elif self.is_edit_proposal and self._operation_status == "conflict":
+        elif self.is_edit_proposal and self._outcome.is_conflict:
             details.addWidget(QLabel("最终正文预览不可用：笔记已被更新。"))
 
         for widget in (
@@ -823,29 +820,40 @@ class ReceiptInboxView(QWidget):
             try:
                 result = self.service.accept_receipt(receipt_id, fields)
             except Exception as error:
-                operation = None
-                if card.receipt.request_id:
-                    try:
-                        operation = self.service.mcp_get_operation(
-                            card.receipt.request_id, card.receipt.actor_target_id
-                        )
-                    except Exception:
-                        pass
-                conflict = operation is not None and operation.get("status") == "conflict"
                 reason = str(error)
-                display_reason = f"版本冲突：{reason} AI 修改未写入。" if conflict else reason
-                card.show_accept_error(display_reason)
-                if conflict:
-                    self.list_filter = "processed"
-                    self.expanded_receipt_id = receipt_id
+                card.show_accept_error(reason)
                 try:
                     self.refresh_receipts()
                 except Exception:
                     # Keep the original service error visible if refreshing also fails.
                     pass
                 QMessageBox.warning(
+                    self.window(), "接受失败", reason
+                )
+                self._activate_host_window()
+                return
+            if not result.outcome.accepted:
+                conflict = result.outcome.is_conflict
+                reason = result.outcome.reason or "这条 AI 修改未被接受。"
+                display_reason = (
+                    f"版本冲突：{reason} AI 修改未写入。"
+                    if conflict
+                    else reason
+                )
+                card.show_accept_error(display_reason)
+                if conflict:
+                    self.list_filter = "processed"
+                    self.expanded_receipt_id = receipt_id
+                self.refresh_receipts()
+                QMessageBox.warning(
                     self.window(), "版本冲突" if conflict else "接受失败", display_reason
                 )
+                self._activate_host_window()
+                return
+            if result.note is None:
+                reason = "接受结果缺少正式笔记。"
+                card.show_accept_error(reason)
+                QMessageBox.warning(self.window(), "接受失败", reason)
                 self._activate_host_window()
                 return
             self.expanded_receipt_id = None
@@ -1261,7 +1269,7 @@ class AiCenterDialog(QWidget):
                 status += " · 重复请求"
             handling_label = (
                 "版本冲突 · 未写入"
-                if row.operation_status == "conflict"
+                if row.outcome.is_conflict
                 else _audit_display_text(
                     row.handling_mode,
                     AUDIT_HANDLING_MODE_LABELS,

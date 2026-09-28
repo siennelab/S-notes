@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from src.snotes.application.ai_acceptance_outcome import AcceptanceOutcome, operation_outcome
 from src.snotes.application.ai_actor_registry import target_definition
 from src.snotes.application.ports import AiAuditRepository
 from src.snotes.domain.ai_audit import AiAuditEvent, AiCallLog
@@ -48,6 +49,7 @@ class AiCallLogView:
     is_duplicate: bool
     entered_confirmation: bool
     operation_status: str | None = None
+    outcome: AcceptanceOutcome | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +142,7 @@ class AiAuditService:
             is_duplicate=row.is_duplicate,
             entered_confirmation=row.entered_confirmation,
             operation_status=row.operation_status,
+            outcome=operation_outcome({"status": row.operation_status or row.status}),
         )
 
 

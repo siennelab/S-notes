@@ -11,11 +11,13 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_acceptance_outcome import AcceptanceKind
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields, AiReceiptInboxService,
 )
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_write_service import LocalMcpWriteService, note_version_token
 from src.snotes.application.note_canonical_candidate import build_canonical_note_candidate
@@ -65,6 +67,7 @@ class CanonicalWriteTests(unittest.TestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.directories = DirectoryService(directories)
         self.canonicalizer = CanonicalizerTestDouble(
             lambda markdown: self._canonicalize(markdown)
         )
@@ -73,10 +76,11 @@ class CanonicalWriteTests(unittest.TestCase):
             notes=self.notes, tags=self.tags, ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
             canonicalizer=self.canonicalizer,
+            authorization=AiWriteAuthorization(directories=self.directories),
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot", notes=self.notes,
-            directories=DirectoryService(directories), tags=self.tags,
+            directories=self.directories, tags=self.tags,
             ai_metadata=self.metadata, safe_reads=AiSafeReadService(root / "unused-rules.json"),
             audit=AiAuditService(SQLiteAiAuditRepository(self.connections)), receipt_inbox=self.receipts,
         )
@@ -188,8 +192,8 @@ class CanonicalWriteTests(unittest.TestCase):
         self.notes.save_note(note.id, title=note.title, content_markdown="changed\n",
                              location=note.location, expected_revision=note.revision)
         before = self._formal_state()
-        with self.assertRaisesRegex(ValueError, "笔记已被更新"):
-            self._accept(result["proposal_id"])
+        accepted = self._accept(result["proposal_id"])
+        self.assertEqual(accepted.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self._formal_state(), before)
 
     def test_pending_create_accept_canonicalized(self):
@@ -220,10 +224,10 @@ class CanonicalWriteTests(unittest.TestCase):
             for operation in ("append", "prepend"):
                 result = self._modify(note, operation, request_id="failed-" + operation)
                 self.assertEqual(result["status"], "pending_confirmation")
-            with self.assertRaises((RuntimeError, ValueError)):
-                self._accept(pending["proposal_id"])
-            with self.assertRaises((RuntimeError, ValueError)):
-                self._accept(pending_create["proposal_id"])
+            rejected = self._accept(pending["proposal_id"])
+            rejected_create = self._accept(pending_create["proposal_id"])
+            self.assertEqual(rejected.outcome.kind, AcceptanceKind.REJECTED)
+            self.assertEqual(rejected_create.outcome.kind, AcceptanceKind.REJECTED)
         self.assertEqual(self._formal_state(), before)
 
     def test_metadata_only_skips_body_canonicalization(self):
@@ -268,8 +272,8 @@ class CanonicalWriteTests(unittest.TestCase):
                         result = self._modify(note, request_id="direct-race")
                         self.assertEqual(result["status"], "conflict")
                     else:
-                        with self.assertRaisesRegex(ValueError, "笔记已被更新"):
-                            self._accept(pending["proposal_id"])
+                        result = self._accept(pending["proposal_id"])
+                        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
                 self.assertEqual(self.notes.get_note(note.id), changed[0])
 
     def test_append_ui_requires_current_successful_full_preview(self):

@@ -4,7 +4,29 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Mapping
+
+
+class OperationStatus(StrEnum):
+    CREATED = "created"
+    UPDATED = "updated"
+    CONFLICT = "conflict"
+    REJECTED = "rejected"
+    FAILED = "failed"
+    NOT_FOUND = "not_found"
+    NO_CHANGE = "no_change"
+    PENDING_CONFIRMATION = "pending_confirmation"
+    ALREADY_PROCESSED = "already_processed"
+    ACCEPTED = "accepted"
+
+
+class HandlingMode(StrEnum):
+    NONE = "none"
+    DIRECT = "direct"
+    HUMAN_APPROVED = "human_approved"
+    HUMAN_REJECTED = "human_rejected"
+    PENDING = "pending"
 
 
 @dataclass(frozen=True, slots=True)

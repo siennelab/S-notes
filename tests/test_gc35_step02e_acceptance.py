@@ -14,9 +14,11 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_acceptance_outcome import AcceptanceKind
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields, AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_write_service import LocalMcpWriteService, note_version_token
 from src.snotes.application.note_service import NoteService
@@ -70,6 +72,7 @@ class Step02EAcceptanceTests(unittest.TestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.directories = DirectoryService(directory_repository)
         self.canonicalizer = CanonicalizerTestDouble(
             lambda markdown: self._canonicalize(markdown)
         )
@@ -80,11 +83,12 @@ class Step02EAcceptanceTests(unittest.TestCase):
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
             canonicalizer=self.canonicalizer,
+            authorization=AiWriteAuthorization(directories=self.directories),
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot",
             notes=self.notes,
-            directories=DirectoryService(directory_repository),
+            directories=self.directories,
             tags=self.tags,
             ai_metadata=self.metadata,
             safe_reads=AiSafeReadService(root / "redaction-rules.json"),
@@ -162,9 +166,12 @@ class Step02EAcceptanceTests(unittest.TestCase):
                 "SELECT result_status FROM ai_receipt_inbox WHERE id = ?", (proposal_id,)
             ).fetchone()["result_status"]
 
-    def _assert_rejected_without_note_write(self, proposal_id, note_id, request_id, snapshot):
-        with self.assertRaises(ValueError):
-            self._accept(proposal_id)
+    def _assert_rejected_without_note_write(
+        self, proposal_id, note_id, request_id, snapshot, *, expected_kind=AcceptanceKind.REJECTED
+    ):
+        result = self._accept(proposal_id)
+        self.assertEqual(result.outcome.kind, expected_kind)
+        self.assertFalse(result.outcome.accepted)
         self.assertEqual(self._note_row(note_id), snapshot)
         self.assertEqual(self._history(request_id), [])
         self.assertEqual(self.receipts.get_receipt(proposal_id).status, "rejected")
@@ -231,7 +238,13 @@ class Step02EAcceptanceTests(unittest.TestCase):
             location=before.location, expected_revision=before.revision,
         )
         snapshot = self._note_row(before.id)
-        self._assert_rejected_without_note_write(proposal_id, before.id, "prepend-stale", snapshot)
+        self._assert_rejected_without_note_write(
+            proposal_id,
+            before.id,
+            "prepend-stale",
+            snapshot,
+            expected_kind=AcceptanceKind.CONFLICT,
+        )
 
     def test_append_and_prepend_recheck_current_permission_inside_acceptance(self):
         for operation in ("append", "prepend"):
@@ -280,7 +293,13 @@ class Step02EAcceptanceTests(unittest.TestCase):
             location=before.location, expected_revision=before.revision,
         )
         snapshot = self._note_row(before.id)
-        self._assert_rejected_without_note_write(stale_id, before.id, "metadata-stale", snapshot)
+        self._assert_rejected_without_note_write(
+            stale_id,
+            before.id,
+            "metadata-stale",
+            snapshot,
+            expected_kind=AcceptanceKind.CONFLICT,
+        )
 
         current = self.notes.get_note(before.id)
         revoked_id = self._pending(current, "metadata", "metadata-revoked", title="Revoked title")
@@ -353,8 +372,9 @@ class Step02EAcceptanceTests(unittest.TestCase):
         self._revoke_target_without_note_version_change(rejected_before)
         rejected_snapshot = self._note_row(rejected_before.id)
         self._assert_rejected_without_note_write(rejected_id, rejected_before.id, "reject-once", rejected_snapshot)
-        with self.assertRaises(ValueError):
-            self._accept(rejected_id)
+        replay_rejected = self._accept(rejected_id)
+        self.assertTrue(replay_rejected.already_processed)
+        self.assertEqual(replay_rejected.outcome.kind, AcceptanceKind.REJECTED)
         self.assertEqual(self._note_row(rejected_before.id), rejected_snapshot)
         self.assertEqual(self._history("reject-once"), [])
 
@@ -372,19 +392,22 @@ class Step02EAcceptanceTests(unittest.TestCase):
             return original(markdown)
 
         with patch.object(self.canonicalizer, "canonicalize", side_effect=revoke):
-            with self.assertRaisesRegex(ValueError, "无权"):
-                self._accept(proposal)
+            result = self._accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.REJECTED)
+        self.assertIn("无权", result.outcome.reason)
         self.assertEqual(self._note_row(before.id), revoked[0])
         self.assertEqual(self.notes.get_note(before.id).updated_at, before.updated_at)
         self.assertEqual(self._history("late-revoke"), [])
         self.assertEqual(self.receipts.mcp_get_operation("late-revoke")["status"], "rejected")
 
-    def test_metadata_destination_permission_revoked_without_target_version_change(self):
+    def test_metadata_destination_does_not_depend_on_witness_permission(self):
         before = self._note()
         destination = self._note(location=NoteLocation("Destination"))
         proposal = self._pending(before, "metadata", "directory-revoke", directory_id=destination.directory_id)
         self._revoke_target_without_note_version_change(destination)
-        self._assert_rejected_without_note_write(proposal, before.id, "directory-revoke", self._note_row(before.id))
+        result = self._accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.SUCCESS)
+        self.assertEqual(result.note.directory_id, destination.directory_id)
 
     def test_terminal_operation_cannot_be_reapplied_by_pending_receipt(self):
         for operation in ("prepend", "metadata"):
@@ -398,8 +421,8 @@ class Step02EAcceptanceTests(unittest.TestCase):
                 terminal = self.receipts.mcp_get_operation(request)
                 with self.connections.write() as connection:
                     connection.execute("UPDATE ai_receipt_inbox SET status = 'pending' WHERE id = ?", (proposal,))
-                with self.assertRaises(ValueError):
-                    self._accept(proposal)
+                replay = self._accept(proposal)
+                self.assertEqual(replay.outcome.kind, AcceptanceKind.CONFLICT)
                 self.assertEqual(self._note_row(before.id), snapshot)
                 self.assertEqual(self.receipts.mcp_get_operation(request), terminal)
                 self.assertEqual(len(self._history(request)), 1)
@@ -410,8 +433,8 @@ class Step02EAcceptanceTests(unittest.TestCase):
         with self.connections.write() as connection:
             connection.execute("UPDATE ai_receipt_inbox SET request_id = NULL WHERE id = ?", (proposal,))
         snapshot = self.notes.list_active_notes()
-        with self.assertRaises(ValueError):
-            self._accept(proposal)
+        result = self._accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self.notes.list_active_notes(), snapshot)
         self.assertEqual(self.receipts.get_receipt(proposal).status, "rejected")
 

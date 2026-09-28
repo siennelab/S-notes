@@ -7,17 +7,20 @@ import hmac
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_access_metadata_service import (
+    AiAccessMetadata,
+    AiAccessMetadataService,
+)
 from src.snotes.application.ai_actor_registry import target_definition
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import (
-    AI_VISIBILITY_FULL,
     AiSafeReadService,
     AiSafeReadSource,
-    RedactionUnavailableError as SafeReadUnavailableError,
-    normalize_ai_visibility,
-    is_actor_authorized,
+)
+from src.snotes.application.ai_write_authorization import (
+    AiWriteAuthorization,
+    AiWriteExecutionContext,
 )
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
@@ -37,6 +40,7 @@ from src.snotes.application.ports import (
 )
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, Note, NoteLocation
+from src.snotes.domain.notes_operation_result import HandlingMode, OperationStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,14 +63,16 @@ class LocalMcpWriteService:
         safe_reads: AiSafeReadService,
         audit: AiAuditService,
         receipt_inbox: AiReceiptInboxService,
+        authorization: AiWriteAuthorization | None = None,
         create_confirmation_required: bool = False,
     ) -> None:
         self.actor_target_id = actor_target_id
         self._notes = notes
-        self._directories = directories
         self._tags = tags
         self._ai_metadata = ai_metadata
-        self._safe_reads = safe_reads
+        self._authorization = authorization or AiWriteAuthorization(
+            directories, safe_reads
+        )
         self._audit = audit
         self._receipt_inbox = receipt_inbox
         self._create_confirmation_required = create_confirmation_required
@@ -92,7 +98,8 @@ class LocalMcpWriteService:
             return self._terminal(
                 "create",
                 _result(
-                    "rejected", request_id, None, "", "none", False, False,
+                    OperationStatus.REJECTED, request_id, None, "",
+                    HandlingMode.NONE, False, False,
                     "提供子分类时必须同时提供主分类。",
                 ),
             )
@@ -100,7 +107,8 @@ class LocalMcpWriteService:
             return self._terminal(
                 "create",
                 _result(
-                    "rejected", request_id, None, "", "none", False, False,
+                    OperationStatus.REJECTED, request_id, None, "",
+                    HandlingMode.NONE, False, False,
                     "主分类不能为空。",
                 ),
             )
@@ -119,8 +127,9 @@ class LocalMcpWriteService:
             return self._terminal(
                 "create",
                 _result(
-                    "rejected", request_id, None, "", "none", False, False,
-                    "目标目录不可用；只能选择当前身份可见的已有目录。",
+                    OperationStatus.REJECTED, request_id, None, "",
+                    HandlingMode.NONE, False, False,
+                    "目标目录不存在或不可用。",
                 ),
             )
         target_directory_id, location = selected
@@ -158,7 +167,8 @@ class LocalMcpWriteService:
                 return self._terminal(
                     "create",
                     _result(
-                        "failed", request_id, None, clean_title, "none", False,
+                        OperationStatus.FAILED, request_id, None, clean_title,
+                        HandlingMode.NONE, False,
                         False, "无法生成稳定的 Markdown 正文。",
                     ),
                 )
@@ -198,24 +208,22 @@ class LocalMcpWriteService:
         note = self._notes.get_note(note_id)
         if note is None:
             return self._terminal(operation_type, _result(
-                "not_found", request_id, note_id, "", "none", False, False,
+                OperationStatus.NOT_FOUND, request_id, note_id, "",
+                HandlingMode.NONE, False, False,
+                "未找到笔记。",
+            ))
+        context = self._materialize(note, exact_edit=True)
+        if context is None:
+            return self._terminal(operation_type, _result(
+                OperationStatus.NOT_FOUND, request_id, note_id, "",
+                HandlingMode.NONE, False, False,
                 "未找到笔记。",
             ))
         metadata = self._ai_metadata.get_note_metadata(note.id)
-        if normalize_ai_visibility(metadata.visibility) != AI_VISIBILITY_FULL:
-            return self._terminal(operation_type, _result(
-                "not_found", request_id, note_id, "", "none", False, False,
-                "未找到笔记。",
-            ))
-        context = self._materialize(note)
-        if context is None:
-            return self._terminal(operation_type, _result(
-                "not_found", request_id, note_id, "", "none", False, False,
-                "未找到笔记。",
-            ))
         if not str(expected_version or "").strip():
             return self._terminal(operation_type, _result(
-                "rejected", request_id, note_id, note.title, "none", False,
+                OperationStatus.REJECTED, request_id, note_id, note.title,
+                HandlingMode.NONE, False,
                 False, "缺少版本凭证；请先重新读取笔记。",
             ))
         if not _version_credentials_match(
@@ -223,19 +231,22 @@ class LocalMcpWriteService:
             expected_updated_at=None, expected_version=expected_version,
         ):
             return self._terminal(operation_type, _result(
-                "conflict", request_id, note_id, note.title, "none", False,
+                OperationStatus.CONFLICT, request_id, note_id, note.title,
+                HandlingMode.NONE, False,
                 False, "笔记已被更新。",
             ))
         try:
             raw_candidate = apply_exact_markdown_edits(note.content_markdown, edits)
         except (TypeError, ValueError) as error:
             return self._terminal(operation_type, _result(
-                "rejected", request_id, note_id, note.title, "none", False,
+                OperationStatus.REJECTED, request_id, note_id, note.title,
+                HandlingMode.NONE, False,
                 False, str(error),
             ))
         if raw_candidate == note.content_markdown:
             return self._terminal(operation_type, _result(
-                "no_change", request_id, note_id, note.title, "none", False,
+                OperationStatus.NO_CHANGE, request_id, note_id, note.title,
+                HandlingMode.NONE, False,
                 False, "请求没有产生实际变化。",
             ))
 
@@ -246,7 +257,8 @@ class LocalMcpWriteService:
             )
         except (CanonicalizationError, ValueError, TypeError):
             return self._terminal(operation_type, _result(
-                "failed", request_id, note_id, note.title, "none", False,
+                OperationStatus.FAILED, request_id, note_id, note.title,
+                HandlingMode.NONE, False,
                 False, "无法生成稳定的 Markdown 正文。",
             ))
         needs_confirmation = self._receipt_inbox.mcp_confirmation_required(operation_type)
@@ -277,12 +289,15 @@ class LocalMcpWriteService:
             current = self._notes.get_note(note_id)
             if current is not None and current == note:
                 current_metadata = self._ai_metadata.get_note_metadata(note_id)
-                if (
-                    normalize_ai_visibility(current_metadata.visibility) != AI_VISIBILITY_FULL
-                    or not is_actor_authorized(self.actor_target_id, current_metadata.target_ids)
+                if not self._authorization.can_write_note(
+                    self.actor_target_id,
+                    self._note_source(current, current_metadata),
+                    context=AiWriteExecutionContext.MCP_DIRECT_WRITE,
+                    exact_edit=True,
                 ):
                     return self._terminal(operation_type, _result(
-                        "not_found", request_id, note_id, "", "direct", False,
+                        OperationStatus.NOT_FOUND, request_id, note_id, "",
+                        HandlingMode.DIRECT, False,
                         False, "未找到笔记。",
                     ))
                 metadata = current_metadata
@@ -321,7 +336,7 @@ class LocalMcpWriteService:
         return (
             result
             if result is not None
-            else {"status": "not_found", "request_id": request_id}
+            else {"status": OperationStatus.NOT_FOUND, "request_id": request_id}
         )
 
     def _modify(
@@ -346,8 +361,8 @@ class LocalMcpWriteService:
             return self._terminal(
                 operation_type,
                 _result(
-                    "not_found", request_id, note_id, "", "none", False,
-                    False, "未找到笔记。",
+                    OperationStatus.NOT_FOUND, request_id, note_id, "",
+                    HandlingMode.NONE, False, False, "未找到笔记。",
                 ),
             )
         note = context.note
@@ -355,7 +370,8 @@ class LocalMcpWriteService:
             return self._terminal(
                 operation_type,
                 _result(
-                    "rejected", request_id, note_id, note.title, "none", False,
+                    OperationStatus.REJECTED, request_id, note_id, note.title,
+                    HandlingMode.NONE, False,
                     False, "缺少版本凭证；请先重新读取笔记。",
                 ),
             )
@@ -368,7 +384,8 @@ class LocalMcpWriteService:
             return self._terminal(
                 operation_type,
                 _result(
-                    "conflict", request_id, note_id, note.title, "none", False,
+                    OperationStatus.CONFLICT, request_id, note_id, note.title,
+                    HandlingMode.NONE, False,
                     False, "笔记已被更新。",
                 ),
             )
@@ -383,7 +400,8 @@ class LocalMcpWriteService:
                 return self._terminal(
                     operation_type,
                     _result(
-                        "failed", request_id, note_id, note.title, "none", False,
+                        OperationStatus.FAILED, request_id, note_id, note.title,
+                        HandlingMode.NONE, False,
                         False, "追加内容不能为空。",
                     ),
                 )
@@ -397,8 +415,9 @@ class LocalMcpWriteService:
                 return self._terminal(
                     operation_type,
                     _result(
-                        "rejected", request_id, note_id, note.title, "none", False,
-                        False, "目标目录不可用；只能选择当前身份可见的已有目录。",
+                        OperationStatus.REJECTED, request_id, note_id, note.title,
+                        HandlingMode.NONE, False, False,
+                        "目标目录不存在或不可用。",
                     ),
                 )
             if selected_directory is not None:
@@ -409,7 +428,8 @@ class LocalMcpWriteService:
                 return self._terminal(
                     operation_type,
                     _result(
-                        "rejected", request_id, note_id, note.title, "none", False,
+                        OperationStatus.REJECTED, request_id, note_id, note.title,
+                        HandlingMode.NONE, False,
                         False, "同一标签不能同时添加和移除。",
                     ),
                 )
@@ -430,7 +450,8 @@ class LocalMcpWriteService:
                 return self._terminal(
                     operation_type,
                     _result(
-                        "no_change", request_id, note_id, note.title, "none", False,
+                        OperationStatus.NO_CHANGE, request_id, note_id, note.title,
+                        HandlingMode.NONE, False,
                         False, "请求没有产生实际变化。",
                     ),
                 )
@@ -512,23 +533,42 @@ class LocalMcpWriteService:
         note = self._notes.get_note(note_id)
         return self._materialize(note) if note is not None else None
 
-    def _materialize(self, note: Note) -> WritableNoteContext | None:
+    def _materialize(
+        self, note: Note, *, exact_edit: bool = False
+    ) -> WritableNoteContext | None:
         metadata = self._ai_metadata.get_note_metadata(note.id)
         tag_records = tuple(self._tags.get_note_tag_records(note.id))
-        source = AiSafeReadSource(
+        source = self._note_source(note, metadata, tag_records=tag_records)
+        allowed = self._authorization.can_write_note(
+            self.actor_target_id,
+            source,
+            context=AiWriteExecutionContext.MCP_DIRECT_WRITE,
+            exact_edit=exact_edit,
+        )
+        return WritableNoteContext(note, tag_records) if allowed else None
+
+    def _note_source(
+        self,
+        note: Note,
+        metadata: AiAccessMetadata | None = None,
+        *,
+        tag_records: tuple[TagRecord, ...] | None = None,
+    ) -> AiSafeReadSource:
+        metadata = metadata or self._ai_metadata.get_note_metadata(note.id)
+        records = (
+            tuple(self._tags.get_note_tag_records(note.id))
+            if tag_records is None
+            else tag_records
+        )
+        return AiSafeReadSource(
             note_id=note.id,
             title=note.title,
             content=note.content_markdown,
             visibility=metadata.visibility,
             targets=metadata.target_ids,
             directory=" / ".join(note.location.values()),
-            tags=tuple(name for _tag_id, name in tag_records),
+            tags=tuple(name for _tag_id, name in records),
         )
-        try:
-            safe = self._safe_reads.read_note(self.actor_target_id, source)
-        except SafeReadUnavailableError:
-            return None
-        return WritableNoteContext(note, tag_records) if safe is not None else None
 
     def _create_location(
         self,
@@ -539,30 +579,20 @@ class LocalMcpWriteService:
     ) -> tuple[int, NoteLocation] | None:
         requested_location = self._requested_location(main_category, sub_category)
         if directory_id is not None:
-            selected = self._visible_location(directory_id)
+            selected = self._authorization.resolve_directory(
+                directory_id=directory_id,
+                location=requested_location,
+            )
             if selected is None:
                 return None
-            if requested_location is not None and selected[1] != requested_location:
-                return None
-            return selected
+            return selected.id, selected.location
         if requested_location is not None:
-            directory_id = self._directories.find_active_location_id(
-                requested_location
+            selected = self._authorization.resolve_directory(
+                location=requested_location
             )
-            return (
-                (directory_id, requested_location)
-                if directory_id is not None
-                else None
-            )
-        directory = next(
-            (
-                item
-                for item in self._directories.list_directories()
-                if item.parent_id is None and item.name == "临时"
-            ),
-            None,
-        )
-        return (directory.id, NoteLocation()) if directory is not None else None
+            return (selected.id, selected.location) if selected is not None else None
+        selected = self._authorization.resolve_directory(location=NoteLocation())
+        return (selected.id, selected.location) if selected is not None else None
 
     def _requested_location(
         self,
@@ -590,7 +620,8 @@ class LocalMcpWriteService:
             )
         except ValueError as error:
             return _result(
-                "rejected", request_id, None, "", "none", False, False, str(error)
+                OperationStatus.REJECTED, request_id, None, "",
+                HandlingMode.NONE, False, False, str(error)
             )
 
     def _visible_location(
@@ -598,10 +629,8 @@ class LocalMcpWriteService:
     ) -> tuple[int, NoteLocation] | None:
         if directory_id is None:
             return None
-        for note in self._notes.list_active_notes():
-            if note.directory_id == directory_id and self._materialize(note) is not None:
-                return directory_id, note.location
-        return None
+        selected = self._authorization.resolve_directory(directory_id=directory_id)
+        return (selected.id, selected.location) if selected is not None else None
 
     def _duplicate(self, request_id: str, operation_type: str) -> dict | None:
         existing = self._receipt_inbox.mcp_get_operation(request_id)
@@ -609,7 +638,7 @@ class LocalMcpWriteService:
             return None
         result = {
             **existing,
-            "status": "already_processed",
+            "status": OperationStatus.ALREADY_PROCESSED,
             "previous_status": existing.get("status"),
         }
         self._audit_write(operation_type, result, duplicate=True)
@@ -631,10 +660,12 @@ class LocalMcpWriteService:
             request_id=result["request_id"],
             note_id=result.get("note_id"),
             result_count=1 if result.get("modified_formal_note") else 0,
-            handling_mode=result.get("handling_mode", "none"),
+            handling_mode=result.get("handling_mode", HandlingMode.NONE),
             status=result["status"],
             failure_reason=result.get("reason", ""),
-            is_duplicate=duplicate or result["status"] == "already_processed",
+            is_duplicate=(
+                duplicate or result["status"] == OperationStatus.ALREADY_PROCESSED
+            ),
             entered_confirmation=bool(result.get("entered_confirmation")),
         )
 

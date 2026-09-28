@@ -16,6 +16,7 @@ from src.snotes.application.ai_access_metadata_service import AiAccessMetadataSe
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields, AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.application.local_mcp_write_service import LocalMcpWriteService, note_version_token
@@ -68,6 +69,7 @@ class Step02DInvariantTests(unittest.TestCase):
         self.metadata = AiAccessMetadataService(notes_repository)
         audit = AiAuditService(SQLiteAiAuditRepository(self.connections))
         safe_reads = AiSafeReadService(root / "unused-rules.json")
+        directories = DirectoryService(directories_repository)
         self.canonicalizer = CanonicalizerTestDouble(
             lambda markdown: self._canonicalize(markdown)
         )
@@ -76,10 +78,11 @@ class Step02DInvariantTests(unittest.TestCase):
             notes=self.notes, tags=self.tags, ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
             canonicalizer=self.canonicalizer,
+            authorization=AiWriteAuthorization(directories=directories),
         )
         shared = dict(
             actor_target_id="clawbot", notes=self.notes,
-            directories=DirectoryService(directories_repository), tags=self.tags,
+            directories=directories, tags=self.tags,
             ai_metadata=self.metadata, safe_reads=safe_reads, audit=audit,
             receipt_inbox=self.receipts,
         )

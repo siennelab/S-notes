@@ -10,12 +10,13 @@ from src.snotes.application.ai_actor_registry import AI_ACTOR_IDS
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import (
-    AI_VISIBILITY_FULL,
-    is_actor_authorized,
     AiSafeReadResult,
     AiSafeReadService,
     AiSafeReadSource,
     RedactionUnavailableError as SafeReadUnavailableError,
+)
+from src.snotes.application.ai_write_authorization import (
+    AiWriteAuthorization,
 )
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_write_service import (
@@ -52,6 +53,7 @@ class LocalMcpService:
         safe_reads: AiSafeReadService,
         audit: AiAuditService,
         receipt_inbox: AiReceiptInboxService,
+        authorization: AiWriteAuthorization | None = None,
         reminders: ReminderService | None = None,
         create_confirmation_required: bool = False,
     ) -> None:
@@ -64,6 +66,9 @@ class LocalMcpService:
         self._safe_reads = safe_reads
         self._audit = audit
         self._reminders = reminders
+        self._authorization = authorization or AiWriteAuthorization(
+            directories, safe_reads
+        )
         self._writes = LocalMcpWriteService(
             actor_target_id=actor_target_id,
             notes=notes,
@@ -73,6 +78,7 @@ class LocalMcpService:
             safe_reads=safe_reads,
             audit=audit,
             receipt_inbox=receipt_inbox,
+            authorization=self._authorization,
             create_confirmation_required=create_confirmation_required,
         )
 
@@ -219,9 +225,18 @@ class LocalMcpService:
         allowed = False
         if note is not None:
             metadata = self._ai_metadata.get_note_metadata(note.id)
-            allowed = (
-                metadata.visibility == AI_VISIBILITY_FULL
-                and is_actor_authorized(self.actor_target_id, metadata.target_ids)
+            allowed = self._authorization.can_access_note(
+                self.actor_target_id,
+                AiSafeReadSource(
+                    note_id=note.id,
+                    title=note.title,
+                    content=note.content_markdown,
+                    visibility=metadata.visibility,
+                    targets=metadata.target_ids,
+                    directory=" / ".join(note.location.values()),
+                    tags=tuple(self._tags.get_note_tags(note.id)),
+                ),
+                full_only=True,
             )
         # As with get_note, only metadata goes to the existing call audit.
         self._audit.record_event(

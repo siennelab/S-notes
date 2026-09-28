@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_audit_service import AiAuditService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields, AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
 from src.snotes.application.directory_service import DirectoryService
@@ -47,6 +48,7 @@ class OperationResultCompatibilityTests(unittest.TestCase):
         self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories, tags),
+            authorization=AiWriteAuthorization(directories=DirectoryService(directories)),
             notes=self.notes, tags=TagService(tags), ai_metadata=metadata,
             mcp_operations=self.operations,
             canonicalizer=self.canonicalizer,

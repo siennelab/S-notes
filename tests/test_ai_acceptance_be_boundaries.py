@@ -13,9 +13,11 @@ import unittest
 from unittest.mock import patch
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_acceptance_outcome import AcceptanceKind
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields, AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_write_service import LocalMcpWriteService, note_version_token
 from src.snotes.application.note_service import NoteService
@@ -45,18 +47,20 @@ class AcceptanceBoundaryTests(unittest.TestCase):
         self.notes = NoteService(notes)
         self.metadata = AiAccessMetadataService(notes)
         self.operations = SQLiteAiMcpOperationRepository(self.connections, tags)
+        self.directories = DirectoryService(directories)
         self.canonical_hook = lambda markdown: markdown
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories, tags),
             notes=self.notes, tags=TagService(tags), ai_metadata=self.metadata,
             mcp_operations=self.operations,
             canonicalizer=SimpleNamespace(canonicalize_markdown=lambda markdown: self.canonical_hook(markdown)),
+            authorization=AiWriteAuthorization(directories=self.directories),
         )
         self.rules = self.root / "rules.json"
         self.rules.write_text(json.dumps({"secret": "[redacted]"}), encoding="utf-8")
         self.writes = LocalMcpWriteService(
             actor_target_id="yan", notes=self.notes,
-            directories=DirectoryService(directories), tags=TagService(tags),
+            directories=self.directories, tags=TagService(tags),
             ai_metadata=self.metadata, safe_reads=AiSafeReadService(self.rules),
             audit=AiAuditService(SQLiteAiAuditRepository(self.connections)),
             receipt_inbox=self.receipts,
@@ -154,8 +158,8 @@ assert candidate.final_markdown == 'Beta\nOmega'
             return markdown
 
         self.canonical_hook = canonicalize
-        with self.assertRaises(ValueError):
-            self.accept(proposal)
+        result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self.notes.get_note(note.id), changed[0])
         self.assertEqual(self.history_count(), 0)
         self.assertEqual(self.receipts.mcp_get_operation("proposal")["status"], "conflict")
@@ -176,8 +180,8 @@ assert candidate.final_markdown == 'Beta\nOmega'
             return markdown
 
         self.canonical_hook = canonicalize
-        with self.assertRaises(ValueError):
-            self.accept(proposal)
+        result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self.notes.get_note(note.id), note)
         self.assertEqual(self.history_count(), 0)
         self.assertEqual(self.receipts.mcp_get_operation("proposal")["status"], "conflict")
@@ -193,8 +197,8 @@ assert candidate.final_markdown == 'Beta\nOmega'
             return original(**values)
 
         with patch.object(self.operations, "accept_pending_modification", side_effect=change_receipt_then_commit):
-            with self.assertRaises(ValueError):
-                self.accept(proposal)
+            result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self.notes.get_note(note.id), note)
         self.assertEqual(self.history_count(), 0)
         self.assertEqual(self.receipts.mcp_get_operation("proposal")["status"], "conflict")
@@ -210,13 +214,13 @@ assert candidate.final_markdown == 'Beta\nOmega'
             return original(**values)
 
         with patch.object(self.operations, "accept_pending_modification", side_effect=revoke_then_commit):
-            with self.assertRaises(ValueError):
-                self.accept(proposal)
+            result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self.notes.get_note(note.id), note)
         self.assertEqual(self.history_count(), 0)
         self.assertEqual(self.receipts.mcp_get_operation("proposal")["status"], "conflict")
 
-    def test_final_commit_rechecks_destination_authorization_evidence(self):
+    def test_moving_directory_witness_does_not_block_final_commit(self):
         note = self.note()
         destination = self.note(location=NoteLocation("Destination"))
         proposal = self.pending(note, "metadata", directory_id=destination.directory_id)
@@ -228,11 +232,47 @@ assert candidate.final_markdown == 'Beta\nOmega'
             return original(**values)
 
         with patch.object(self.operations, "accept_pending_modification", side_effect=move_authorization_witness_then_commit):
-            with self.assertRaises(ValueError):
-                self.accept(proposal)
+            result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.SUCCESS)
+        self.assertEqual(self.notes.get_note(note.id).directory_id, destination.directory_id)
+        self.assertEqual(self.history_count(), 1)
+
+    def test_final_commit_rechecks_destination_directory_snapshot(self):
+        note = self.note()
+        destination = self.note(location=NoteLocation("Destination"))
+        proposal = self.pending(note, "metadata", directory_id=destination.directory_id)
+        original = self.operations.accept_pending_modification
+
+        def rename_destination_then_commit(**values):
+            self.directories.rename_directory(destination.directory_id, "Renamed Destination")
+            return original(**values)
+
+        with patch.object(
+            self.operations,
+            "accept_pending_modification",
+            side_effect=rename_destination_then_commit,
+        ):
+            result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self.notes.get_note(note.id), note)
         self.assertEqual(self.history_count(), 0)
         self.assertEqual(self.receipts.mcp_get_operation("proposal")["status"], "conflict")
+
+    def test_final_commit_rechecks_deleted_destination_directory(self):
+        note = self.note()
+        destination = self.directories.create_directory("Empty Destination")
+        proposal = self.pending(note, "metadata", directory_id=destination.id)
+        original = self.operations.accept_pending_modification
+
+        def delete_destination_then_commit(**values):
+            self.directories.soft_delete_directory(destination.id)
+            return original(**values)
+
+        with patch.object(self.operations, "accept_pending_modification", side_effect=delete_destination_then_commit):
+            result = self.accept(proposal)
+        self.assertEqual(result.outcome.kind, AcceptanceKind.CONFLICT)
+        self.assertEqual(self.notes.get_note(note.id), note)
+        self.assertEqual(self.history_count(), 0)
 
     def test_commit_failure_rolls_back_note_history_receipt_and_operation(self):
         note = self.note()

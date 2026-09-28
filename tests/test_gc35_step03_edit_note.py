@@ -14,9 +14,11 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_acceptance_outcome import AcceptanceKind
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields, AiReceiptInboxService
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.local_mcp_write_service import LocalMcpWriteService, note_version_token
 from src.snotes.application.note_service import NoteService
@@ -71,6 +73,7 @@ class EditNoteTests(unittest.TestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.directories = DirectoryService(directories)
         self.canonicalizer = CanonicalizerTestDouble(
             lambda markdown: self._canonicalize(markdown)
         )
@@ -81,11 +84,12 @@ class EditNoteTests(unittest.TestCase):
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
             canonicalizer=self.canonicalizer,
+            authorization=AiWriteAuthorization(directories=self.directories),
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot",
             notes=self.notes,
-            directories=DirectoryService(directories),
+            directories=self.directories,
             tags=self.tags,
             ai_metadata=self.metadata,
             safe_reads=AiSafeReadService(root / "redaction-rules.json"),
@@ -153,10 +157,10 @@ class EditNoteTests(unittest.TestCase):
         pending = self._edit(note, edits)
         self.notes.save_note(note.id, title=note.title, content_markdown="S edited\n",
                              location=note.location, expected_revision=note.revision)
-        with self.assertRaisesRegex(ValueError, "笔记已被更新"):
-            self._accept(pending["proposal_id"])
+        accepted = self._accept(pending["proposal_id"])
+        self.assertEqual(accepted.outcome.kind, AcceptanceKind.CONFLICT)
         stored = self.writes.get_operation_status("edit")
-        self.assertEqual(stored["handling_mode"], "human_rejected")
+        self.assertEqual(stored["handling_mode"], "none")
         query = _operation_response(stored)
         self.assertEqual(query.status, "conflict")
         self.assertEqual(query.processing_mode, "none")
@@ -313,8 +317,8 @@ class EditNoteTests(unittest.TestCase):
             location=before.location, expected_revision=before.revision,
         )
         formal_state = self._formal_state()
-        with self.assertRaisesRegex(ValueError, "笔记已被更新"):
-            self._accept(pending["proposal_id"])
+        accepted = self._accept(pending["proposal_id"])
+        self.assertEqual(accepted.outcome.kind, AcceptanceKind.CONFLICT)
         self.assertEqual(self._formal_state(), formal_state)
         self.assertEqual(self.notes.get_note(before.id), saved)
 
@@ -327,8 +331,8 @@ class EditNoteTests(unittest.TestCase):
         self.assertEqual(pending["status"], "pending_confirmation", pending)
         self.metadata.set_note_targets(before.id, ())
         formal_state = self._formal_state()
-        with self.assertRaises(ValueError):
-            self._accept(pending["proposal_id"])
+        accepted = self._accept(pending["proposal_id"])
+        self.assertEqual(accepted.outcome.kind, AcceptanceKind.REJECTED)
         self.assertEqual(self._formal_state(), formal_state)
         self.assertEqual(self.notes.get_note(before.id).content_markdown, before.content_markdown)
 
@@ -347,8 +351,8 @@ class EditNoteTests(unittest.TestCase):
                 ("Alpha Alpha\n", before.id),
             )
         formal_state = self._formal_state()
-        with self.assertRaises(ValueError):
-            self._accept(pending["proposal_id"])
+        accepted = self._accept(pending["proposal_id"])
+        self.assertEqual(accepted.outcome.kind, AcceptanceKind.REJECTED)
         self.assertEqual(self._formal_state(), formal_state)
         self.assertEqual(self.receipts.get_receipt(pending["proposal_id"]).status, "rejected")
 
@@ -369,8 +373,8 @@ class EditNoteTests(unittest.TestCase):
             "canonicalize",
             side_effect=CanonicalizationError("fixture failure"),
         ):
-            with self.assertRaises(ValueError):
-                self._accept(pending["proposal_id"])
+            accepted = self._accept(pending["proposal_id"])
+        self.assertEqual(accepted.outcome.kind, AcceptanceKind.REJECTED)
         self.assertEqual(self._formal_state(), formal_state)
         with self.connections.read() as connection:
             after_history = connection.execute(

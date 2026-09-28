@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
 from src.snotes.application.ai_audit_service import AiAuditService
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.application.ai_safe_export_service import AiSafeExportService
@@ -72,6 +73,7 @@ def build_application(
         SQLiteAiReceiptInboxRepository(connections, directories, tags),
         canonicalizer=MarkdownCanonicalizer(),
         notes=note_service,
+        authorization=AiWriteAuthorization(directories=directory_service),
         tags=tag_service,
         ai_metadata=ai_access_metadata_service,
         mcp_operations=SQLiteAiMcpOperationRepository(
@@ -149,12 +151,17 @@ def build_local_mcp_service(
     tags = TagService(tags_repository)
     ai_metadata = AiAccessMetadataService(notes_repository)
     audit = AiAuditService(SQLiteAiAuditRepository(connections))
+    safe_reads = AiSafeReadService(
+        root / "config" / "local_redaction_rules.json", body_renderer=markdown_to_plain_text,
+    )
+    authorization = AiWriteAuthorization(directories=directories, safe_reads=safe_reads)
     receipt_inbox = AiReceiptInboxService(
         SQLiteAiReceiptInboxRepository(
             connections, directories_repository, tags_repository
         ),
         canonicalizer=MarkdownCanonicalizer(),
         notes=notes,
+        authorization=authorization,
         tags=tags,
         ai_metadata=ai_metadata,
         mcp_operations=SQLiteAiMcpOperationRepository(
@@ -169,10 +176,8 @@ def build_local_mcp_service(
         directories=directories,
         tags=tags,
         ai_metadata=ai_metadata,
-        safe_reads=AiSafeReadService(
-            root / "config" / "local_redaction_rules.json",
-            body_renderer=markdown_to_plain_text,
-        ),
+        safe_reads=safe_reads,
+        authorization=authorization,
         audit=audit,
         receipt_inbox=receipt_inbox,
         reminders=reminder_service,

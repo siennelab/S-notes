@@ -20,6 +20,7 @@ from src.snotes.domain.ai_receipts import (
     AiReceiptInboxItem,
     GaleReceiptImport,
 )
+from src.snotes.domain.notes_operation_result import OperationStatus
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY
 from src.snotes.storage.ai_metadata import (
     replace_note_ai_targets,
@@ -160,7 +161,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                     existing_note_id,
                     self._note_uuid(connection, existing_note_id),
                     timestamp,
-                    result_status="created",
+                    result_status=OperationStatus.CREATED,
                 )
                 return AiReceiptAcceptPersistence(linked, existing_note_id, False)
 
@@ -221,7 +222,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                 note_id,
                 note_uuid,
                 timestamp,
-                result_status="created",
+                result_status=OperationStatus.CREATED,
             )
             if receipt.request_id:
                 store_receipt_decision_operation_result(
@@ -230,7 +231,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                     note_id=note_id,
                     title=command.title,
                     timestamp=timestamp,
-                    status="created",
+                    status=OperationStatus.CREATED,
                     reason="",
                 )
             return AiReceiptAcceptPersistence(linked, note_id, True)
@@ -277,7 +278,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
                     ),
                     title=receipt.title,
                     timestamp=timestamp,
-                    status="rejected",
+                    status=OperationStatus.REJECTED,
                     reason="用户已丢弃。",
                 )
             updated = self._read_from_connection(connection, receipt_id)
@@ -384,7 +385,7 @@ class SQLiteAiReceiptInboxRepository(AiReceiptInboxRepository):
             "SELECT status, result_json FROM ai_operations WHERE request_id = ?",
             (request_id,),
         ).fetchone()
-        if row is None or row["status"] not in {"created", "accepted"}:
+        if row is None or row["status"] not in {OperationStatus.CREATED, OperationStatus.ACCEPTED}:
             return None
         try:
             note_id = int(json.loads(row["result_json"])["note_id"])
