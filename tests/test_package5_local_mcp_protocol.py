@@ -30,6 +30,8 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -482,6 +484,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             mcp_operations=SQLiteAiMcpOperationRepository(
                 self.connections, self.tags_repository
             ),
+            canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
         )
         formal_before = len(self.notes.list_active_notes())
 
@@ -645,6 +648,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             mcp_operations=SQLiteAiMcpOperationRepository(
                 self.connections, self.tags_repository
             ),
+            canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
         )
         formal_before = len(self.notes.list_active_notes())
 
@@ -895,6 +899,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             mcp_operations=SQLiteAiMcpOperationRepository(
                 self.connections, self.tags_repository
             ),
+            canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
         )
         formal_before = len(self.notes.list_active_notes())
 
@@ -1418,6 +1423,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             mcp_operations=SQLiteAiMcpOperationRepository(
                 self.connections, self.tags_repository
             ),
+            canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
         )
 
         async with self.session(

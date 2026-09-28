@@ -17,6 +17,7 @@ from src.snotes.application.ai_safe_read_service import (
     AiSafeReadSource,
     RedactionUnavailableError as SafeReadUnavailableError,
     normalize_ai_visibility,
+    is_actor_authorized,
 )
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
@@ -29,7 +30,11 @@ from src.snotes.application.note_canonical_candidate import (
 from src.snotes.application.notes_operation_result import (
     notes_operation_result as _result,
 )
-from src.snotes.application.ports import TagRecord
+from src.snotes.application.ports import (
+    AiNoteFingerprint,
+    CanonicalizationError,
+    TagRecord,
+)
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, Note, NoteLocation
 
@@ -145,10 +150,10 @@ class LocalMcpWriteService:
                 target_ids=targets,
             )
         else:
-            from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
-
             try:
-                canonical_content = canonicalize_new_note(content)
+                canonical_content = canonicalize_new_note(
+                    content, canonicalize=self._receipt_inbox.canonicalize_markdown
+                )
             except CanonicalizationError:
                 return self._terminal(
                     "create",
@@ -233,10 +238,12 @@ class LocalMcpWriteService:
                 "no_change", request_id, note_id, note.title, "none", False,
                 False, "请求没有产生实际变化。",
             ))
-        from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
 
         try:
-            candidate = build_canonical_edit_candidate(note.content_markdown, edits)
+            candidate = build_canonical_edit_candidate(
+                note.content_markdown, edits,
+                canonicalize=self._receipt_inbox.canonicalize_markdown,
+            )
         except (CanonicalizationError, ValueError, TypeError):
             return self._terminal(operation_type, _result(
                 "failed", request_id, note_id, note.title, "none", False,
@@ -264,6 +271,21 @@ class LocalMcpWriteService:
                 target_ids=metadata.target_ids,
             )
         else:
+            # The adapter may process Qt events. Preserve the direct-edit
+            # permission recheck outside persistence, using the same grants
+            # whose fingerprint the transaction compares.
+            current = self._notes.get_note(note_id)
+            if current is not None and current == note:
+                current_metadata = self._ai_metadata.get_note_metadata(note_id)
+                if (
+                    normalize_ai_visibility(current_metadata.visibility) != AI_VISIBILITY_FULL
+                    or not is_actor_authorized(self.actor_target_id, current_metadata.target_ids)
+                ):
+                    return self._terminal(operation_type, _result(
+                        "not_found", request_id, note_id, "", "direct", False,
+                        False, "未找到笔记。",
+                    ))
+                metadata = current_metadata
             result = self._receipt_inbox.mcp_modify_direct(
                 actor_target_id=self.actor_target_id,
                 request_id=request_id,
@@ -275,6 +297,10 @@ class LocalMcpWriteService:
                 raw_candidate_markdown=raw_candidate,
                 canonical_markdown=candidate.final_markdown,
                 edits=edits,
+                expected_note_fingerprint=AiNoteFingerprint(
+                    note.id, note.revision, note.updated_at, note.content_markdown,
+                    note.ai_visibility, tuple(sorted(metadata.target_ids)), note.directory_id,
+                ),
             )
         self._audit_write(operation_type, result)
         return result
@@ -418,11 +444,10 @@ class LocalMcpWriteService:
         canonical_candidate = None
         canonicalization_failed = False
         if operation_type in {"prepend", "append"}:
-            from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
-
             try:
                 canonical_candidate = build_canonical_note_candidate(
-                    note.content_markdown, content, operation_type
+                    note.content_markdown, content, operation_type,
+                    canonicalize=self._receipt_inbox.canonicalize_markdown,
                 )
             except CanonicalizationError:
                 # A body whose safety cannot be established may only be reviewed.

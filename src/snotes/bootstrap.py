@@ -35,6 +35,7 @@ from src.snotes.storage.schema import initialize_database
 from src.snotes.gale_bootstrap import compose_gale_control
 from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
 from src.snotes.ui.main_window import MainWindow
+from src.snotes.ui.markdown_canonicalizer import MarkdownCanonicalizer
 
 
 DATA_ROOT_ENV = "S_NOTES_DATA_ROOT"
@@ -69,6 +70,7 @@ def build_application(
     tag_service = TagService(tags)
     receipt_inbox_service = AiReceiptInboxService(
         SQLiteAiReceiptInboxRepository(connections, directories, tags),
+        canonicalizer=MarkdownCanonicalizer(),
         notes=note_service,
         tags=tag_service,
         ai_metadata=ai_access_metadata_service,
@@ -151,6 +153,7 @@ def build_local_mcp_service(
         SQLiteAiReceiptInboxRepository(
             connections, directories_repository, tags_repository
         ),
+        canonicalizer=MarkdownCanonicalizer(),
         notes=notes,
         tags=tags,
         ai_metadata=ai_metadata,

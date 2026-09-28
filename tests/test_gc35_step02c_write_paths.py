@@ -31,6 +31,7 @@ from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.ai_center_dialog import ReceiptCard
 from src.snotes.ui.markdown_canonicalizer import CanonicalizationError, MarkdownCanonicalizer
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class CanonicalWriteTests(unittest.TestCase):
@@ -64,10 +65,14 @@ class CanonicalWriteTests(unittest.TestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.canonicalizer = CanonicalizerTestDouble(
+            lambda markdown: self._canonicalize(markdown)
+        )
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories, tags_repository),
             notes=self.notes, tags=self.tags, ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
+            canonicalizer=self.canonicalizer,
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot", notes=self.notes,
@@ -110,6 +115,11 @@ class CanonicalWriteTests(unittest.TestCase):
         with MarkdownCanonicalizer() as milkdown:
             self.assertEqual(milkdown._serialize_once(body), body)
             self.assertEqual(milkdown.canonicalize_markdown(body), body)
+
+    @staticmethod
+    def _canonicalize(markdown):
+        with MarkdownCanonicalizer() as milkdown:
+            return milkdown.canonicalize_markdown(markdown)
 
     def _formal_state(self):
         with self.connections.read() as connection:
@@ -162,7 +172,11 @@ class CanonicalWriteTests(unittest.TestCase):
         result = self._modify(note)
         self.assertEqual(result["status"], "pending_confirmation")
         preview = self.receipts.build_pending_note_preview(result["proposal_id"], addition_markdown="- edited")
-        expected = build_canonical_note_candidate(note.content_markdown, "- edited")
+        expected = build_canonical_note_candidate(
+            note.content_markdown,
+            "- edited",
+            canonicalize=self.canonicalizer.canonicalize_markdown,
+        )
         self.assertEqual(preview.final_markdown, expected.final_markdown)
         accepted = self._accept(result["proposal_id"], "- edited")
         self.assertEqual(accepted.note.content_markdown, expected.final_markdown)
@@ -196,7 +210,11 @@ class CanonicalWriteTests(unittest.TestCase):
         pending_create = self.writes.create_note("pending-create", "Fictional", "- input")
         self._confirmation(False, "create")
         before = self._formal_state()
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", side_effect=CanonicalizationError("fixture failure")):
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
+            side_effect=CanonicalizationError("fixture failure"),
+        ):
             create = self.writes.create_note("failed-create", "Fictional", "- input")
             self.assertIn(create["status"], {"failed", "rejected", "pending_confirmation"})
             for operation in ("append", "prepend"):
@@ -210,7 +228,11 @@ class CanonicalWriteTests(unittest.TestCase):
 
     def test_metadata_only_skips_body_canonicalization(self):
         note = self._note("- legacy")
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", side_effect=AssertionError("metadata invoked canonicalizer")):
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
+            side_effect=AssertionError("metadata invoked canonicalizer"),
+        ):
             result = self.writes.update_note_metadata(
                 request_id="metadata", note_id=note.id,
                 expected_version=note_version_token(note.id, note.updated_at), title="New title",
@@ -219,7 +241,7 @@ class CanonicalWriteTests(unittest.TestCase):
         self.assertEqual(self.notes.get_note(note.id).content_markdown, note.content_markdown)
 
     def test_save_during_canonicalization_blocks_direct_and_accept(self):
-        original = MarkdownCanonicalizer.canonicalize_markdown
+        original = self.canonicalizer.canonicalize
         for mode in ("direct", "accept"):
             with self.subTest(mode=mode):
                 note = self._note("base\n")
@@ -229,16 +251,19 @@ class CanonicalWriteTests(unittest.TestCase):
                     self._confirmation(False)
                 changed = []
 
-                def save_during_canonicalization(milkdown, markdown):
+                def save_during_canonicalization(markdown):
                     if not changed:
                         changed.append(self.notes.save_note(
                             note.id, title=note.title, content_markdown="concurrent save\n",
                             location=note.location, expected_revision=note.revision,
                         ))
-                    return original(milkdown, markdown)
+                    return original(markdown)
 
-                with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", autospec=True,
-                                  side_effect=save_during_canonicalization):
+                with patch.object(
+                    self.canonicalizer,
+                    "canonicalize",
+                    side_effect=save_during_canonicalization,
+                ):
                     if mode == "direct":
                         result = self._modify(note, request_id="direct-race")
                         self.assertEqual(result["status"], "conflict")
@@ -261,7 +286,11 @@ class CanonicalWriteTests(unittest.TestCase):
         self.assertIn("+* old", card.final_preview.toPlainText())
         card.body_edit.setPlainText("- edited")
         self.assertFalse(card.accept_button.isEnabled())
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", side_effect=CanonicalizationError("fixture failure")):
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
+            side_effect=CanonicalizationError("fixture failure"),
+        ):
             card.refresh_final_preview()
         self.assertFalse(card.accept_button.isEnabled())
         card.refresh_final_preview()

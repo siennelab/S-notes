@@ -30,6 +30,7 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.markdown_canonicalizer import CanonicalizationError, MarkdownCanonicalizer
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class Step02EAcceptanceTests(unittest.TestCase):
@@ -69,12 +70,16 @@ class Step02EAcceptanceTests(unittest.TestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.canonicalizer = CanonicalizerTestDouble(
+            lambda markdown: self._canonicalize(markdown)
+        )
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directory_repository, tags_repository),
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
+            canonicalizer=self.canonicalizer,
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot",
@@ -95,6 +100,11 @@ class Step02EAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _token(note):
         return note_version_token(note.id, note.updated_at)
+
+    @staticmethod
+    def _canonicalize(markdown):
+        with MarkdownCanonicalizer() as milkdown:
+            return milkdown.canonicalize_markdown(markdown)
 
     def _note(self, body="base\n", *, location=None, title="Fictional", tags=()):
         blank = self.notes.create_note(location or NoteLocation())
@@ -241,7 +251,11 @@ class Step02EAcceptanceTests(unittest.TestCase):
             title="New title", directory_id=destination.directory_id,
             add_tags=["new"], remove_tags=["old"],
         )
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", side_effect=AssertionError("metadata canonicalized body")):
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
+            side_effect=AssertionError("metadata canonicalized body"),
+        ):
             result = self._accept(proposal_id)
         after = self.notes.get_note(before.id)
         self.assertEqual(result.note, after)
@@ -317,7 +331,11 @@ class Step02EAcceptanceTests(unittest.TestCase):
         before = self._note()
         proposal_id = self._pending(before, "prepend", "prepend-failed", content="new")
         snapshot = self._note_row(before.id)
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", side_effect=CanonicalizationError("fixture failure")):
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
+            side_effect=CanonicalizationError("fixture failure"),
+        ):
             self._assert_rejected_without_note_write(proposal_id, before.id, "prepend-failed", snapshot)
 
     def test_accepted_and_rejected_receipts_are_idempotent(self):
@@ -343,17 +361,17 @@ class Step02EAcceptanceTests(unittest.TestCase):
     def test_permission_revoked_during_canonicalization_is_rechecked(self):
         before = self._note()
         proposal = self._pending(before, "append", "late-revoke", content="new")
-        original = MarkdownCanonicalizer.canonicalize_markdown
+        original = self.canonicalizer.canonicalize
         revoked = []
 
-        def revoke(milkdown, markdown):
+        def revoke(markdown):
             if not revoked:
                 with self.connections.write() as connection:
                     connection.execute("UPDATE notes SET ai_visibility = 'hidden' WHERE id = ?", (before.id,))
                 revoked.append(self._note_row(before.id))
-            return original(milkdown, markdown)
+            return original(markdown)
 
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown", autospec=True, side_effect=revoke):
+        with patch.object(self.canonicalizer, "canonicalize", side_effect=revoke):
             with self.assertRaisesRegex(ValueError, "无权"):
                 self._accept(proposal)
         self.assertEqual(self._note_row(before.id), revoked[0])

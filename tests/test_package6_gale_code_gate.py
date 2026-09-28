@@ -50,6 +50,8 @@ from src.snotes.storage.repositories.directories import SQLiteDirectoriesReposit
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 from src.snotes.transport.gale.remote import (
     REMOTE_INCOMING,
     SystemOracleOutboxTransport,
@@ -167,6 +169,7 @@ class Package6GaleCodeGateTests(unittest.TestCase):
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
+            canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
         )
         self._seed("common", "full", ("common",))
         self._seed("gale", "full", ("gale",))

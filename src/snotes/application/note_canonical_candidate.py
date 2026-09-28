@@ -54,17 +54,26 @@ class CanonicalNoteCandidate:
     operation_type: str
 
 
-def apply_exact_markdown_edits(before_markdown: str, edits: object) -> str:
-    """Apply nonoverlapping, unique literal matches against the original body."""
-    if not isinstance(before_markdown, str) or not isinstance(edits, list) or not edits:
+def validate_exact_markdown_edits(edits: object) -> list[tuple[str, str]]:
+    if not isinstance(edits, list) or not edits:
         raise ValueError("修改提案必须包含至少一组有效的 Markdown 替换。")
-    matches: list[tuple[int, int, str]] = []
+    validated: list[tuple[str, str]] = []
     for edit in edits:
         if not isinstance(edit, dict) or set(edit) != {"old_markdown", "new_markdown"}:
             raise ValueError("每组修改必须只包含 old_markdown 和 new_markdown。")
         old, new = edit["old_markdown"], edit["new_markdown"]
         if not isinstance(old, str) or not old or not isinstance(new, str):
             raise ValueError("old_markdown 必须非空，new_markdown 必须为字符串。")
+        validated.append((old, new))
+    return validated
+
+
+def apply_exact_markdown_edits(before_markdown: str, edits: object) -> str:
+    """Apply nonoverlapping, unique literal matches against the original body."""
+    if not isinstance(before_markdown, str):
+        raise ValueError("修改提案必须包含至少一组有效的 Markdown 替换。")
+    matches: list[tuple[int, int, str]] = []
+    for old, new in validate_exact_markdown_edits(edits):
         if old == before_markdown:
             raise ValueError("不支持整篇正文替换；请选择较小的精确片段。")
         start = before_markdown.find(old)
@@ -92,16 +101,9 @@ def build_canonical_edit_candidate(
     before_markdown: str,
     edits: object,
     *,
-    canonicalize: Callable[[str], str] | None = None,
+    canonicalize: Callable[[str], str],
 ) -> CanonicalNoteCandidate:
     raw_candidate = apply_exact_markdown_edits(before_markdown, edits)
-    if canonicalize is None:
-        from src.snotes.ui.markdown_canonicalizer import MarkdownCanonicalizer
-
-        with MarkdownCanonicalizer() as milkdown:
-            return build_canonical_edit_candidate(
-                before_markdown, edits, canonicalize=milkdown.canonicalize_markdown
-            )
     canonical_before = canonicalize(before_markdown)
     final_markdown = canonicalize(raw_candidate)
     if not final_markdown.strip():
@@ -114,14 +116,13 @@ def build_canonical_edit_candidate(
     )
 
 
-def canonicalize_new_note(markdown: str) -> str:
+def canonicalize_new_note(
+    markdown: str, *, canonicalize: Callable[[str], str]
+) -> str:
     """Canonicalize a new AI body before any formal note is inserted."""
     if not isinstance(markdown, str):
         raise TypeError("Markdown body must be a string")
-    from src.snotes.ui.markdown_canonicalizer import MarkdownCanonicalizer
-
-    with MarkdownCanonicalizer() as milkdown:
-        return milkdown.canonicalize_markdown(markdown)
+    return canonicalize(markdown)
 
 
 def build_canonical_note_candidate(
@@ -129,7 +130,7 @@ def build_canonical_note_candidate(
     addition_markdown: str,
     operation_type: str = "append",
     *,
-    canonicalize: Callable[[str], str] | None = None,
+    canonicalize: Callable[[str], str],
 ) -> CanonicalNoteCandidate:
     """Return the Milkdown fixed point for a full append/prepend candidate.
 
@@ -143,18 +144,6 @@ def build_canonical_note_candidate(
         raise TypeError("Markdown bodies must be strings")
     if not addition_markdown:
         raise ValueError("追加内容不能为空。")
-    if canonicalize is None:
-        # One offscreen Milkdown session handles the old body and full candidate.
-        from src.snotes.ui.markdown_canonicalizer import MarkdownCanonicalizer
-
-        with MarkdownCanonicalizer() as milkdown:
-            return build_canonical_note_candidate(
-                before_markdown,
-                addition_markdown,
-                operation_type,
-                canonicalize=milkdown.canonicalize_markdown,
-            )
-
     separator = "\n\n" if before_markdown else ""
     if operation_type == "append":
         candidate = before_markdown + separator + addition_markdown

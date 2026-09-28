@@ -24,6 +24,8 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 from src.snotes.transport.mcp.tools import LocalMcpToolAdapter
 
 
@@ -42,10 +44,12 @@ class OperationResultCompatibilityTests(unittest.TestCase):
         self.notes = NoteService(notes)
         metadata = AiAccessMetadataService(notes)
         self.operations = SQLiteAiMcpOperationRepository(self.connections, tags)
+        self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories, tags),
             notes=self.notes, tags=TagService(tags), ai_metadata=metadata,
             mcp_operations=self.operations,
+            canonicalizer=self.canonicalizer,
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot", notes=self.notes,

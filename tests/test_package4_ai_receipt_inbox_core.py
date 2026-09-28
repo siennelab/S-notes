@@ -23,6 +23,8 @@ from src.snotes.storage.repositories.directories import SQLiteDirectoriesReposit
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class DeterministicUuidFactory:
@@ -88,12 +90,14 @@ class Package4AiReceiptInboxCoreTests(unittest.TestCase):
             tags_repository,
             uuid_factory=DeterministicUuidFactory(180),
         )
+        self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             receipt_repository,
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
+            canonicalizer=self.canonicalizer,
         )
         created = self.notes.create_note(NoteLocation("项目", "虚构"))
         self.note = self.notes.save_note(

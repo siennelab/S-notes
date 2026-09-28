@@ -30,6 +30,8 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
+from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 from tests.test_package5_local_mcp_protocol import (
     CLAWDE_NOTE_TOOLS,
     CLAWDE_REMINDER_TOOLS,
@@ -72,6 +74,7 @@ class YanMcpIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.connections,
                 self.tags_repository,
             ),
+            canonicalizer=CanonicalizerTestDouble(canonicalize_markdown),
         )
         self.note_ids = {
             "common": self._seed_note("Common visible", "common body", "full", ("common",)),

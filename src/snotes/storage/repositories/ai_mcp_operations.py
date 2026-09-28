@@ -8,43 +8,23 @@ from collections.abc import Mapping, Sequence
 
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
+    AiNoteFingerprint,
     AiTargetCatalogEntry,
 )
-from src.snotes.application.ai_actor_registry import resolve_target_id
-from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
-from src.snotes.application.notes_operation_result import (
+from src.snotes.domain.notes_operation_result import (
     deserialize_operation_result_json,
     notes_operation_result as _result,
     serialize_notes_operation_result,
 )
-from src.snotes.application.note_canonical_candidate import (
-    apply_exact_markdown_edits,
-    build_canonical_edit_candidate,
-)
-from src.snotes.application.ai_safe_read_service import (
-    AI_VISIBILITY_FULL,
-    AI_VISIBILITY_HIDDEN,
-    is_actor_authorized,
-    normalize_ai_visibility,
-)
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
-from src.snotes.domain.models import DEFAULT_SUB_CATEGORY, NoteLocation
+from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.ai_metadata import (
     replace_note_ai_targets,
     sync_ai_target_catalog,
 )
 from src.snotes.storage.connection import SQLiteConnectionFactory
-from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.support import next_note_updated_at, timestamp_seconds
-
-
-CREATE_CONFIRMATION_KEY = "ai_create_requires_confirmation"
-MODIFY_CONFIRMATION_KEY = "ai_modify_requires_confirmation"
-DEFAULT_CONFIRMATION = {
-    CREATE_CONFIRMATION_KEY: False,
-    MODIFY_CONFIRMATION_KEY: True,
-}
 
 
 class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
@@ -58,18 +38,13 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         self.connections = connections
         self.tags = tags
 
-    def confirmation_required(self, operation_type: str) -> bool:
-        key = (
-            CREATE_CONFIRMATION_KEY
-            if operation_type == "create"
-            else MODIFY_CONFIRMATION_KEY
-        )
+    def confirmation_setting(self, setting_key: str) -> bool | None:
         with self.connections.read() as connection:
             row = connection.execute(
                 "SELECT setting_value FROM app_settings WHERE setting_key = ?",
-                (key,),
+                (setting_key,),
             ).fetchone()
-        return DEFAULT_CONFIRMATION[key] if row is None else row["setting_value"] == "1"
+        return None if row is None else row["setting_value"] == "1"
 
     def get_operation(
         self,
@@ -201,13 +176,12 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         directory_id: int | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
+        expected_note_fingerprint: AiNoteFingerprint | None = None,
     ) -> dict:
         if operation_type in {"append", "prepend", "edit"} and (
             canonical_markdown is None or expected_content_markdown is None
         ):
             raise ValueError("正文写入缺少 canonical 候选或原正文校验。")
-        if operation_type == "edit" and (edits is None or raw_candidate_markdown is None):
-            raise ValueError("正文修改缺少精确替换候选。")
         with self.connections.write() as connection:
             existing = self._operation_from_connection(connection, request_id)
             if existing is not None:
@@ -232,6 +206,11 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             ) or (
                 operation_type in {"append", "prepend", "edit"}
                 and str(note["content_markdown"]) != expected_content_markdown
+            ) or (
+                expected_note_fingerprint is not None
+                and not self._fingerprint_matches(
+                    connection, expected_note_fingerprint, note
+                )
             ):
                 result = _result(
                     "conflict", request_id, note_id, str(note["title"]),
@@ -241,33 +220,6 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                     connection, actor_target_id, operation_type, result
                 )
                 return result
-
-            if operation_type == "edit":
-                if not self._actor_can_edit_note(connection, note, actor_target_id):
-                    result = _result(
-                        "not_found", request_id, note_id, "", "direct", False,
-                        False, "未找到笔记。",
-                    )
-                    self._store_operation(connection, actor_target_id, operation_type, result)
-                    return result
-                try:
-                    current_candidate = apply_exact_markdown_edits(
-                        str(note["content_markdown"]), edits
-                    )
-                except (TypeError, ValueError) as error:
-                    result = _result(
-                        "rejected", request_id, note_id, str(note["title"]),
-                        "direct", False, False, str(error),
-                    )
-                    self._store_operation(connection, actor_target_id, operation_type, result)
-                    return result
-                if current_candidate != raw_candidate_markdown:
-                    result = _result(
-                        "conflict", request_id, note_id, str(note["title"]),
-                        "direct", False, False, "笔记已被更新。",
-                    )
-                    self._store_operation(connection, actor_target_id, operation_type, result)
-                    return result
 
             result_title, _timestamp = self._apply_modification_in_connection(
                 connection, note, actor_target_id=actor_target_id,
@@ -291,43 +243,6 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             )
         return result
 
-    def accept_pending_append(
-        self,
-        *,
-        receipt_id: int,
-        addition_markdown: str,
-        accepted_body: str,
-        canonical_markdown: str,
-        expected_revision: int,
-        expected_content_markdown: str,
-    ) -> dict:
-        """Compatibility entry point; use the checked acceptance transaction."""
-        from types import SimpleNamespace
-
-        with self.connections.read() as connection:
-            row = connection.execute(
-                """
-                SELECT request_id, actor_target_id, operation_type,
-                       target_note_id, expected_updated_at, title, body
-                FROM ai_receipt_inbox WHERE id = ?
-                """,
-                (receipt_id,),
-            ).fetchone()
-        if row is None:
-            raise ValueError(f"AI 回执不存在: {receipt_id}")
-        if row["operation_type"] != "append":
-            raise ValueError("该回执不是末尾追加提案。")
-        expected = SimpleNamespace(**dict(row))
-        return self.accept_pending_modification(
-            receipt_id=receipt_id,
-            expected_receipt=expected,
-            expected_payload=self.pending_operation_payload(receipt_id),
-            accepted_body=accepted_body,
-            canonical_markdown=canonical_markdown,
-            expected_revision=expected_revision,
-            expected_content_markdown=expected_content_markdown,
-        )
-
     def pending_operation_payload(self, receipt_id: int) -> str | None:
         with self.connections.read() as connection:
             row = connection.execute(
@@ -344,18 +259,22 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         expected_payload: str | None,
         accepted_body: str | None = None,
         canonical_markdown: str | None = None,
-        raw_candidate_markdown: str | None = None,
-        expected_revision: int | None = None,
-        expected_content_markdown: str | None = None,
+        expected_note_fingerprint: AiNoteFingerprint | None = None,
+        expected_directory_id: int | None = None,
+        expected_directory_fingerprints: Sequence[AiNoteFingerprint] = (),
+        desired_title: str | None = None,
+        location: NoteLocation | None = None,
+        tags: Sequence[str] | None = None,
+        outcome_status: str = "updated",
         failure_reason: str | None = None,
     ) -> dict:
-        """Recheck the proposal and current grants in the write transaction."""
+        """Atomically compare prepared snapshots and persist one decision."""
         with self.connections.write() as connection:
             receipt = connection.execute(
                 """
                 SELECT id, status, parse_status, request_id, actor_target_id,
                        operation_type, target_note_id, expected_updated_at,
-                       title, body, operation_payload
+                       title, body, operation_payload, updated_at
                 FROM ai_receipt_inbox WHERE id = ?
                 """,
                 (receipt_id,),
@@ -371,31 +290,27 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 int(receipt["target_note_id"])
                 if receipt["target_note_id"] is not None else None
             )
-            title = str(receipt["title"] or "")
+            receipt_title = str(receipt["title"] or "")
 
             def fail(status: str, reason: str) -> dict:
                 return self._finish_pending_modification(
                     connection, receipt, status=status, reason=reason,
-                    title=title, note_id=note_id,
+                    title=receipt_title, note_id=note_id,
                 )
 
-            if operation_type not in {"append", "prepend", "edit", "metadata"}:
-                return fail("rejected", "不支持的 AI 修改类型。")
             if (
-                receipt["parse_status"] != "parsed"
-                or request_id != expected_receipt.request_id
+                request_id != expected_receipt.request_id
+                or receipt["parse_status"] != expected_receipt.parse_status
                 or actor_target_id != expected_receipt.actor_target_id
                 or operation_type != expected_receipt.operation_type
                 or note_id != expected_receipt.target_note_id
                 or receipt["expected_updated_at"] != expected_receipt.expected_updated_at
-                or title != expected_receipt.title
+                or receipt_title != expected_receipt.title
                 or str(receipt["body"] or "") != expected_receipt.body
                 or receipt["operation_payload"] != expected_payload
+                or receipt["updated_at"] != expected_receipt.updated_at
             ):
                 return fail("conflict", "提案已被更新，请刷新后重试。")
-            if not request_id or not actor_target_id or note_id is None or not receipt["expected_updated_at"]:
-                return fail("rejected", "提案缺少必要的身份、目标或版本信息。")
-
             operation = connection.execute(
                 """
                 SELECT actor_target_id, operation_type, status, result_json
@@ -419,127 +334,50 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
             ):
                 return fail("conflict", "提案的操作记录已改变。")
 
+            if outcome_status != "updated":
+                return fail(outcome_status, failure_reason or "接受修改提案失败。")
+
             note = connection.execute(
                 "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
                 (note_id,),
             ).fetchone()
             if note is None:
                 return fail("rejected", "目标笔记不存在。")
-            can_modify = (
-                self._actor_can_edit_note(connection, note, actor_target_id)
-                if operation_type == "edit"
-                else self._actor_can_modify_note(connection, note, actor_target_id)
-            )
-            if not can_modify:
-                return fail("rejected", "当前 AI 身份已无权修改此笔记。")
             if str(note["updated_at"]) != str(receipt["expected_updated_at"]):
                 return fail("conflict", "笔记已被更新。")
-            if expected_revision is not None and int(note["revision"]) != expected_revision:
-                return fail("conflict", "笔记已被更新。")
-            if expected_content_markdown is not None and str(note["content_markdown"]) != expected_content_markdown:
+            if (
+                expected_note_fingerprint is None
+                or not self._fingerprint_matches(
+                    connection, expected_note_fingerprint, note
+                )
+            ):
                 return fail("conflict", "笔记已被更新。")
 
-            desired_title: str | None = None
-            directory_id: int | None = None
-            location: NoteLocation | None = None
-            tags: tuple[str, ...] | None = None
-            if operation_type == "metadata":
-                if expected_payload is None:
-                    return fail("rejected", "元数据提案内容不存在。")
-                try:
-                    changes = parse_pending_metadata_payload(expected_payload)
-                except ValueError as error:
-                    return fail("rejected", str(error))
-                desired_title = changes.get("title")
-                tags = changes.get("tags")
-                if "directory" in changes:
-                    location = NoteLocation(*changes["directory"])
-                    directory_id = self._active_location_id(connection, location)
-                    if directory_id is None or not self._actor_can_use_directory(
-                        connection, directory_id, actor_target_id
-                    ):
-                        return fail("rejected", "目标目录不可用；只能选择当前身份可见的已有目录。")
-            else:
-                if expected_payload is None:
-                    return fail("rejected", "正文提案内容不存在。")
-                try:
-                    payload = json.loads(expected_payload)
-                except (TypeError, ValueError):
-                    payload = None
-                if operation_type == "edit":
-                    if not isinstance(payload, dict) or set(payload) != {"edits"}:
-                        return fail("rejected", "正文修改提案内容无效。")
-                    try:
-                        current_candidate = apply_exact_markdown_edits(
-                            str(note["content_markdown"]), payload["edits"]
-                        )
-                    except (TypeError, ValueError) as error:
-                        return fail("rejected", str(error))
-                    if (
-                        raw_candidate_markdown is not None
-                        and current_candidate != raw_candidate_markdown
-                    ):
-                        return fail("conflict", "笔记已被更新。")
-                    if failure_reason:
-                        return fail("rejected", failure_reason)
-                    from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
-
-                    try:
-                        transaction_candidate = build_canonical_edit_candidate(
-                            str(note["content_markdown"]), payload["edits"]
-                        )
-                    except (CanonicalizationError, TypeError, ValueError):
-                        return fail("rejected", "无法生成稳定的 Markdown 正文。")
-                    if (
-                        canonical_markdown is not None
-                        and transaction_candidate.final_markdown != canonical_markdown
-                    ):
-                        return fail("conflict", "提案预览已改变，请刷新后重试。")
-                    canonical_markdown = transaction_candidate.final_markdown
-                    current_note = connection.execute(
+            if location is not None:
+                directory = connection.execute(
+                    "SELECT id FROM directories WHERE id = ? AND is_deleted = 0",
+                    (expected_directory_id,),
+                ).fetchone()
+                if directory is None or not expected_directory_fingerprints:
+                    return fail("conflict", "目标目录已被更新，请刷新后重试。")
+                for fingerprint in expected_directory_fingerprints:
+                    witness = connection.execute(
                         "SELECT * FROM notes WHERE id = ? AND is_deleted = 0",
-                        (note_id,),
-                    ).fetchone()
-                    current_receipt = connection.execute(
-                        "SELECT status, operation_payload FROM ai_receipt_inbox WHERE id = ?",
-                        (receipt_id,),
+                        (fingerprint.note_id,),
                     ).fetchone()
                     if (
-                        current_note is None
-                        or not _note_version_matches(
-                            current_note,
-                            expected_revision=int(note["revision"]),
-                            expected_updated_at=str(note["updated_at"]),
-                        )
-                        or str(current_note["content_markdown"]) != str(note["content_markdown"])
-                        or not self._actor_can_edit_note(
-                            connection, current_note, actor_target_id
-                        )
-                        or current_receipt is None
-                        or current_receipt["status"] != "pending"
-                        or current_receipt["operation_payload"] != expected_payload
+                        witness is None
+                        or fingerprint.directory_id != expected_directory_id
+                        or not self._fingerprint_matches(connection, fingerprint, witness)
                     ):
-                        return fail("conflict", "提案或笔记已被更新，请刷新后重试。")
-                elif (
-                    not isinstance(payload, dict)
-                    or set(payload) != {"content"}
-                    or not isinstance(payload["content"], str)
-                    or not payload["content"]
-                    or not isinstance(accepted_body, str)
-                    or not accepted_body
-                ):
-                    return fail("rejected", "正文提案内容无效。")
-                if failure_reason or not isinstance(canonical_markdown, str) or not canonical_markdown.strip():
-                    return fail("rejected", failure_reason or "无法生成稳定的 Markdown 正文。")
-                if expected_revision is None or expected_content_markdown is None:
-                    return fail("conflict", "笔记已被更新。")
+                        return fail("conflict", "目标目录已被更新，请刷新后重试。")
 
             result_title, timestamp = self._apply_modification_in_connection(
                 connection, note, actor_target_id=actor_target_id,
                 request_id=request_id, operation_type=operation_type,
                 expected_revision=int(note["revision"]),
                 canonical_markdown=canonical_markdown,
-                title=desired_title, directory_id=directory_id,
+                title=desired_title, directory_id=expected_directory_id,
                 location=location, tags=tags,
                 handling_mode="human_approved",
             )
@@ -718,47 +556,29 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
         return result_title, timestamp
 
     @staticmethod
-    def _actor_can_modify_note(connection, note, actor_target_id: str) -> bool:
-        actor_id = resolve_target_id(actor_target_id)
-        targets = tuple(
-            str(row["target_id"])
-            for row in connection.execute(
-                "SELECT target_id FROM note_ai_targets WHERE note_id = ?",
-                (note["id"],),
-            ).fetchall()
-        )
-        return (
-            normalize_ai_visibility(note["ai_visibility"]) != AI_VISIBILITY_HIDDEN
-            and is_actor_authorized(actor_id, targets)
-        )
-
-    @classmethod
-    def _actor_can_edit_note(cls, connection, note, actor_target_id: str) -> bool:
-        return (
-            normalize_ai_visibility(note["ai_visibility"]) == AI_VISIBILITY_FULL
-            and cls._actor_can_modify_note(connection, note, actor_target_id)
-        )
-
-    @classmethod
-    def _actor_can_use_directory(
-        cls, connection, directory_id: int, actor_target_id: str
+    def _fingerprint_matches(
+        connection,
+        expected: AiNoteFingerprint,
+        note,
     ) -> bool:
-        rows = connection.execute(
-            "SELECT * FROM notes WHERE directory_id = ? AND is_deleted = 0",
-            (directory_id,),
-        ).fetchall()
-        return any(
-            cls._actor_can_modify_note(connection, row, actor_target_id)
-            for row in rows
+        target_ids = tuple(
+            sorted(
+                str(row["target_id"])
+                for row in connection.execute(
+                    "SELECT target_id FROM note_ai_targets WHERE note_id = ?",
+                    (expected.note_id,),
+                ).fetchall()
+            )
         )
-
-    def _active_location_id(self, connection, location: NoteLocation) -> int | None:
-        directories = SQLiteDirectoriesRepository(self.connections)
-        main, sub = location.values()
-        main_id = directories.find_active(connection, main, None)
-        if main_id is None:
-            return None
-        return main_id if sub == DEFAULT_SUB_CATEGORY else directories.find_active(connection, sub, main_id)
+        return (
+            int(note["id"]) == expected.note_id
+            and int(note["revision"]) == expected.revision
+            and str(note["updated_at"]) == expected.updated_at
+            and str(note["content_markdown"]) == expected.content_markdown
+            and str(note["ai_visibility"]) == expected.ai_visibility
+            and target_ids == expected.target_ids
+            and note["directory_id"] == expected.directory_id
+        )
 
     @staticmethod
     def _finish_pending_modification(

@@ -31,6 +31,7 @@ from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.ai_center_dialog import ReceiptInboxView
 from src.snotes.ui.markdown_canonicalizer import CanonicalizationError, MarkdownCanonicalizer
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class EditNoteTests(unittest.TestCase):
@@ -70,12 +71,16 @@ class EditNoteTests(unittest.TestCase):
         self.notes = NoteService(notes_repository)
         self.tags = TagService(tags_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.canonicalizer = CanonicalizerTestDouble(
+            lambda markdown: self._canonicalize(markdown)
+        )
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories, tags_repository),
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
+            canonicalizer=self.canonicalizer,
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot",
@@ -135,6 +140,11 @@ class EditNoteTests(unittest.TestCase):
         with MarkdownCanonicalizer() as milkdown:
             self.assertEqual(milkdown._serialize_once(body), body)
             self.assertEqual(milkdown.canonicalize_markdown(body), body)
+
+    @staticmethod
+    def _canonicalize(markdown):
+        with MarkdownCanonicalizer() as milkdown:
+            return milkdown.canonicalize_markdown(markdown)
 
     def test_conflict_outbound_query_and_retry_semantics(self):
         from src.snotes.transport.mcp.tools import _operation_response, _write_response
@@ -355,7 +365,8 @@ class EditNoteTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM ai_note_history WHERE note_id = ?", (before.id,),
             ).fetchone()[0]
         with patch.object(
-            MarkdownCanonicalizer, "canonicalize_markdown",
+            self.canonicalizer,
+            "canonicalize",
             side_effect=CanonicalizationError("fixture failure"),
         ):
             with self.assertRaises(ValueError):
@@ -449,7 +460,8 @@ class EditNoteTests(unittest.TestCase):
 
         state = self._formal_state()
         with patch.object(
-            MarkdownCanonicalizer, "canonicalize_markdown",
+            self.canonicalizer,
+            "canonicalize",
             side_effect=CanonicalizationError("fixture failure"),
         ):
             failed = self._edit(

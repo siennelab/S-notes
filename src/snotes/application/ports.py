@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -45,6 +46,25 @@ from src.snotes.domain.reminders import (
 
 AiTargetCatalogEntry = tuple[str, str, str, bool, bool]
 TagRecord = tuple[int, str]
+
+
+class CanonicalizationError(RuntimeError):
+    """The configured Markdown adapter could not prove a stable result."""
+
+
+class MarkdownCanonicalizer(Protocol):
+    def canonicalize_markdown(self, markdown: str) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AiNoteFingerprint:
+    note_id: int
+    revision: int
+    updated_at: str
+    content_markdown: str
+    ai_visibility: str
+    target_ids: tuple[str, ...]
+    directory_id: int | None
 
 
 class AiReceiptInboxRepository(Protocol):
@@ -314,7 +334,7 @@ class ReminderNotificationTransport(Protocol):
 class AiMcpOperationRepository(Protocol):
     """Atomic persistence used by the local-MCP application orchestration."""
 
-    def confirmation_required(self, operation_type: str) -> bool: ...
+    def confirmation_setting(self, setting_key: str) -> bool | None: ...
 
     def get_operation(
         self,
@@ -362,17 +382,7 @@ class AiMcpOperationRepository(Protocol):
         directory_id: int | None = None,
         location: NoteLocation | None = None,
         tags: Sequence[str] | None = None,
-    ) -> dict: ...
-
-    def accept_pending_append(
-        self,
-        *,
-        receipt_id: int,
-        addition_markdown: str,
-        accepted_body: str,
-        canonical_markdown: str,
-        expected_revision: int,
-        expected_content_markdown: str,
+        expected_note_fingerprint: AiNoteFingerprint | None = None,
     ) -> dict: ...
 
     def pending_operation_payload(self, receipt_id: int) -> str | None: ...
@@ -385,9 +395,13 @@ class AiMcpOperationRepository(Protocol):
         expected_payload: str | None,
         accepted_body: str | None = None,
         canonical_markdown: str | None = None,
-        raw_candidate_markdown: str | None = None,
-        expected_revision: int | None = None,
-        expected_content_markdown: str | None = None,
+        expected_note_fingerprint: AiNoteFingerprint | None = None,
+        expected_directory_id: int | None = None,
+        expected_directory_fingerprints: Sequence[AiNoteFingerprint] = (),
+        desired_title: str | None = None,
+        location: NoteLocation | None = None,
+        tags: Sequence[str] | None = None,
+        outcome_status: str = "updated",
         failure_reason: str | None = None,
     ) -> dict: ...
 

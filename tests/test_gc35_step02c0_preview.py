@@ -26,9 +26,9 @@ from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.ai_center_dialog import ReceiptCard
 from src.snotes.ui.markdown_canonicalizer import (
     CanonicalizationError,
-    MarkdownCanonicalizer,
     canonicalize_markdown,
 )
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class FinalCanonicalPreviewTests(unittest.TestCase):
@@ -62,12 +62,14 @@ class FinalCanonicalPreviewTests(unittest.TestCase):
         notes_repository = SQLiteNotesRepository(self.connections, directories)
         self.notes = NoteService(notes_repository)
         self.metadata = AiAccessMetadataService(notes_repository)
+        self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories, tags_repository),
             notes=self.notes,
             tags=TagService(tags_repository),
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
+            canonicalizer=self.canonicalizer,
         )
 
     def _pending_append(self, old: str, fragment: str = "- new"):
@@ -107,7 +109,11 @@ class FinalCanonicalPreviewTests(unittest.TestCase):
         self.assertEqual(preview.final_markdown, canonicalize_markdown(preview.final_markdown))
         self.assertEqual(
             preview.final_markdown,
-            build_canonical_note_candidate(note.content_markdown, "- new").final_markdown,
+            build_canonical_note_candidate(
+                note.content_markdown,
+                "- new",
+                canonicalize=canonicalize_markdown,
+            ).final_markdown,
         )
         self.assertIn("* new", preview.final_markdown)
         card = ReceiptCard(self.receipts.get_receipt(receipt_id), self.receipts, self.metadata)
@@ -160,8 +166,9 @@ class FinalCanonicalPreviewTests(unittest.TestCase):
     def test_canonicalizer_failure_returns_no_final_body_and_no_write(self) -> None:
         _note, receipt_id = self._pending_append("base\n")
         before_db = self._database_dump()
-        with patch(
-            "src.snotes.ui.markdown_canonicalizer.MarkdownCanonicalizer.canonicalize_markdown",
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
             side_effect=CanonicalizationError("fixture Milkdown failure"),
         ):
             with self.assertRaisesRegex(CanonicalizationError, "fixture Milkdown failure"):
@@ -182,8 +189,16 @@ class FinalCanonicalPreviewTests(unittest.TestCase):
 
     def test_builder_deterministic_and_preview_uses_edited_payload(self) -> None:
         note, receipt_id = self._pending_append("- old", "- original")
-        first = build_canonical_note_candidate(note.content_markdown, "- edited")
-        second = build_canonical_note_candidate(note.content_markdown, "- edited")
+        first = build_canonical_note_candidate(
+            note.content_markdown,
+            "- edited",
+            canonicalize=canonicalize_markdown,
+        )
+        second = build_canonical_note_candidate(
+            note.content_markdown,
+            "- edited",
+            canonicalize=canonicalize_markdown,
+        )
         preview = self.receipts.build_pending_note_preview(
             receipt_id, addition_markdown="- edited",
         )
@@ -198,23 +213,23 @@ class FinalCanonicalPreviewTests(unittest.TestCase):
 
     def test_note_change_during_canonicalization_is_rejected(self) -> None:
         note, receipt_id = self._pending_append("base\n")
-        original = MarkdownCanonicalizer.canonicalize_markdown
+        original = self.canonicalizer.canonicalize
 
-        def mutate_during_preview(canonicalizer: MarkdownCanonicalizer, markdown: str) -> str:
+        def mutate_during_preview(markdown: str) -> str:
             if markdown == note.content_markdown:
                 self.notes.save_note(
                     note.id, title="Changed while previewing",
                     content_markdown="changed\n", location=note.location,
                     expected_revision=note.revision,
                 )
-            return original(canonicalizer, markdown)
+            return original(markdown)
 
         # The injected canonicalizer simulates a concurrent save in Qt's
         # nested event loop, so the post-canonicalization read must reject it.
-        with patch(
-            "src.snotes.ui.markdown_canonicalizer.MarkdownCanonicalizer.canonicalize_markdown",
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
             side_effect=mutate_during_preview,
-            autospec=True,
         ):
             with self.assertRaisesRegex(ValueError, "提案或笔记已被更新"):
                 self.receipts.build_pending_note_preview(receipt_id)

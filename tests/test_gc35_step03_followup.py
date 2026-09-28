@@ -30,6 +30,8 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.ai_center_dialog import AiCenterDialog, ReceiptCard, ReceiptInboxView
+from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class Step03FollowupTests(unittest.TestCase):
@@ -65,12 +67,14 @@ class Step03FollowupTests(unittest.TestCase):
         self.notes = NoteService(note_repository)
         self.tags = TagService(tag_repository)
         self.metadata = AiAccessMetadataService(note_repository)
+        self.canonicalizer = CanonicalizerTestDouble(canonicalize_markdown)
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directory_repository, tag_repository),
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tag_repository),
+            canonicalizer=self.canonicalizer,
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot",

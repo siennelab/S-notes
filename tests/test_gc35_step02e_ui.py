@@ -30,6 +30,7 @@ from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.ai_center_dialog import ReceiptInboxView
 from src.snotes.ui.markdown_canonicalizer import CanonicalizationError, MarkdownCanonicalizer
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class PendingModificationUiTests(unittest.TestCase):
@@ -65,12 +66,16 @@ class PendingModificationUiTests(unittest.TestCase):
         self.notes = NoteService(note_repository)
         self.directories = DirectoryService(directory_repository)
         self.metadata = AiAccessMetadataService(note_repository)
+        self.canonicalizer = CanonicalizerTestDouble(
+            lambda markdown: self._canonicalize(markdown)
+        )
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directory_repository, tag_repository),
             notes=self.notes,
             tags=TagService(tag_repository),
             ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tag_repository),
+            canonicalizer=self.canonicalizer,
         )
         self.writes = LocalMcpWriteService(
             actor_target_id="clawbot",
@@ -87,6 +92,11 @@ class PendingModificationUiTests(unittest.TestCase):
                 "INSERT OR REPLACE INTO app_settings(setting_key, setting_value, updated_at) VALUES (?, ?, ?)",
                 ("ai_modify_requires_confirmation", "1", "2026-01-01T00:00:00"),
             )
+
+    @staticmethod
+    def _canonicalize(markdown: str) -> str:
+        with MarkdownCanonicalizer() as milkdown:
+            return milkdown.canonicalize_markdown(markdown)
 
     def _note(self, body: str = "base\n"):
         created = self.notes.create_note(NoteLocation("项目", "原分类"))
@@ -150,8 +160,8 @@ class PendingModificationUiTests(unittest.TestCase):
         receipt_id = self._proposal("prepend", note, request_id="ui-prepend-discard")
         view, card = self._view(receipt_id)
         with patch.object(
-            MarkdownCanonicalizer,
-            "canonicalize_markdown",
+            self.canonicalizer,
+            "canonicalize",
             side_effect=CanonicalizationError("fixture failure"),
         ):
             card.refresh_final_preview()

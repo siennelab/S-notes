@@ -30,6 +30,7 @@ from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.ui.markdown_canonicalizer import CanonicalizationError, MarkdownCanonicalizer
+from tests.canonicalizer_test_double import CanonicalizerTestDouble
 
 
 class Step02DInvariantTests(unittest.TestCase):
@@ -67,10 +68,14 @@ class Step02DInvariantTests(unittest.TestCase):
         self.metadata = AiAccessMetadataService(notes_repository)
         audit = AiAuditService(SQLiteAiAuditRepository(self.connections))
         safe_reads = AiSafeReadService(root / "unused-rules.json")
+        self.canonicalizer = CanonicalizerTestDouble(
+            lambda markdown: self._canonicalize(markdown)
+        )
         self.receipts = AiReceiptInboxService(
             SQLiteAiReceiptInboxRepository(self.connections, directories_repository, tags_repository),
             notes=self.notes, tags=self.tags, ai_metadata=self.metadata,
             mcp_operations=SQLiteAiMcpOperationRepository(self.connections, tags_repository),
+            canonicalizer=self.canonicalizer,
         )
         shared = dict(
             actor_target_id="clawbot", notes=self.notes,
@@ -93,6 +98,11 @@ class Step02DInvariantTests(unittest.TestCase):
     @staticmethod
     def _token(note: Note) -> str:
         return note_version_token(note.id, note.updated_at)
+
+    @staticmethod
+    def _canonicalize(markdown: str) -> str:
+        with MarkdownCanonicalizer() as milkdown:
+            return milkdown.canonicalize_markdown(markdown)
 
     def _snapshot(self):
         with self.connections.read() as connection:
@@ -207,8 +217,11 @@ class Step02DInvariantTests(unittest.TestCase):
     def test_canonicalizer_failure_leaves_notes_unchanged(self):
         before = self._existing()
         snapshot = self._snapshot()
-        with patch.object(MarkdownCanonicalizer, "canonicalize_markdown",
-                          side_effect=CanonicalizationError("fixture failure")):
+        with patch.object(
+            self.canonicalizer,
+            "canonicalize",
+            side_effect=CanonicalizationError("fixture failure"),
+        ):
             failed_create = self.writes.create_note(
                 request_id="failed-create", title="Fictional", content="- input",
             )

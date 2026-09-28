@@ -18,6 +18,7 @@ from src.snotes.application.note_canonical_candidate import (
     build_canonical_note_candidate,
     canonicalize_new_note,
 )
+from src.snotes.application.ai_pending_body import parse_pending_body_payload
 from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
 from src.snotes.application.ai_safe_read_service import (
     AI_VISIBILITY_FULL,
@@ -26,7 +27,10 @@ from src.snotes.application.ai_safe_read_service import (
 )
 from src.snotes.application.ports import (
     AiMcpOperationRepository,
+    AiNoteFingerprint,
     AiReceiptInboxRepository,
+    CanonicalizationError,
+    MarkdownCanonicalizer,
 )
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.ai_receipts import (
@@ -110,6 +114,14 @@ class StaleNoteProposalError(ValueError):
     """Preview is unavailable, but Accept must still record the version conflict."""
 
 
+CREATE_CONFIRMATION_KEY = "ai_create_requires_confirmation"
+MODIFY_CONFIRMATION_KEY = "ai_modify_requires_confirmation"
+DEFAULT_CONFIRMATION = {
+    CREATE_CONFIRMATION_KEY: False,
+    MODIFY_CONFIRMATION_KEY: True,
+}
+
+
 class AiReceiptInboxService:
     """Own frozen-R1 reads, create acceptance, discard, and deletion policy."""
 
@@ -121,12 +133,20 @@ class AiReceiptInboxService:
         tags: TagService | None = None,
         ai_metadata: AiAccessMetadataService | None = None,
         mcp_operations: AiMcpOperationRepository | None = None,
+        canonicalizer: MarkdownCanonicalizer | None = None,
     ) -> None:
         self._receipts = receipts
         self._notes = notes
         self._tags = tags
         self._ai_metadata = ai_metadata
         self._mcp_operations = mcp_operations
+        self._canonicalizer = canonicalizer
+
+    def canonicalize_markdown(self, markdown: str) -> str:
+        canonicalizer = self._canonicalizer
+        if canonicalizer is None:
+            raise RuntimeError("Markdown 规范化服务不可用。")
+        return canonicalizer.canonicalize_markdown(markdown)
 
     def list_pending_receipts(self) -> list[AiReceiptInboxItem]:
         return self._receipts.list_pending()
@@ -184,13 +204,18 @@ class AiReceiptInboxService:
             ):
                 raise ValueError("当前 AI 身份已无权修改此笔记。")
             edits = self.pending_note_edits(receipt_id)
-            candidate = build_canonical_edit_candidate(note.content_markdown, edits)
+            candidate = build_canonical_edit_candidate(
+                note.content_markdown,
+                edits,
+                canonicalize=self.canonicalize_markdown,
+            )
         else:
             addition = receipt.body if addition_markdown is None else addition_markdown
             candidate = build_canonical_note_candidate(
                 note.content_markdown,
                 addition,
                 receipt.operation_type,
+                canonicalize=self.canonicalize_markdown,
             )
 
         # Milkdown runs a nested Qt event loop. During that time the receipt or
@@ -224,24 +249,10 @@ class AiReceiptInboxService:
         if receipt is None or receipt.operation_type != "edit":
             raise ValueError("该回执不是正文修改提案。")
         raw = self._require_mcp_operations().pending_operation_payload(receipt_id)
-        try:
-            payload = json.loads(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            payload = None
-        if not isinstance(payload, dict) or set(payload) != {"edits"}:
+        if raw is None:
             raise ValueError("正文修改提案内容无效。")
-        edits = payload["edits"]
-        if not isinstance(edits, list) or not edits:
-            raise ValueError("正文修改提案内容无效。")
-        for edit in edits:
-            if (
-                not isinstance(edit, dict)
-                or set(edit) != {"old_markdown", "new_markdown"}
-                or not isinstance(edit["old_markdown"], str)
-                or not edit["old_markdown"]
-                or not isinstance(edit["new_markdown"], str)
-            ):
-                raise ValueError("正文修改提案内容无效。")
+        edits = parse_pending_body_payload(raw, "edit")
+        assert isinstance(edits, list)
         return edits
 
     def import_gale_submission(
@@ -259,7 +270,13 @@ class AiReceiptInboxService:
         """Keep local-MCP confirmation policy behind the receipt owner."""
         if required_by_profile:
             return True
-        return self._require_mcp_operations().confirmation_required(operation_type)
+        key = (
+            CREATE_CONFIRMATION_KEY
+            if operation_type == "create"
+            else MODIFY_CONFIRMATION_KEY
+        )
+        stored = self._require_mcp_operations().confirmation_setting(key)
+        return DEFAULT_CONFIRMATION[key] if stored is None else stored
 
     def mcp_get_operation(
         self,
@@ -285,9 +302,6 @@ class AiReceiptInboxService:
 
     def mcp_modify_direct(self, **values) -> dict:
         return self._require_mcp_operations().modify_direct(**values)
-
-    def mcp_accept_pending_append(self, **values) -> dict:
-        return self._require_mcp_operations().accept_pending_append(**values)
 
     def pending_metadata_changes(self, receipt_id: int) -> dict[str, object]:
         """Return only validated changes from the stored pending payload."""
@@ -356,6 +370,208 @@ class AiReceiptInboxService:
             ),
         )
 
+    def _note_fingerprint(self, note: Note) -> AiNoteFingerprint:
+        metadata = self._require_lifecycle_dependencies()[2].get_note_metadata(note.id)
+        return AiNoteFingerprint(
+            note_id=note.id,
+            revision=note.revision,
+            updated_at=note.updated_at,
+            content_markdown=note.content_markdown,
+            ai_visibility=note.ai_visibility,
+            target_ids=tuple(sorted(metadata.target_ids)),
+            directory_id=note.directory_id,
+        )
+
+    @staticmethod
+    def _fingerprint_can_accept(
+        fingerprint: AiNoteFingerprint,
+        actor_target_id: str,
+        *,
+        edit: bool,
+    ) -> bool:
+        visibility = normalize_ai_visibility(fingerprint.ai_visibility)
+        return (
+            (not edit or visibility == AI_VISIBILITY_FULL)
+            and visibility != "hidden"
+            and is_actor_authorized(
+                resolve_target_id(actor_target_id), fingerprint.target_ids
+            )
+        )
+
+    def _authorized_directory_witness(
+        self,
+        location: NoteLocation,
+        actor_target_id: str,
+    ) -> AiNoteFingerprint | None:
+        notes = self._require_lifecycle_dependencies()[0]
+        for note in notes.list_active_notes():
+            if note.location != location:
+                continue
+            fingerprint = self._note_fingerprint(note)
+            if self._fingerprint_can_accept(
+                fingerprint, actor_target_id, edit=False
+            ):
+                return fingerprint
+        return None
+
+    def _accept_pending_modification(
+        self,
+        receipt: AiReceiptInboxItem,
+        fields: AiReceiptAcceptFields,
+    ) -> dict:
+        notes, _tags, _metadata = self._require_lifecycle_dependencies()
+        operations = self._require_mcp_operations()
+        raw_payload = operations.pending_operation_payload(receipt.id)
+        operation_type = receipt.operation_type
+        accepted_body = fields.body if operation_type in {"append", "prepend"} else None
+        current_note = (
+            notes.get_note(receipt.target_note_id)
+            if receipt.target_note_id is not None
+            else None
+        )
+        outcome_status = "updated"
+        failure_reason: str | None = None
+        canonical_markdown: str | None = None
+        desired_title: str | None = None
+        location: NoteLocation | None = None
+        desired_tags: tuple[str, ...] | None = None
+        directory_id: int | None = None
+        directory_fingerprints: tuple[AiNoteFingerprint, ...] = ()
+        current_fingerprint = (
+            self._note_fingerprint(current_note) if current_note is not None else None
+        )
+
+        actor_id = resolve_target_id(receipt.actor_target_id)
+        if (
+            receipt.parse_status != "parsed"
+            or not receipt.request_id
+            or actor_id not in AI_ACTOR_IDS
+            or receipt.target_note_id is None
+            or not receipt.expected_updated_at
+        ):
+            outcome_status = "rejected"
+            failure_reason = "提案缺少必要的身份、目标或版本信息。"
+        elif current_note is None:
+            outcome_status = "rejected"
+            failure_reason = "目标笔记不存在。"
+        elif current_fingerprint is None or not self._fingerprint_can_accept(
+            current_fingerprint,
+            receipt.actor_target_id,
+            edit=operation_type == "edit",
+        ):
+            outcome_status = "rejected"
+            failure_reason = "当前 AI 身份已无权修改此笔记。"
+        elif current_note.updated_at != receipt.expected_updated_at:
+            outcome_status = "conflict"
+            failure_reason = "笔记已被更新。"
+        elif raw_payload is None:
+            outcome_status = "rejected"
+            failure_reason = (
+                "元数据提案内容不存在。"
+                if operation_type == "metadata"
+                else "正文提案内容不存在。"
+            )
+        else:
+            try:
+                if operation_type == "metadata":
+                    changes = parse_pending_metadata_payload(raw_payload)
+                    desired_title = changes.get("title")
+                    desired_tags = changes.get("tags")
+                    if "directory" in changes:
+                        location = NoteLocation(*changes["directory"])
+                        witness = self._authorized_directory_witness(
+                            location, receipt.actor_target_id
+                        )
+                        if witness is None:
+                            outcome_status = "rejected"
+                            failure_reason = "目标目录不可用；只能选择当前身份可见的已有目录。"
+                        else:
+                            directory_id = witness.directory_id
+                            directory_fingerprints = (witness,)
+                elif operation_type == "edit":
+                    edits = parse_pending_body_payload(raw_payload, operation_type)
+                    assert isinstance(edits, list)
+                    candidate = build_canonical_edit_candidate(
+                        current_note.content_markdown,
+                        edits,
+                        canonicalize=self.canonicalize_markdown,
+                    )
+                    canonical_markdown = candidate.final_markdown
+                else:
+                    parse_pending_body_payload(raw_payload, operation_type)
+                    candidate = build_canonical_note_candidate(
+                        current_note.content_markdown,
+                        accepted_body,
+                        operation_type,
+                        canonicalize=self.canonicalize_markdown,
+                    )
+                    canonical_markdown = candidate.final_markdown
+                if operation_type != "metadata" and not canonical_markdown.strip():
+                    raise CanonicalizationError("Empty canonical body")
+            except CanonicalizationError:
+                outcome_status = "rejected"
+                failure_reason = "无法生成稳定的 Markdown 正文。"
+            except (TypeError, ValueError) as error:
+                outcome_status = "rejected"
+                failure_reason = str(error)
+
+        # Canonicalization may run a nested Qt loop. Re-read every business
+        # input before handing a prepared commit to persistence.
+        latest_receipt = self._receipts.get(receipt.id)
+        latest_payload = operations.pending_operation_payload(receipt.id)
+        latest_note = (
+            notes.get_note(receipt.target_note_id)
+            if receipt.target_note_id is not None
+            else None
+        )
+        latest_fingerprint = (
+            self._note_fingerprint(latest_note) if latest_note is not None else None
+        )
+        expected_fingerprint = latest_fingerprint
+        if latest_receipt != receipt or latest_payload != raw_payload:
+            outcome_status = "conflict"
+            failure_reason = "提案已被更新，请刷新后重试。"
+            expected_fingerprint = (
+                current_fingerprint
+            )
+        elif latest_fingerprint is not None and not self._fingerprint_can_accept(
+            latest_fingerprint,
+            receipt.actor_target_id,
+            edit=operation_type == "edit",
+        ):
+            outcome_status = "rejected"
+            failure_reason = "当前 AI 身份已无权修改此笔记。"
+            expected_fingerprint = latest_fingerprint
+        elif current_note is not None and latest_note != current_note:
+            outcome_status = "conflict"
+            failure_reason = "笔记已被更新。"
+            expected_fingerprint = current_fingerprint
+        elif location is not None and outcome_status == "updated":
+            witness = self._authorized_directory_witness(location, receipt.actor_target_id)
+            if witness is None:
+                outcome_status = "rejected"
+                failure_reason = "目标目录不可用；只能选择当前身份可见的已有目录。"
+                directory_fingerprints = ()
+            else:
+                directory_id = witness.directory_id
+                directory_fingerprints = (witness,)
+
+        return operations.accept_pending_modification(
+            receipt_id=receipt.id,
+            expected_receipt=receipt,
+            expected_payload=raw_payload,
+            accepted_body=accepted_body,
+            canonical_markdown=canonical_markdown,
+            expected_note_fingerprint=expected_fingerprint,
+            expected_directory_id=directory_id,
+            expected_directory_fingerprints=directory_fingerprints,
+            desired_title=desired_title,
+            location=location,
+            tags=desired_tags,
+            outcome_status=outcome_status,
+            failure_reason=failure_reason,
+        )
+
     def accept_receipt(
         self,
         receipt_id: int,
@@ -383,53 +599,7 @@ class AiReceiptInboxService:
         if receipt.operation_type in {
             "append", "prepend", "edit", "metadata"
         }:
-            raw_payload = self._require_mcp_operations().pending_operation_payload(
-                receipt.id
-            )
-            current_note = (
-                notes.get_note(receipt.target_note_id)
-                if receipt.target_note_id is not None
-                else None
-            )
-            accepted_body = (
-                fields.body if receipt.operation_type in {"append", "prepend"}
-                else None
-            )
-            candidate = None
-            raw_candidate = None
-            failure_reason = None
-            if (
-                accepted_body is not None
-                and current_note is not None
-                and current_note.updated_at == receipt.expected_updated_at
-            ):
-                from src.snotes.ui.markdown_canonicalizer import CanonicalizationError
-
-                try:
-                    candidate = build_canonical_note_candidate(
-                        current_note.content_markdown,
-                        accepted_body,
-                        receipt.operation_type,
-                    )
-                except (CanonicalizationError, ValueError, TypeError):
-                    failure_reason = "无法生成稳定的 Markdown 正文。"
-            result = self._require_mcp_operations().accept_pending_modification(
-                receipt_id=receipt.id,
-                expected_receipt=receipt,
-                expected_payload=raw_payload,
-                accepted_body=accepted_body,
-                canonical_markdown=(
-                    candidate.final_markdown if candidate is not None else None
-                ),
-                raw_candidate_markdown=raw_candidate,
-                expected_revision=(
-                    current_note.revision if current_note is not None else None
-                ),
-                expected_content_markdown=(
-                    current_note.content_markdown if current_note is not None else None
-                ),
-                failure_reason=failure_reason,
-            )
+            result = self._accept_pending_modification(receipt, fields)
             if result["status"] != "updated":
                 raise ValueError(result.get("reason") or "接受修改提案失败。")
             persisted_receipt = self._receipts.get(receipt.id)
@@ -462,7 +632,10 @@ class AiReceiptInboxService:
 
         command = AiReceiptAcceptCommand(
             title=fields.title.strip() or "未命名 AI 回执",
-            content_markdown=canonicalize_new_note(fields.body),
+            content_markdown=canonicalize_new_note(
+                fields.body,
+                canonicalize=self.canonicalize_markdown,
+            ),
             location=location,
             tags=tags_value,
             visibility=visibility,

@@ -12,16 +12,13 @@ from uuid import uuid4
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, Qt
 from PySide6.QtWidgets import QApplication
 
+from src.snotes.application.ports import CanonicalizationError
 from src.snotes.ui.markdown_editor import BUNDLE, MarkdownEditorWidget
 
 
 MAX_PASSES = 4
 _WAIT_SECONDS = 30
 _OWNED_APP: QApplication | None = None
-
-
-class CanonicalizationError(RuntimeError):
-    """Milkdown could not produce a proven stable canonical Markdown value."""
 
 
 class MarkdownCanonicalizer:
