@@ -1,0 +1,5 @@
+# BEGIN S-NOTES STEP06 REMINDER
+reminder.ke-den.de {
+	reverse_proxy 127.0.0.1:8766
+}
+# END S-NOTES STEP06 REMINDER

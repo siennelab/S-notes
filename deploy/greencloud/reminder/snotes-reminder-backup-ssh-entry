@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# This key is exclusively a no-argument stream of reminder-latest.db.
+if [ -n "${SSH_ORIGINAL_COMMAND-}" ]; then
+    printf '%s\n' '{"status":"error","reason":"command_rejected"}' >&2
+    exit 64
+fi
+
+exec /usr/bin/sudo -n -u snotes -- /usr/local/sbin/snotes-reminder-backup-export

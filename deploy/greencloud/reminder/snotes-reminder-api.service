@@ -1,0 +1,36 @@
+[Unit]
+Description=S-notes Reminder staging API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=snotes
+Group=snotes
+WorkingDirectory=/srv/snotes/reminder-runtime
+Environment=HOME=/srv/snotes
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=reminder-api.json:/root/greencloud-secrets/reminder-api.json
+LoadCredential=reminder-ntfy-token:/root/greencloud-secrets/reminder-ntfy-token
+ExecStart=/srv/snotes/runtime/.venv/bin/python -B -m src.reminder_cloud serve
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/snotes/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
