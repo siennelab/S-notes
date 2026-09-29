@@ -190,9 +190,17 @@ def _credential_bytes(name: str, *, limit: int) -> bytes:
         raise RuntimeError(f"credential_unavailable:{name}") from error
     try:
         metadata = os.fstat(descriptor)
+        systemd_managed = (
+            directory.parent == Path('/run/credentials')
+            and directory.lstat().st_uid == 0
+            and not directory.is_symlink()
+            and stat.S_IMODE(directory.stat().st_mode) == 0o550
+            and metadata.st_uid == 0 and metadata.st_gid == 0
+            and stat.S_IMODE(metadata.st_mode) == 0o440
+        )
         if (
             not stat.S_ISREG(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) not in {0o400, 0o600}
+            or (stat.S_IMODE(metadata.st_mode) not in {0o400, 0o600} and not systemd_managed)
             or metadata.st_uid not in {0, os.geteuid()}
             or metadata.st_size > limit
         ):
