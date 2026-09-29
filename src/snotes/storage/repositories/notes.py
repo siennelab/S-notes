@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
+
+from src.snotes.domain.actor_mirror import ActorMirrorError
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
@@ -92,6 +95,7 @@ class SQLiteNotesRepository(NotesRepository):
     def list_active_with_ai_access(self) -> list[tuple[Note, tuple[str, ...]]]:
         """Read active notes and their persisted grants in one read snapshot."""
         with self.connections.read() as connection:
+            connection.execute("BEGIN")
             rows = connection.execute(
                 NOTE_SELECT
                 + " WHERE is_deleted = 0 ORDER BY updated_at DESC, id DESC"
@@ -101,6 +105,14 @@ class SQLiteNotesRepository(NotesRepository):
                 note = note_from_row(row)
                 result.append((note, self._read_ai_target_ids(connection, note.id)))
         return result
+
+    def validate_mirror_output(self, output_path: Path) -> None:
+        source = self.connections.database_path
+        output = Path(output_path)
+        if output.resolve() == source.resolve() or (
+            output.exists() and output.samefile(source)
+        ):
+            raise ActorMirrorError("source_output_same_file")
 
     def source_schema(self) -> str:
         with self.connections.read() as connection:

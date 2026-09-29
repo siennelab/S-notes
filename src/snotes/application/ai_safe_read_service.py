@@ -107,6 +107,17 @@ class AiSafeReadService:
         actor_id = _validated_actor(actor)
         return self._read_materialized(actor_id, source, allow_common=False)
 
+    def read_markdown_note(
+        self, actor: object, source: AiSafeReadSource,
+    ) -> AiSafeReadResult | None:
+        """Authorize, render canonical Markdown once, then apply existing redaction."""
+        from src.snotes.domain.markdown import markdown_to_plain_text
+
+        return self._read_materialized(
+            _validated_actor(actor), source, allow_common=False,
+            body_renderer=markdown_to_plain_text,
+        )
+
     def read_for_export_target(
         self,
         target: object,
@@ -124,6 +135,7 @@ class AiSafeReadService:
         source: AiSafeReadSource,
         *,
         allow_common: bool,
+        body_renderer: BodyRenderer | None = None,
     ) -> AiSafeReadResult | None:
         visibility = normalize_ai_visibility(source.visibility)
         authorized = (
@@ -145,7 +157,7 @@ class AiSafeReadService:
                 self._redaction_rules_path
             ).replacements
 
-        rendered_content = self._body_renderer(source.content)
+        rendered_content = (body_renderer or self._body_renderer)(source.content)
         title = source.title
         directory = source.directory
         tags = tuple(source.tags)

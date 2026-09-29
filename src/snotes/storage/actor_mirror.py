@@ -7,6 +7,7 @@ mirror: safe Markdown is a GreenCloud-only field.
 from __future__ import annotations
 
 import hashlib
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -138,9 +139,14 @@ def verify_actor_mirror(path: Path, *, expected_actor: str, expected_note_count:
         connection.execute("PRAGMA query_only=ON")
         if [row[0] for row in connection.execute("PRAGMA integrity_check")] != ["ok"]:
             raise ActorMirrorError("integrity_check_failed")
-        schema = connection.execute("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall()
-        tables = {row["name"] for row in schema if row["type"] == "table"}
-        if tables != REQUIRED_TABLES:
+        # Compare SQLite's complete stored DDL against this contract, including
+        # columns, types, CHECK/UNIQUE/PK constraints, indexes and FTS shadows.
+        # Building the reference with the same engine avoids FTS version drift.
+        with closing(sqlite3.connect(":memory:")) as reference:
+            reference.executescript(SCHEMA)
+            query = "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+            expected = [tuple(row) for row in reference.execute(query)]
+        if [tuple(row) for row in connection.execute(query)] != expected:
             raise ActorMirrorError("schema_mismatch")
         metadata = {row["meta_key"]: row["meta_value"] for row in connection.execute("SELECT * FROM mirror_metadata")}
         if set(metadata) != REQUIRED_METADATA or metadata["mirror_schema_version"] != ACTOR_MIRROR_SCHEMA_VERSION:
@@ -149,6 +155,8 @@ def verify_actor_mirror(path: Path, *, expected_actor: str, expected_note_count:
             raise ActorMirrorError("target_actor_mismatch")
         if metadata["markdown_dialect"] != "snotes-markdown-v1" or not metadata["generated_at"]:
             raise ActorMirrorError("metadata_invalid")
+        if metadata["source_schema"] != "snotes-markdown-v1":
+            raise ActorMirrorError("source_schema_mismatch")
         notes = [dict(row) for row in connection.execute("SELECT * FROM mirror_notes ORDER BY mirror_note_id")]
         fts_count = int(connection.execute("SELECT COUNT(*) FROM mirror_notes_fts").fetchone()[0])
         if len(notes) != fts_count or int(metadata["note_count"]) != len(notes):

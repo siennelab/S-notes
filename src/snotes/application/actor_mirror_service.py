@@ -14,16 +14,15 @@ from src.snotes.application.ai_safe_read_service import (
 )
 from src.snotes.application.local_mcp_write_service import note_version_token
 from src.snotes.domain.actor_mirror import ACTOR_MIRROR_DIALECT, ActorMirrorError, ActorMirrorRecord
-from src.snotes.domain.markdown import markdown_to_plain_text
 from src.snotes.domain.tags import parse_tags
-from src.snotes.application.ports import ActorMirrorWriter
+from src.snotes.application.ports import ActorMirrorWriter, ActorMirrorSource
 
 
 SUPPORTED_ACTORS = ("claude-code", "clawbot")
 
 
 class ActorMirrorService:
-    def __init__(self, notes, safe_reads: AiSafeReadService, writer: ActorMirrorWriter) -> None:
+    def __init__(self, notes: ActorMirrorSource, safe_reads: AiSafeReadService, writer: ActorMirrorWriter) -> None:
         self._notes = notes
         self._safe_reads = safe_reads
         self._writer = writer
@@ -33,6 +32,7 @@ class ActorMirrorService:
         definition = target_definition(actor_id)
         if actor_id not in AI_ACTOR_IDS or definition is None:
             raise ActorMirrorError("unknown_actor")
+        self._notes.validate_mirror_output(Path(output_path))
         source_schema = self._notes.source_schema()
         records: list[ActorMirrorRecord] = []
         for note, target_ids in self._notes.list_active_with_ai_access():
@@ -42,33 +42,13 @@ class ActorMirrorService:
                 directory=" / ".join(note.location.values()), tags=tuple(parse_tags(note.tags)),
             )
             try:
-                safe = self._safe_reads.read_for_export_target(actor_id, source)
+                safe = self._safe_reads.read_markdown_note(actor_id, source)
             except RedactionUnavailableError as error:
                 raise ActorMirrorError("redaction_rules_unavailable") from error
             if safe is None:
                 continue
-            plain = markdown_to_plain_text(note.content_markdown)
-            if safe.visibility == AI_VISIBILITY_FULL:
-                safe_text = plain
-                safe_markdown = note.content_markdown
-            elif safe.visibility == AI_VISIBILITY_REDACTED:
-                # AiSafeReadService receives this note's plain-text body, so the
-                # exact existing Mac redaction policy applies to safe_text.
-                redacted = self._safe_reads.read_for_export_target(
-                    actor_id,
-                    AiSafeReadSource(
-                        note_id=note.id, title=note.title, content=plain,
-                        visibility=note.ai_visibility, targets=target_ids,
-                        directory=" / ".join(note.location.values()), tags=tuple(parse_tags(note.tags)),
-                    ),
-                )
-                if redacted is None or redacted.visibility != AI_VISIBILITY_REDACTED:
-                    continue
-                safe_text = redacted.content
-                safe_markdown = None
-                safe = redacted
-            else:
-                continue
+            safe_text = safe.content
+            safe_markdown = note.content_markdown if safe.visibility == AI_VISIBILITY_FULL else None
             records.append(ActorMirrorRecord(
                 source_note_id=note.id, title=safe.title, safe_text=safe_text,
                 safe_markdown=safe_markdown, directory=safe.directory, tags=safe.tags,
