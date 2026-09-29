@@ -30,7 +30,9 @@ find /srv/snotes/runtime -type d -exec chmod 0755 {} +
 find /srv/snotes/runtime -type f -exec chmod 0644 {} +
 python3 -m venv /srv/snotes/runtime/.venv
 /srv/snotes/runtime/.venv/bin/python -m pip --disable-pip-version-check install 'mcp==1.28.1'
+/srv/snotes/runtime/.venv/bin/python -m pip freeze > /srv/snotes/runtime/requirements-installed.txt
 chmod -R go+rX /srv/snotes/runtime
+install -o root -g root -m 0644 deploy/greencloud/INSTALL.md /srv/snotes/INSTALL.md
 install -o root -g root -m 0755 deploy/greencloud/snotes-cloud-read /usr/local/bin/snotes-cloud-read
 install -o root -g root -m 0755 deploy/greencloud/snotes-mirror-ssh-entry /usr/local/sbin/snotes-mirror-ssh-entry
 install -o root -g root -m 0755 deploy/greencloud/snotes-mirror-receiver /usr/local/sbin/snotes-mirror-receiver
