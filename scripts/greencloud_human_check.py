@@ -14,6 +14,8 @@ from src.actor_mirror_publish import main as publish
 from src.app_paths import DEFAULT_PATHS
 from src.snotes.storage.connection import SQLiteConnectionFactory
 
+PREVIEW_CHARS = 100
+
 
 class TitleLookupError(ValueError):
     def __init__(self, code: str, candidates: list[dict] | None = None):
@@ -57,7 +59,21 @@ async def read_note(note_id: int) -> None:
                 payload = result.structuredContent
                 if payload is None:
                     payload = json.loads(result.content[0].text)
-                print(f"\n{user}:\n{json.dumps(payload, ensure_ascii=False, indent=2)}")
+                print(f"\n{summarize_note(user, payload)}")
+
+
+def summarize_note(user: str, payload: dict) -> str:
+    """Gate summary: metadata plus a short single-line preview, never the full body."""
+    lines = [f"actor={user}"]
+    for key in ("status", "note_id", "title", "version", "updated_at", "visibility", "reason"):
+        if key in payload:
+            lines.append(f"{key}={payload[key]}")
+    if "safe_text" in payload:
+        text = str(payload["safe_text"])
+        preview = " ".join(text[:PREVIEW_CHARS].split())
+        lines.append(f"safe_text_length={len(text)}")
+        lines.append(f"preview={preview}{'…' if len(text) > PREVIEW_CHARS else ''}")
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:

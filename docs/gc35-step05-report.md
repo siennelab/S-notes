@@ -200,7 +200,8 @@ Non-blocking maintenance notes, intentionally not implemented:
    `e85d7ed`; INSTALL.md, the fixed rollback and `requirements-installed.txt`
    were added after first install; `/srv/snotes/rollback-step05.pre-closeout.sh`
    is superseded and must not be run.
-3. Human check prints full `get_note` payloads and carries its own common
-   eligibility SQL (script-only).
+3. Human check output — CLOSED on main: it now prints per-actor metadata,
+   `safe_text_length` and a 100-character preview instead of full `get_note`
+   payloads. Its script-only common eligibility SQL is kept as-is.
 4. Cloud reader does not re-assert mirror `target_actor` (receiver validation
    and OS group permissions already enforce it; defense-in-depth only).

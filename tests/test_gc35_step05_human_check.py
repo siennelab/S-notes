@@ -1,10 +1,15 @@
-"""Small fictional-data check for the human gate's script-only title lookup."""
+"""Small fictional-data checks for the human gate's title lookup and summary output."""
+from contextlib import asynccontextmanager, redirect_stdout
+import io
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from scripts.greencloud_human_check import lookup_title, main, TitleLookupError
+from scripts.greencloud_human_check import (
+    PREVIEW_CHARS, TitleLookupError, lookup_title, main, summarize_note,
+)
 from tests.gc35_step05_cloud_fixture import _create_note
 from src.snotes.storage.schema import initialize_database
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
@@ -58,3 +63,80 @@ class HumanTitleLookupTest(unittest.TestCase):
                 publish.reset_mock()
                 self.assertEqual(main(["--title", "missing"]), 2)
                 publish.assert_not_called()
+
+
+class HumanCheckOutputTest(unittest.TestCase):
+    BODY = "第一行 fictional 修改标记\n" + "正文" * 300 + "TAIL-MARKER-NOT-PRINTED"
+
+    def _run_with_fake_mcp(self, argv, database):
+        calls = []
+
+        @asynccontextmanager
+        async def fake_stdio_client(server):
+            calls.append(server.args[server.args.index("-u") + 1])
+            yield None, None
+
+        body = self.BODY
+
+        class FakeSession:
+            def __init__(self, _reader, _writer):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+            async def initialize(self):
+                return None
+
+            async def call_tool(self, name, arguments):
+                assert name == "get_note"
+                return SimpleNamespace(structuredContent={
+                    "status": "ok", "note_id": arguments["note_id"], "title": "Fictional title",
+                    "safe_text": body, "directory": "", "tags": [],
+                    "updated_at": "2026-09-29T00:00:00", "version": "v-fictional",
+                    "visibility": "full",
+                })
+
+        stdout = io.StringIO()
+        with patch("scripts.greencloud_human_check.DEFAULT_PATHS") as paths, \
+             patch("scripts.greencloud_human_check.publish", return_value=0), \
+             patch("scripts.greencloud_human_check.stdio_client", fake_stdio_client), \
+             patch("scripts.greencloud_human_check.ClientSession", FakeSession), \
+             redirect_stdout(stdout):
+            paths.database = database
+            status = main(argv)
+        return status, calls, stdout.getvalue()
+
+    def test_both_entries_print_summary_without_full_safe_text(self):
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder) / "fictional.db"
+            connections = initialize_database(database)
+            notes = SQLiteNotesRepository(connections, SQLiteDirectoriesRepository(connections))
+            note_id = _create_note(notes, title="Human gate fictional", markdown="Fictional body",
+                                   visibility="full", targets=("common",))
+            for argv in ([str(note_id)], ["--title", "Human gate fictional"]):
+                with self.subTest(argv=argv):
+                    status, calls, output = self._run_with_fake_mcp(argv, database)
+                    self.assertEqual(status, 0)
+                    self.assertEqual(calls, ["claude", "openclaw"])
+                    for field in ("actor=claude", "actor=openclaw", "status=ok",
+                                  f"note_id={note_id}", "title=Fictional title",
+                                  "version=v-fictional", "updated_at=2026-09-29T00:00:00",
+                                  "visibility=full", f"safe_text_length={len(self.BODY)}",
+                                  "preview=第一行 fictional 修改标记 正文"):
+                        self.assertIn(field, output)
+                    self.assertNotIn(self.BODY, output)
+                    self.assertNotIn("TAIL-MARKER-NOT-PRINTED", output)
+                    for line in output.splitlines():
+                        if line.startswith("preview="):
+                            self.assertLessEqual(len(line), len("preview=") + PREVIEW_CHARS + 1)
+
+    def test_empty_and_failed_payload_summaries(self):
+        empty = summarize_note("claude", {"status": "ok", "note_id": 1, "safe_text": ""})
+        self.assertIn("safe_text_length=0", empty)
+        self.assertIn("preview=", empty.splitlines())
+        failed = summarize_note("openclaw", {"status": "not_found", "note_id": 9})
+        self.assertEqual(failed, "actor=openclaw\nstatus=not_found\nnote_id=9")
