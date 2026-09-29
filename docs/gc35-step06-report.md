@@ -1,4 +1,4 @@
-# GreenCloud Step 6 staging — deployed, DNS gate pending
+# GreenCloud Step 6 staging — immediate gate PASS, observation pending
 
 2026-09-29 UTC. Branch `codex/gc35-step06-cloud-reminder-staging`.
 Implementation `690d6ab`; deployed runtime fix `bd8d967`.
@@ -27,17 +27,31 @@ The six existing untracked user documents are unchanged and uncommitted.
 - Actual Mac copy `/Users/s/Library/Application Support/S-notes/reminder-cloud-backups/reminder-staging-20260929T085804089039Z.db`; integrity `ok`, counts match. Mac/cloud SHA256 `1a38ac7eacceff26c5fa0bc554d117bdc19fa7d16b5b64847a480d64e20b0cd6`.
 - Existing host emits `sudo: unable to resolve host optimal-living` on backup export; export succeeds. Recorded only, outside scope.
 
-## Remaining gate
+## HTTPS immediate gate — PASS (2026-09-29 09:04 UTC)
 
-DNS still absent at inspection. S must add:
+Public DNS (Google DNS response from authoritative Cloudflare server) returns
+`reminder.ke-den.de -> 109.94.170.215`. Caddy automatically recovered from the
+pre-DNS NXDOMAIN retry and obtained a production Let's Encrypt certificate at
+09:03:03 UTC. No Caddy configuration edit, reload, or service restart was needed
+for this gate. `caddy validate` PASS; original Caddy bytes still unchanged.
 
-`A reminder.ke-den.de -> 109.94.170.215, DNS only`
-
-After DNS, verify real HTTPS certificate and authenticated snapshot through Caddy. Therefore full immediate gate is not yet declared PASS.
+- HTTP redirects 308 to the same HTTPS host/path.
+- Mac external HTTPS, pinned to the verified public IPv4 with original hostname/SNI:
+  certificate/hostname verification PASS (`TLS_VERIFY=0`), no credential 401,
+  invalid credential 403. No insecure TLS option used.
+- Existing live acceptance harness now supports `--https`: all 72 checks PASS
+  through public port 443/Caddy, including owner CRUD/snapshot, three actors,
+  hidden IDs, delete/visibility denial, body identity rejection and idempotency.
+  Credentials remain private on GreenCloud. API still binds only 127.0.0.1:8766.
+- Local DNS uses a proxy virtual address; GreenCloud's resolver also failed
+  intermittently during the first run. The HTTPS harness pins the independently
+  verified IPv4 while retaining certificate/hostname validation. No DNS or proxy
+  configuration changed. The interrupted run's exact fictional fixtures were
+  removed through HTTPS; original four observation items remain.
 
 `STEP06_IMPLEMENTATION=READY`
 `STEP06_LOCAL_AND_CLOUD_GATE=PASS`
-`STEP06_IMMEDIATE_GATE=PENDING_DNS_HTTPS`
+`STEP06_IMMEDIATE_GATE=PASS`
 `STEP06_24H_OBSERVATION=PENDING`
 
-Staging remains running. No earlier than 2026-09-30 08:56:56 UTC, inspect timer execution, dedupe marks/journal and service errors since successful startup; confirm next-day fixture notification and daily backup. Final closure/merge requires these checks plus DNS/HTTPS gate. Do not enter Step 7.
+Staging remains running. No earlier than 2026-09-30 08:56:56 UTC, inspect timer execution, dedupe marks/journal and service errors since successful startup; confirm next-day fixture notification and daily backup. Final closure/merge requires these observation checks. Do not enter Step 7.

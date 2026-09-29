@@ -3,7 +3,9 @@
 Credentials are read privately on the server and never returned or logged.
 """
 from datetime import datetime, timedelta
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPSConnection
+import argparse
+import socket
 import json
 from pathlib import Path
 import uuid
@@ -11,6 +13,9 @@ from zoneinfo import ZoneInfo
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--https', action='store_true', help='Verify the fixed public HTTPS site with certificate validation')
+    args = parser.parse_args()
     credentials = json.loads(Path('/root/greencloud-secrets/reminder-api.json').read_text())
     results = []
 
@@ -23,7 +28,13 @@ def main():
         headers = {'Content-Type': 'application/json'}
         if actor is not None:
             headers['Authorization'] = 'Bearer ' + credentials.get(actor, 'invalid-fictional-token')
-        connection = HTTPConnection('127.0.0.1', 8766, timeout=10)
+        connection = (HTTPSConnection('reminder.ke-den.de', timeout=10) if args.https
+                      else HTTPConnection('127.0.0.1', 8766, timeout=10))
+        if args.https:
+            # Keep SNI/certificate validation on the public name while avoiding
+            # intermittent host resolver failures on this fixed staging VPS.
+            connection._create_connection = lambda address, timeout, source_address=None: socket.create_connection(
+                ('109.94.170.215', address[1]), timeout, source_address)
         try:
             path = '/v1/reminder/snapshot' if command is None else '/v1/reminder/commands/' + command
             connection.request('GET' if command is None else 'POST', path,
