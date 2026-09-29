@@ -30,6 +30,10 @@ APP_BUNDLE="$DIST_DIR/S-notes.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/S-notes"
 APP_HELPER="$APP_BUNDLE/Contents/Resources/bin/snotes-gale-production-pull"
 APP_REMINDER_HELPER="$APP_BUNDLE/Contents/Resources/bin/snotes-reminder-helper"
+APP_MCP_LAUNCHER="$APP_BUNDLE/Contents/Resources/bin/run_snotes_mcp_stdio.sh"
+APP_YAN_MCP_LAUNCHER="$APP_BUNDLE/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh"
+MCP_LAUNCHER_SOURCE="$ROOT_DIR/packaging/run_snotes_mcp_stdio.sh"
+YAN_MCP_LAUNCHER_SOURCE="$ROOT_DIR/scripts/run_snotes_yan_mcp_stdio.sh"
 
 EXPECTED_PYTHON_SERIES="3.13"
 EXPECTED_PYSIDE="6.10.3"
@@ -67,14 +71,16 @@ echo "Repository: $ROOT_DIR"
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This build must run on macOS."
 [[ "$(uname -m)" == "arm64" ]] || fail "The current Mac must run as arm64."
-[[ -f "$ROOT_DIR/app.py" && -d "$ROOT_DIR/src" ]] || fail "Unexpected repository layout."
+[[ -f "$ROOT_DIR/app.py" && -d "$ROOT_DIR/src" && -e "$ROOT_DIR/.git" ]] || fail "Unexpected repository layout."
 [[ -x "$PYTHON" ]] || fail "Project Python not found: $PYTHON"
 [[ -f "$SPEC_FILE" ]] || fail "PyInstaller spec not found: $SPEC_FILE"
 [[ -f "$HELPER_SPEC_FILE" ]] || fail "Helper PyInstaller spec not found: $HELPER_SPEC_FILE"
 [[ -f "$REMINDER_HELPER_SPEC_FILE" ]] || fail "Reminder helper PyInstaller spec not found: $REMINDER_HELPER_SPEC_FILE"
+[[ -x "$MCP_LAUNCHER_SOURCE" ]] || fail "Packaged MCP launcher source is missing or not executable: $MCP_LAUNCHER_SOURCE"
+[[ -x "$YAN_MCP_LAUNCHER_SOURCE" ]] || fail "Yan MCP launcher source is missing or not executable: $YAN_MCP_LAUNCHER_SOURCE"
 [[ -f "$ICON_SOURCE" ]] || fail "Official icon source not found: $ICON_SOURCE"
 
-for command_name in npm node sips iconutil file lipo otool codesign du find grep tr awk shasum; do
+for command_name in git npm node sips iconutil file lipo otool codesign du find grep tr awk shasum; do
     require_command "$command_name"
 done
 [[ -x /usr/libexec/PlistBuddy ]] || fail "PlistBuddy not found."
@@ -85,6 +91,14 @@ python_arch="$($PYTHON -B -c 'import platform; print(platform.machine())')"
 pyside_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version("PySide6"))')"
 pyinstaller_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version("PyInstaller"))')"
 hooks_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version("pyinstaller-hooks-contrib"))')"
+certifi_ca_source="$($PYTHON -B -c 'import certifi; print(certifi.where())')"
+[[ -f "$certifi_ca_source" ]] || fail "certifi public CA bundle was not found: $certifi_ca_source"
+certifi_ca_hash="$(shasum -a 256 "$certifi_ca_source" | awk '{print $1}')"
+source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+source_dirty="NO"
+if [[ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no)" ]]; then
+    source_dirty="YES"
+fi
 
 [[ "$python_series" == "$EXPECTED_PYTHON_SERIES" ]] || fail "Expected Python ${EXPECTED_PYTHON_SERIES}.x, found $python_version."
 [[ "$python_arch" == "arm64" ]] || fail "Expected arm64 Python, found $python_arch."
@@ -96,6 +110,8 @@ hooks_version="$($PYTHON -B -c 'import importlib.metadata as m; print(m.version(
 grep -Fq '(str(SVG_DIR), "src/icons")' "$SPEC_FILE" || fail "The App spec must include src/icons."
 grep -Fq '(str(HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the production helper."
 grep -Fq '(str(REMINDER_HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the Reminder helper."
+grep -Fq '(str(MCP_LAUNCHER), "bin")' "$SPEC_FILE" || fail "The App spec must include the packaged MCP launcher."
+grep -Fq '(str(YAN_MCP_LAUNCHER), "bin")' "$SPEC_FILE" || fail "The App spec must include the Yan MCP launcher."
 grep -Fq 'target_arch="arm64"' "$SPEC_FILE" || fail "The spec must target arm64."
 grep -Fq 'target_arch="arm64"' "$HELPER_SPEC_FILE" || fail "The helper spec must target arm64."
 grep -Fq 'target_arch="arm64"' "$REMINDER_HELPER_SPEC_FILE" || fail "The Reminder helper spec must target arm64."
@@ -183,6 +199,8 @@ env \
     S_NOTES_APP_ICON="$ICNS_FILE" \
     S_NOTES_HELPER_BINARY="$HELPER_EXECUTABLE" \
     S_NOTES_REMINDER_HELPER_BINARY="$REMINDER_HELPER_EXECUTABLE" \
+    S_NOTES_SOURCE_COMMIT="$source_commit" \
+    S_NOTES_SOURCE_DIRTY="$source_dirty" \
     "$PYTHON" -m PyInstaller \
     --noconfirm \
     --clean \
@@ -194,6 +212,8 @@ env \
 [[ -x "$APP_EXECUTABLE" ]] || fail "App executable was not created: $APP_EXECUTABLE"
 [[ -x "$APP_HELPER" ]] || fail "Embedded production helper is missing or not executable: $APP_HELPER"
 [[ -x "$APP_REMINDER_HELPER" ]] || fail "Embedded Reminder helper is missing or not executable: $APP_REMINDER_HELPER"
+[[ -x "$APP_MCP_LAUNCHER" ]] || fail "Packaged MCP launcher is missing or not executable: $APP_MCP_LAUNCHER"
+[[ -x "$APP_YAN_MCP_LAUNCHER" ]] || fail "Packaged Yan MCP launcher is missing or not executable: $APP_YAN_MCP_LAUNCHER"
 [[ "$(lipo -archs "$APP_HELPER")" == "arm64" ]] || fail "Embedded production helper is not arm64."
 [[ "$(lipo -archs "$APP_REMINDER_HELPER")" == "arm64" ]] || fail "Embedded Reminder helper is not arm64."
 [[ "$("$APP_HELPER" --version)" == "snotes-gale-production-pull 1" ]] || fail "Embedded production helper version check failed."
@@ -211,6 +231,8 @@ embedded_reminder_helper_hash="$(shasum -a 256 "$APP_REMINDER_HELPER" | awk '{pr
 [[ "$(metadata_value CFBundleShortVersionString)" == "1.0.0" ]] || fail "Incorrect short version."
 [[ "$(metadata_value CFBundleVersion)" == "1" ]] || fail "Incorrect build version."
 [[ "$(metadata_value LSMinimumSystemVersion)" == "13.0" ]] || fail "Incorrect minimum macOS version."
+[[ "$(metadata_value SNotesSourceCommit)" == "$source_commit" ]] || fail "Incorrect source commit provenance."
+[[ "$(metadata_value SNotesSourceDirty)" == "$source_dirty" ]] || fail "Incorrect source dirty provenance."
 
 executable_archs="$(lipo -archs "$APP_EXECUTABLE")"
 [[ "$executable_archs" == "arm64" ]] || fail "Expected arm64 executable, found: $executable_archs"
@@ -221,6 +243,11 @@ qt_platform_plugin="$(find "$APP_BUNDLE" -type f -name 'libqcocoa.dylib' -print 
 
 while IFS= read -r -d '' bundle_item; do
     relative_path="${bundle_item#"$APP_BUNDLE"/}"
+    if [[ "$relative_path" == "Contents/Resources/certifi/cacert.pem" ]]; then
+        embedded_certifi_ca_hash="$(shasum -a 256 "$bundle_item" | awk '{print $1}')"
+        [[ "$embedded_certifi_ca_hash" == "$certifi_ca_hash" ]] || fail "Packaged certifi public CA bundle differs from the build environment."
+        continue
+    fi
     lower_path="$(printf '%s' "$relative_path" | tr '[:upper:]' '[:lower:]')"
     case "/$lower_path/" in
         *.db/|*.sqlite/|*.sqlite3/|*/.env*/|*/local_redaction_rules.json/|*/data/*|*/backups/*|*/exports/*|*/imports/*|*/config/*|*/tests/*|*/readme.md/|*/.git/*|*/.venv/*|*/s-notes-icon-preview.png/|*/s-notes-icon-1024.png/|*.pem/|*.key/|*api_key*|*apikey*|*token*|*password*|*cookie*|*secret*)
@@ -255,6 +282,10 @@ echo "Helper: $APP_HELPER"
 echo "Helper SHA-256: $helper_hash"
 echo "Reminder Helper: $APP_REMINDER_HELPER"
 echo "Reminder Helper SHA-256: $reminder_helper_hash"
+echo "Local MCP Launcher: $APP_MCP_LAUNCHER"
+echo "Yan MCP Launcher: $APP_YAN_MCP_LAUNCHER"
+echo "Source Commit: $source_commit"
+echo "Tracked Source Dirty: $source_dirty"
 echo "Qt platform plugin: ${qt_platform_plugin#"$APP_BUNDLE"/}"
 echo "Signature: codesign verification passed (ad-hoc)"
 echo "The App was not launched or installed."

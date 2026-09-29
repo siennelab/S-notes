@@ -4,6 +4,8 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve().parent
 SVG_DIR = ROOT / "src" / "icons"
+MCP_LAUNCHER = ROOT / "packaging" / "run_snotes_mcp_stdio.sh"
+YAN_MCP_LAUNCHER = ROOT / "scripts" / "run_snotes_yan_mcp_stdio.sh"
 APP_ICON = ROOT / "build" / "S-notes.icns"
 if os.environ.get("S_NOTES_APP_ICON"):
     APP_ICON = Path(os.environ["S_NOTES_APP_ICON"])
@@ -30,6 +32,8 @@ analysis = Analysis(
         (str(ROOT / "web/markdown-editor/dist"), "web/markdown-editor/dist"),
         (str(HELPER_BINARY), "bin"),
         (str(REMINDER_HELPER_BINARY), "bin"),
+        (str(MCP_LAUNCHER), "bin"),
+        (str(YAN_MCP_LAUNCHER), "bin"),
     ],
     hiddenimports=["PySide6.QtSvg", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"],
     hookspath=[],
@@ -80,5 +84,7 @@ app = BUNDLE(
         "CFBundleVersion": "1",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
+        "SNotesSourceCommit": os.environ.get("S_NOTES_SOURCE_COMMIT", "unknown"),
+        "SNotesSourceDirty": os.environ.get("S_NOTES_SOURCE_DIRTY", "unknown"),
     },
 )

@@ -1,8 +1,28 @@
 # S-notes Local MCP Server Runbook
 
-The current R2 local MCP server is `src/snotes/transport/mcp/server.py` and its
-supported stdio launcher is `scripts/run_snotes_mcp_stdio.sh`. Validate it with
-the isolated Package 5 protocol tests:
+The current R2 local MCP server is `src/snotes/transport/mcp/server.py`.
+Production clients must use the launcher packaged inside the formal App:
+
+```text
+/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_mcp_stdio.sh
+```
+
+Yan uses the packaged profile wrapper at:
+
+```text
+/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh
+```
+
+Both launchers execute the Python source frozen into that App build. Switching
+the repository to another Git branch does not change the production MCP source.
+The production source advances only when `scripts/build_macos_app.sh` rebuilds
+the formal App. `SNotesSourceCommit` and `SNotesSourceDirty` in the App's
+`Info.plist` identify the tracked source used for that build.
+
+The repository launchers under `scripts/` remain development and test entrypoints;
+they intentionally execute the current checkout and must not be configured as
+production client commands. Validate the development entrypoint with the isolated
+Package 5 protocol tests:
 
 ```bash
 .venv/bin/python -m unittest tests.test_package5_local_mcp_protocol -v
@@ -86,16 +106,18 @@ fast-forward main, replace the formal App, or push before the closeout gate.
 
 ## Yan local Codex profile
 
-Use the dedicated local stdio wrapper for Yan:
+Production Yan clients use the dedicated wrapper packaged in the formal App:
 
 ```bash
-/Users/s/Documents/项目/S-notes/scripts/run_snotes_yan_mcp_stdio.sh
+/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh
 ```
 
 The wrapper fixes `SNOTES_MCP_ACTOR_TARGET_ID=yan`, resolves the canonical
 S-notes data root, and projects the same note and Reminder tools as the current
 Clawbot profile. Tests may opt into an isolated temporary data root with
 `SNOTES_YAN_ALLOW_DATA_ROOT_OVERRIDE=1`; normal clients must not set it.
+The repository copy at `scripts/run_snotes_yan_mcp_stdio.sh` is retained only for
+development and isolated tests.
 
 ## Gale Secure MCP Tunnel Candidate
 
