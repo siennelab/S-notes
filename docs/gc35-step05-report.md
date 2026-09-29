@@ -121,9 +121,16 @@ S-notes deployment was overwritten. Mac Notes DB and other services are untouche
 In the official Mac S-notes app, edit a suitable common note. Then run:
 
 ```sh
-/Users/s/Documents/项目/S-notes/.venv/bin/python -B /Users/s/.codex/worktrees/gc35-step05-cloud-read/S-notes/scripts/greencloud_human_check.py <NOTE_ID>
+/Users/s/Documents/项目/S-notes/.venv/bin/python -B /Users/s/.codex/worktrees/gc35-step05-cloud-read/S-notes/scripts/greencloud_human_check.py --title "某篇笔记标题"
 ```
 
-Replace NOTE_ID with that note's ID. This manually publishes and reads the note
+Use the exact visible title of one active common note with full or redacted AI
+visibility. The script performs a read-only metadata lookup; missing, duplicate,
+hidden or non-common selections stop before publication. Duplicates show IDs,
+categories and timestamps so S can choose another note or explicitly pass an ID.
+The original positional note_id invocation remains supported. One focused test
+using fictional data covers lookup boundaries, unchanged DB bytes and both CLI
+paths; PASS. This script-only follow-up did not change Cloud deployment or rerun
+the full Step 5 suite. This manually publishes and reads the note
 through both Cloud actor MCPs. S must confirm the updated content. Until S says
 PASS: STEP05_CLOSED=NO, 3_5_A=CLOSED=NO. PUSH=NO.
