@@ -74,7 +74,7 @@ no-argument wrapper as `snotes`; that wrapper streams only the fixed
 On the Mac, keep the private key at mode 0600 and pull without a remote command:
 
 ```sh
-ssh -i backup-transport -T optimal > reminder-latest.db
+ssh -o IdentitiesOnly=yes -i backup-transport -T snotes-publish@optimal > reminder-latest.db
 ```
 
 Store the result under
