@@ -492,6 +492,20 @@ class GaleMirrorWriter(Protocol):
     ) -> GaleMirrorVerification: ...
 
 
+class ActorMirrorWriter(Protocol):
+    def write(self, records, output_path: Path, *, actor: str, source_schema: str) -> dict: ...
+
+    def verify(
+        self, path: Path, *, expected_actor: str, expected_note_count: int | None = None
+    ) -> dict: ...
+
+
+class ActorMirrorSource(Protocol):
+    def list_active_with_ai_access(self) -> Sequence[tuple[Note, tuple[str, ...]]]: ...
+
+    def source_schema(self) -> str: ...
+
+
 class GalePublishTransport(Protocol):
     """The existing Oracle incoming/current/previous activation boundary."""
 

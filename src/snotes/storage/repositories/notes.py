@@ -89,6 +89,28 @@ class SQLiteNotesRepository(NotesRepository):
             ).fetchall()
         return [note_from_row(row) for row in rows]
 
+    def list_active_with_ai_access(self) -> list[tuple[Note, tuple[str, ...]]]:
+        """Read active notes and their persisted grants in one read snapshot."""
+        with self.connections.read() as connection:
+            rows = connection.execute(
+                NOTE_SELECT
+                + " WHERE is_deleted = 0 ORDER BY updated_at DESC, id DESC"
+            ).fetchall()
+            result = []
+            for row in rows:
+                note = note_from_row(row)
+                result.append((note, self._read_ai_target_ids(connection, note.id)))
+        return result
+
+    def source_schema(self) -> str:
+        with self.connections.read() as connection:
+            row = connection.execute(
+                "SELECT meta_value FROM schema_meta WHERE meta_key='body_format'"
+            ).fetchone()
+        if row is None or str(row["meta_value"]) != "markdown":
+            raise RuntimeError("actor mirror requires the formal Markdown Notes schema")
+        return "snotes-markdown-v1"
+
     def list_ai_materials(
         self,
         *,
