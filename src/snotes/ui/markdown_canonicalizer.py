@@ -5,6 +5,8 @@ WebEngine editor for multiple bodies; callers must use it on the Qt main thread.
 """
 from __future__ import annotations
 
+import ctypes
+import sys
 import threading
 import time
 from uuid import uuid4
@@ -19,6 +21,38 @@ from src.snotes.ui.markdown_editor import BUNDLE, MarkdownEditorWidget
 MAX_PASSES = 4
 _WAIT_SECONDS = 30
 _OWNED_APP: QApplication | None = None
+_NSAPPLICATION_ACTIVATION_POLICY_PROHIBITED = 2
+
+
+def _make_owned_qt_app_background_only() -> None:
+    """Keep a canonicalizer-owned Qt app out of the macOS Dock."""
+    if sys.platform != "darwin":
+        return
+    try:
+        objc = ctypes.cdll.LoadLibrary("libobjc.A.dylib")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
+        send_id = objc.objc_msgSend
+        send_id.restype = ctypes.c_void_p
+        send_id.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        app_class = objc.objc_getClass(b"NSApplication")
+        shared_app = send_id(app_class, objc.sel_registerName(b"sharedApplication"))
+        if not shared_app:
+            return
+
+        set_policy = objc.objc_msgSend
+        set_policy.restype = ctypes.c_bool
+        set_policy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+        set_policy(
+            shared_app,
+            objc.sel_registerName(b"setActivationPolicy:"),
+            _NSAPPLICATION_ACTIVATION_POLICY_PROHIBITED,
+        )
+    except (AttributeError, OSError):
+        return
 
 
 class MarkdownCanonicalizer:
@@ -50,6 +84,7 @@ class MarkdownCanonicalizer:
             global _OWNED_APP
             if existing is None:
                 _OWNED_APP = QApplication(["snotes-markdown-canonicalizer"])
+                _make_owned_qt_app_background_only()
                 existing = _OWNED_APP
             self._app = existing
             self._editor = MarkdownEditorWidget()
