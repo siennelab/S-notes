@@ -738,13 +738,8 @@ class MainWindow(QMainWindow):
                 content_markdown=self.body_edit.latest_markdown,
                 location=selected_location(self.shell),
                 expected_revision=self.current_note.revision,
+                tags_text=self.shell.tags_input.text(),
             )
-            if self.tag_service is not None:
-                self.tag_service.set_note_tags_from_text(
-                    saved.id,
-                    self.shell.tags_input.text(),
-                )
-                saved = self.note_service.get_note(saved.id) or saved
         except NoteRevisionConflictError:
             self.has_unsaved_changes = True
             self.conflict_active = True

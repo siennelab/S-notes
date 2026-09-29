@@ -16,6 +16,7 @@ from src.snotes.storage.ai_metadata import (
 )
 from src.snotes.storage.mappers import note_from_row
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
+from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.support import Clock, next_note_updated_at, now_shanghai, timestamp_seconds
 
 
@@ -204,6 +205,7 @@ class SQLiteNotesRepository(NotesRepository):
         content_markdown: str,
         location: NoteLocation,
         expected_revision: int,
+        tags: Sequence[str] | None = None,
     ) -> Note:
         with self.connections.write() as connection:
             current = connection.execute(
@@ -236,6 +238,38 @@ class SQLiteNotesRepository(NotesRepository):
             )
             if cursor.rowcount != 1:
                 raise NoteRevisionConflictError()
+            if tags is not None:
+                normalized_tags = tuple(tags)
+                stored_tags = {
+                    str(row["name"])
+                    for row in connection.execute(
+                        """
+                        SELECT tags.name
+                        FROM tags
+                        JOIN note_tags ON note_tags.tag_id = tags.id
+                        WHERE note_tags.note_id = ?
+                        """,
+                        (note_id,),
+                    ).fetchall()
+                }
+                if set(normalized_tags) != stored_tags:
+                    # A changed tag set historically advanced the version once
+                    # after the body save; keep that +2 behavior in one transaction.
+                    tags_timestamp = next_note_updated_at(timestamp, self.clock)
+                    SQLiteTagsRepository.replace_for_note_in_connection(
+                        connection,
+                        note_id,
+                        normalized_tags,
+                        tags_timestamp,
+                    )
+                    connection.execute(
+                        """
+                        UPDATE notes
+                        SET tags = ?, updated_at = ?, revision = revision + 1
+                        WHERE id = ?
+                        """,
+                        (", ".join(normalized_tags), tags_timestamp, note_id),
+                    )
             return self.read_from_connection(connection, note_id, False)
 
     def rename(self, note_id: int, title: str) -> Note:

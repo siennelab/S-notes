@@ -163,13 +163,19 @@ class NoteService:
         content_markdown: str,
         location: NoteLocation,
         expected_revision: int,
+        tags_text: str | None = None,
     ) -> Note:
+        """Save editable note fields atomically when tags text is supplied.
+
+        ``None`` keeps the established body-only behavior for non-editor callers.
+        """
         return self._notes.save(
             note_id,
             title=title,
             content_markdown=content_markdown,
             location=location,
             expected_revision=expected_revision,
+            tags=None if tags_text is None else parse_tags(tags_text),
         )
 
     def rename_note(self, note_id: int, title: str) -> Note:

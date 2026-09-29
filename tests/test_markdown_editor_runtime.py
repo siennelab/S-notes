@@ -6,11 +6,13 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QInputMethodEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from src.snotes.bootstrap import build_application
+from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 
 
 class MarkdownEditorRuntimeTests(unittest.TestCase):
@@ -257,6 +259,46 @@ class MarkdownEditorRuntimeTests(unittest.TestCase):
         self.window.close()
         self.wait(lambda: not self.window.isVisible())
         self.assertIn('exit save', self.service.get_note(second.id).content_markdown)
+
+    def test_tag_write_failure_keeps_ui_revision_and_retry_does_not_conflict(self):
+        note = self.create('before body')
+        note = self.service.save_note(
+            note.id,
+            title=note.title,
+            content_markdown=note.content_markdown,
+            location=note.location,
+            expected_revision=note.revision,
+            tags_text='before, keep',
+        )
+        self.load(note)
+        self.insert('local edit')
+        self.window.shell.tags_input.setText('after, keep')
+        self.window.save_timer.stop()
+        original_replace = SQLiteTagsRepository.replace_for_note_in_connection
+
+        def fail_after_replacing(connection, note_id, tags, timestamp):
+            original_replace(connection, note_id, tags, timestamp)
+            raise RuntimeError('synthetic tag write failure')
+
+        with patch.object(
+            SQLiteTagsRepository,
+            'replace_for_note_in_connection',
+            side_effect=fail_after_replacing,
+        ):
+            self.assertFalse(self.window.force_save_current_note())
+
+        failed = self.service.get_note(note.id)
+        self.assertEqual(failed, note)
+        self.assertEqual(self.window.current_note.revision, note.revision)
+        self.assertFalse(self.window.conflict_active)
+        self.window.save_timer.stop()
+
+        self.assertTrue(self.window.force_save_current_note())
+        saved = self.service.get_note(note.id)
+        self.assertIn('local edit', saved.content_markdown)
+        self.assertEqual(saved.tags, 'after, keep')
+        self.assertEqual(saved.revision, note.revision + 2)
+        self.assertFalse(self.window.conflict_active)
 
     def test_loading_prohibits_save_and_pending_note_commits_atomically(self):
         first = self.create('# First\n\nfirst body')

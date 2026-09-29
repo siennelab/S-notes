@@ -156,6 +156,7 @@ class NotesRepository(Protocol):
         content_markdown: str,
         location: NoteLocation,
         expected_revision: int,
+        tags: Sequence[str] | None = None,
     ) -> Note: ...
 
     def rename(self, note_id: int, title: str) -> Note: ...
