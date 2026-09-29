@@ -10,9 +10,11 @@ Step 5 and GreenCloud 3.5-A are closed.
 - Implementation/runtime source: `e85d7ed236821bc07f1d7e0d2e33ddb199cabb75`.
 - Deployment documentation and real acceptance harness: `c292f31`.
 - Report commit: resolve with `git log -1 --format=%H -- docs/gc35-step05-report.md`.
-- Checkout: `/Users/s/.codex/worktrees/gc35-step05-cloud-read/S-notes`.
-- Original main and its six untracked user documents were preserved. No merge,
-  push, or Step 6 work. Keep this checkout: the publisher schedule depends on it.
+- Construction checkout (removed after P1 closure): `/Users/s/.codex/worktrees/gc35-step05-cloud-read/S-notes`.
+- Closeout `1b32415` was fast-forwarded into formal main (no merge commit);
+  the six untracked user documents were preserved. No push or Step 6 work.
+- Production publisher now runs from formal main (`/Users/s/Documents/项目/S-notes`);
+  the isolated construction worktree is no longer a runtime dependency.
 
 ## Actual deployment
 
@@ -85,8 +87,9 @@ Real LaunchAgent execution against fictional data published both actors; a
 second execution reported UNCHANGED for both. The temporary agent was unloaded.
 Production plist is installed at
 `~/Library/LaunchAgents/com.snotes.greencloud-mirror-publish.plist`, mode 0600,
-RunAtLoad=true, StartInterval=300. It uses the original repository `.venv/bin/python`
-and this isolated checkout. Dedicated existing key was reused, not regenerated.
+RunAtLoad=true, StartInterval=300. It uses the formal repository `.venv/bin/python`
+with `WorkingDirectory=/Users/s/Documents/项目/S-notes` (see Post-Vibe audit below).
+Dedicated existing key was reused, not regenerated.
 
 Production agent was loaded and first execution exited 0. Both actor state
 records show successful publication (2026-09-29 06:36 UTC), no failure and no
@@ -133,15 +136,15 @@ PUSH=NO
 ```
 
 No merge, push, Step 6 work, deployment change or further test run was performed
-for this documentation-only closure. The active publisher still depends on the
-isolated checkout; retain it.
+for this documentation-only closure. The publisher's later move to formal main
+is recorded under Post-Vibe audit below.
 
 ### Human verification procedure (retained for reference)
 
 In the official Mac S-notes app, edit a suitable common note. Then run:
 
 ```sh
-/Users/s/Documents/项目/S-notes/.venv/bin/python -B /Users/s/.codex/worktrees/gc35-step05-cloud-read/S-notes/scripts/greencloud_human_check.py --title "某篇笔记标题"
+/Users/s/Documents/项目/S-notes/.venv/bin/python -B /Users/s/Documents/项目/S-notes/scripts/greencloud_human_check.py --title "某篇笔记标题"
 ```
 
 Use the exact visible title of one active common note with full or redacted AI
@@ -154,3 +157,50 @@ paths; PASS. This script-only follow-up did not change Cloud deployment or rerun
 the full Step 5 suite. This manually publishes and reads the note
 through both Cloud actor MCPs. S has confirmed the updated content as recorded
 above. PUSH=NO.
+
+## Post-Vibe audit — P1 closed
+
+Claude Code independent read-only Post-Vibe audit of
+`4d18fdcd5287cbee147305f6bd7d0d31fc1c67e2..1b32415`:
+
+```ini
+P0=0
+P1=1
+P1_PRODUCTION_WORKTREE_DEPENDENCY=CLOSED
+P2=4_NONBLOCKING
+```
+
+The single P1 was that the production LaunchAgent's `WorkingDirectory` pointed
+at the isolated Codex worktree, so `src.actor_mirror_publish` ran from it.
+Closure (2026-09-29):
+
+- Formal main fast-forwarded to `1b32415` (ff-only; no merge commit, rebase or
+  reset); six untracked user documents untouched.
+- Old agent booted out; its plist was moved to
+  `~/Library/Application Support/S-notes/backups/greencloud-publisher-worktree-retire-20260929-000131/`
+  (0700).
+- New plist rendered by the existing `scripts/greencloud_publish_schedule.py`
+  with `--repo /Users/s/Documents/项目/S-notes`, then bootstrapped. Live agent:
+  `WorkingDirectory=/Users/s/Documents/项目/S-notes`, program
+  `/Users/s/Documents/项目/S-notes/.venv/bin/python -B -m src.actor_mirror_publish publish`,
+  RunAtLoad run exit 0.
+- Publisher smoke from formal main: both actors `UNCHANGED`, exit 0, no failure
+  or retry recorded.
+- No live LaunchAgent, publisher config, or GreenCloud runtime/wrapper/sudoers
+  references the worktree. The clean, fully merged worktree was then removed
+  with `git worktree remove` (branch `codex/gc35-step05-cloud-read` kept).
+  GreenCloud was not changed.
+
+Non-blocking maintenance notes, intentionally not implemented:
+
+1. Actor mapping duplication: `SUPPORTED_ACTORS`, receiver `ALLOWED_ACTORS`,
+   Cloud UID bindings and publisher status tuple have no cross-check test
+   (all drift fails closed).
+2. Deployment record small drift: runtime manifest deploy-asset hashes stay at
+   `e85d7ed`; INSTALL.md, the fixed rollback and `requirements-installed.txt`
+   were added after first install; `/srv/snotes/rollback-step05.pre-closeout.sh`
+   is superseded and must not be run.
+3. Human check prints full `get_note` payloads and carries its own common
+   eligibility SQL (script-only).
+4. Cloud reader does not re-assert mirror `target_actor` (receiver validation
+   and OS group permissions already enforce it; defense-in-depth only).
