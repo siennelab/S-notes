@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd /srv/snotes/runtime
+exec /usr/bin/env -i PATH=/usr/bin:/bin /srv/snotes/runtime/.venv/bin/python -B -m src.cloud_read_mcp

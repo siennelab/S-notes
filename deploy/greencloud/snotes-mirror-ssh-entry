@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# OpenSSH invokes this root-owned forced-command entry through the dedicated
+# snotes-publish account's /bin/sh. Refuse requested commands before sudo.
+if [ -n "${SSH_ORIGINAL_COMMAND-}" ]; then
+    printf '%s\n' '{"status":"error","reason":"command_rejected"}'
+    exit 64
+fi
+
+exec /usr/bin/sudo -n -u snotes -- /usr/local/sbin/snotes-mirror-receiver

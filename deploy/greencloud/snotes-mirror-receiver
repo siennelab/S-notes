@@ -1,0 +1,8 @@
+#!/bin/sh
+
+set -eu
+
+cd /srv/snotes/runtime
+exec /usr/bin/env -i \
+    PATH=/srv/snotes/runtime/.venv/bin:/usr/bin:/bin \
+    /srv/snotes/runtime/.venv/bin/python -B -m src.snotes.storage.cloud_mirror_receiver

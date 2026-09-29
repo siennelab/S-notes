@@ -9,11 +9,17 @@ from typing import Iterator
 
 
 class SQLiteConnectionFactory:
-    def __init__(self, database_path: Path) -> None:
+    def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         self.database_path = Path(database_path)
+        self.read_only = bool(read_only)
 
     def _open(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(f"{self.database_path.resolve().as_uri()}?mode=rw", uri=True, timeout=5.0)
+        mode = "ro" if self.read_only else "rw"
+        connection = sqlite3.connect(
+            f"{self.database_path.resolve().as_uri()}?mode={mode}",
+            uri=True,
+            timeout=5.0,
+        )
         try:
             require_markdown_database(connection)
         except Exception:
@@ -34,6 +40,8 @@ class SQLiteConnectionFactory:
 
     @contextmanager
     def write(self) -> Iterator[sqlite3.Connection]:
+        if self.read_only:
+            raise RuntimeError("read-only SQLite connection factory")
         connection = self._open()
         try:
             connection.execute("BEGIN IMMEDIATE")
