@@ -1,6 +1,7 @@
-# GreenCloud 3.5-A Step 5 — automated acceptance complete
+# GreenCloud 3.5-A Step 5 — CLOSED
 
-Date: 2026-09-29 UTC. Human gate pending; Step 5 and 3.5-A are not closed.
+Date: 2026-09-29 UTC. Automated acceptance and S's human gate passed;
+Step 5 and GreenCloud 3.5-A are closed.
 
 ## Revision and preserved workspace
 
@@ -116,7 +117,26 @@ script was preserved as `/srv/snotes/rollback-step05.pre-closeout.sh` before the
 fixed version was installed. This was the first S-notes deployment; no prior
 S-notes deployment was overwritten. Mac Notes DB and other services are untouched.
 
-## S human gate — PENDING
+## S human gate — PASS
+
+S explicitly confirmed the following result in this conversation (human
+confirmation, not an additional automated read of the real note):
+
+```ini
+STEP05_HUMAN_GATE=PASS
+HUMAN_NOTE_ID=312
+HUMAN_UPDATED_CONTENT_VISIBLE_TO_CLAUDE_CODE=YES
+HUMAN_UPDATED_CONTENT_VISIBLE_TO_CLAWBOT=YES
+STEP05_CLOSED=YES
+3_5_A=CLOSED=YES
+PUSH=NO
+```
+
+No merge, push, Step 6 work, deployment change or further test run was performed
+for this documentation-only closure. The active publisher still depends on the
+isolated checkout; retain it.
+
+### Human verification procedure (retained for reference)
 
 In the official Mac S-notes app, edit a suitable common note. Then run:
 
@@ -132,5 +152,5 @@ The original positional note_id invocation remains supported. One focused test
 using fictional data covers lookup boundaries, unchanged DB bytes and both CLI
 paths; PASS. This script-only follow-up did not change Cloud deployment or rerun
 the full Step 5 suite. This manually publishes and reads the note
-through both Cloud actor MCPs. S must confirm the updated content. Until S says
-PASS: STEP05_CLOSED=NO, 3_5_A=CLOSED=NO. PUSH=NO.
+through both Cloud actor MCPs. S has confirmed the updated content as recorded
+above. PUSH=NO.
