@@ -48,6 +48,7 @@ from src.snotes.ui.theme import (
 
 
 CONFLICT_MESSAGE = "这篇笔记已被其他来源修改，请重新加载后处理。"
+AI_ACCEPT_CONFLICT_MESSAGE = "AI 修改已接受，但当前有未保存内容；请处理后重新加载。"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -254,7 +255,17 @@ class MainWindow(QMainWindow):
         dialog.activateWindow()
 
     def _receipt_note_created(self, note_id: int) -> None:
-        self.refresh_note_list(note_id)
+        selected_note_id = self.current_note.id if self.current_note is not None else note_id
+        self.refresh_note_list(selected_note_id)
+        if self.current_note is None or self.current_note.id != note_id:
+            return
+        if self.has_unsaved_changes or self.body_edit.dirty:
+            self.has_unsaved_changes = True
+            self.conflict_active = True
+            self.save_timer.stop()
+            self.shell.set_conflict_status(AI_ACCEPT_CONFLICT_MESSAGE)
+            return
+        self.load_note(note_id)
 
     def refresh_ai_center_badge(self) -> None:
         pending_count = (

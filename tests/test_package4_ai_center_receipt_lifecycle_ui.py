@@ -42,6 +42,13 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.addCleanup(self._close_window)
         self.connections = SQLiteConnectionFactory(self.data_root / "s_notes.db")
 
+    def _wait(self, predicate, timeout: float = 15) -> None:
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            if time.monotonic() > deadline:
+                self.fail("Timed out waiting for AI Center UI state")
+            QTest.qWait(20)
+
     def test_pending_detail_accept_and_processed_refresh_stay_in_one_window(self) -> None:
         self._insert_receipt(1, "pending", title="Pending A")
         self.window.show()
@@ -97,6 +104,128 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(set(view.cards), {1})
         self.assertEqual(view.cards[1].receipt.status_label, "已接受")
+
+    def test_accept_reload_current_clean_note(self) -> None:
+        note = self.window.note_service.create_note(NoteLocation("项目", "虚构"))
+        note = self.window.note_service.save_note(
+            note.id,
+            title="Before AI",
+            content_markdown="before\n",
+            location=note.location,
+            expected_revision=note.revision,
+        )
+        self.window.load_note(note.id)
+        self._wait(lambda: self.window.current_note is not None and self.window.body_edit.can_save)
+
+        accepted = self.window.note_service.save_note(
+            note.id,
+            title="After AI",
+            content_markdown="after\n",
+            location=note.location,
+            expected_revision=note.revision,
+        )
+        self.window._receipt_note_created(note.id)
+
+        self._wait(
+            lambda: self.window.current_note is not None
+            and self.window.current_note.revision == accepted.revision
+            and self.window.body_edit.can_save
+            and self.window.body_edit.latest_markdown == accepted.content_markdown
+        )
+        self.assertEqual(self.window.title_input.text(), "After AI")
+        self.assertFalse(self.window.has_unsaved_changes)
+        self.assertFalse(self.window.conflict_active)
+
+    def test_accept_preserves_dirty_current_note_and_offers_reload(self) -> None:
+        note = self.window.note_service.create_note(NoteLocation("项目", "虚构"))
+        note = self.window.note_service.save_note(
+            note.id,
+            title="Before AI",
+            content_markdown="before\n",
+            location=note.location,
+            expected_revision=note.revision,
+        )
+        self.window.load_note(note.id)
+        self._wait(lambda: self.window.current_note is not None and self.window.body_edit.can_save)
+        self.window.title_input.setText("LOCAL UNSAVED TITLE")
+        self._wait(lambda: self.window.has_unsaved_changes)
+        self.window.save_timer.stop()
+
+        self.window.note_service.save_note(
+            note.id,
+            title="After AI",
+            content_markdown="after\n",
+            location=note.location,
+            expected_revision=note.revision,
+        )
+        self.window._receipt_note_created(note.id)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.title_input.text(), "LOCAL UNSAVED TITLE")
+        self.assertEqual(self.window.body_edit.latest_markdown, "before\n")
+        self.assertEqual(self.window.current_note.revision, note.revision)
+        self.assertTrue(self.window.has_unsaved_changes)
+        self.assertTrue(self.window.conflict_active)
+        self.assertFalse(self.window.save_timer.isActive())
+        self.assertFalse(self.window.shell.reload_button.isHidden())
+        self.assertIn("AI 修改已接受", self.window.status_label.text())
+
+    def test_accept_other_note_does_not_reload_current_note(self) -> None:
+        current = self.window.note_service.create_note(NoteLocation("项目", "虚构"))
+        current = self.window.note_service.save_note(
+            current.id,
+            title="Current",
+            content_markdown="current\n",
+            location=current.location,
+            expected_revision=current.revision,
+        )
+        other = self.window.note_service.create_note(NoteLocation("项目", "虚构"))
+        self.window.load_note(current.id)
+        self._wait(lambda: self.window.current_note is not None and self.window.body_edit.can_save)
+
+        updated_other = self.window.note_service.save_note(
+            other.id,
+            title="Other after AI",
+            content_markdown="other\n",
+            location=other.location,
+            expected_revision=other.revision,
+        )
+        self.window._receipt_note_created(other.id)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.current_note.id, current.id)
+        self.assertEqual(self.window.title_input.text(), "Current")
+        self.assertEqual(self.window.body_edit.latest_markdown, "current\n")
+        self.assertFalse(self.window.has_unsaved_changes)
+        self.assertIn(
+            (updated_other.id, "Other after AI"),
+            [(item.id, item.title) for item in self.window.visible_notes],
+        )
+
+    def test_accept_create_refreshes_list_without_stealing_current_note(self) -> None:
+        current = self.window.note_service.create_note(NoteLocation("项目", "虚构"))
+        current = self.window.note_service.save_note(
+            current.id,
+            title="Stay here",
+            content_markdown="current\n",
+            location=current.location,
+            expected_revision=current.revision,
+        )
+        self.window.load_note(current.id)
+        self._wait(lambda: self.window.current_note is not None and self.window.body_edit.can_save)
+        self._insert_receipt(7, "pending", title="New from AI")
+        self.window.open_ai_center()
+        self.app.processEvents()
+        view = self.window.ai_center_dialog.receipt_view
+
+        QTest.mouseClick(view.cards[7].accept_button, Qt.LeftButton)
+        self.app.processEvents()
+
+        receipt = self.window.receipt_inbox_service.get_receipt(7)
+        self.assertEqual(receipt.status, "accepted")
+        self.assertEqual(self.window.current_note.id, current.id)
+        self.assertEqual(self.window.title_input.text(), "Stay here")
+        self.assertIn(receipt.note_id, [item.id for item in self.window.visible_notes])
 
     def test_discard_creates_no_note_or_trash_and_appears_processed(self) -> None:
         self._insert_receipt(2, "pending", title="Pending B")
