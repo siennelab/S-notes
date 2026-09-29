@@ -92,6 +92,9 @@ class ReminderService:
         self._repository.set_lifecycle(reminder_id, REMINDER_PAUSED)
 
     def resume_reminder(self, reminder_id: int) -> None:
+        reminder = self._required(reminder_id)
+        if reminder.lifecycle == REMINDER_COMPLETED:
+            raise ValueError("completed_reminder_cannot_resume")
         self._repository.set_lifecycle(reminder_id, REMINDER_ACTIVE)
 
     def complete_reminder(self, reminder_id: int) -> None:
@@ -686,7 +689,24 @@ class ReminderService:
                 result=result,
             )
         before_snapshot = _item_snapshot(before_item)
-        mutate()
+        try:
+            mutate()
+        except ValueError as error:
+            if str(error) != "completed_reminder_cannot_resume":
+                raise
+            result = _mcp_result(
+                "rejected",
+                request_id,
+                table_id=before_item.table.id,
+                item_id=item_id,
+                title=before_item.reminder.title,
+                reason="已完成的提醒不能恢复；完成状态和完成时间已保留。",
+            )
+            return self._repository.store_operation(
+                actor_target_id=actor_target_id,
+                operation_type=operation_type,
+                result=result,
+            )
         after_item = self.get_reminder(item_id)
         result = _mcp_result(
             "updated",

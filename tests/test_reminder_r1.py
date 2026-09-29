@@ -24,6 +24,7 @@ from src.snotes.domain.reminder_schedule import (
 )
 from src.snotes.domain.reminders import (
     REMINDER_ACTIVE,
+    REMINDER_COMPLETED,
     REMINDER_PAUSED,
     ReminderDraft,
     ReminderQuery,
@@ -208,6 +209,89 @@ class ReminderR1Tests(unittest.TestCase):
         with closing(sqlite3.connect(self.database_path)) as connection:
             count = connection.execute("SELECT COUNT(*) FROM reminder_occurrences").fetchone()[0]
         self.assertEqual(count, 0)
+
+    def test_completed_reminder_cannot_be_resumed_and_keeps_completion_state(self) -> None:
+        reminder = self.create(
+            "FICTIONAL_COMPLETED_RESUME_GUARD",
+            {"type": "monthly_day", "day": 10},
+        )
+        self.service.complete_reminder(reminder.id)
+        completed = self.service.get_reminder(reminder.id)
+        self.assertIsNotNone(completed)
+        completed_at = completed.reminder.completed_at
+        occurrences = self.service.history(reminder.id)
+
+        with self.assertRaisesRegex(ValueError, "completed_reminder_cannot_resume"):
+            self.service.resume_reminder(reminder.id)
+
+        unchanged = self.service.get_reminder(reminder.id)
+        self.assertIsNotNone(unchanged)
+        self.assertEqual(unchanged.reminder.lifecycle, REMINDER_COMPLETED)
+        self.assertEqual(unchanged.reminder.completed_at, completed_at)
+        self.assertEqual(self.service.history(reminder.id), occurrences)
+
+    def test_ai_resume_rejects_completed_item_and_allows_paused_item(self) -> None:
+        completed = self.create(
+            "FICTIONAL_AI_COMPLETED_RESUME_GUARD",
+            {"type": "one_time", "date": "2026-09-10"},
+        )
+        self.service.complete_reminder(completed.id)
+        completed_before = self.service.get_reminder(completed.id)
+        self.assertIsNotNone(completed_before)
+        completed_at = completed_before.reminder.completed_at
+        self.assertIsNotNone(completed_at)
+        history_before = self.service.history(completed.id)
+
+        rejected = self.service.ai_resume_item(
+            actor_target_id="gale",
+            request_id="fictional-completed-resume",
+            item_id=completed.id,
+        )
+        retry = self.service.ai_resume_item(
+            actor_target_id="gale",
+            request_id="fictional-completed-resume",
+            item_id=completed.id,
+        )
+
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertIn("已完成", rejected["reason"])
+        self.assertEqual(retry["status"], "already_processed")
+        self.assertEqual(retry["previous_status"], "rejected")
+        unchanged = self.service.get_reminder(completed.id)
+        self.assertIsNotNone(unchanged)
+        self.assertEqual(unchanged.reminder, completed_before.reminder)
+        self.assertEqual(unchanged.reminder.lifecycle, REMINDER_COMPLETED)
+        self.assertEqual(unchanged.reminder.completed_at, completed_at)
+        self.assertEqual(self.service.history(completed.id), history_before)
+
+        paused = self.create(
+            "FICTIONAL_AI_PAUSED_RESUME",
+            {"type": "one_time", "date": "2026-09-20"},
+        )
+        pause = self.service.ai_pause_item(
+            actor_target_id="gale",
+            request_id="fictional-active-pause",
+            item_id=paused.id,
+        )
+        self.assertEqual(pause["status"], "updated")
+        self.assertEqual(self.service.get_reminder(paused.id).reminder.lifecycle, REMINDER_PAUSED)
+        resumed = self.service.ai_resume_item(
+            actor_target_id="gale",
+            request_id="fictional-paused-resume",
+            item_id=paused.id,
+        )
+        self.assertEqual(resumed["status"], "updated")
+        self.assertEqual(self.service.get_reminder(paused.id).reminder.lifecycle, REMINDER_ACTIVE)
+        complete = self.service.ai_complete_item(
+            actor_target_id="gale",
+            request_id="fictional-resumed-complete",
+            item_id=paused.id,
+            current_occurrence_only=False,
+        )
+        self.assertEqual(complete["status"], "updated")
+        completed_after_resume = self.service.get_reminder(paused.id)
+        self.assertEqual(completed_after_resume.reminder.lifecycle, REMINDER_COMPLETED)
+        self.assertIsNotNone(completed_after_resume.reminder.completed_at)
 
     def test_default_sorting_puts_most_actionable_first(self) -> None:
         self.clock.set(datetime(2026, 8, 1, 10, 0, tzinfo=SHANGHAI))
