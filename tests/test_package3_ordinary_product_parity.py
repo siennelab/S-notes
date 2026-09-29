@@ -292,7 +292,8 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
         self.assertEqual(payload["scope"], "all_notes")
         self.assertEqual(payload["note_count"], 1)
         self.assertEqual(payload["notes"][0]["tags"], ["alpha", "中文"])
-        self.assertEqual(payload["notes"][0]["content_text"], "粗体\n项目")
+        # f2e280f preserves spacing between Markdown blocks in plain-text exports.
+        self.assertEqual(payload["notes"][0]["content_text"], "粗体\n\n项目")
         self.assertNotIn("sub_sub_category", payload["notes"][0])
 
         backup = self.exports.backup_database()

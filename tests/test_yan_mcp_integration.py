@@ -10,6 +10,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptAcceptFields,
     AiReceiptInboxService,
@@ -67,6 +69,7 @@ class YanMcpIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.directories,
                 self.tags_repository,
             ),
+            authorization=AiWriteAuthorization(directories=DirectoryService(self.directories)),
             notes=self.notes,
             tags=self.tags,
             ai_metadata=self.metadata,

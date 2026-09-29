@@ -98,6 +98,17 @@ class MarkdownCoreTests(unittest.TestCase):
 
     def test_mcp_markdown_writes_plain_reads_and_snapshot(self):
         from src.snotes.bootstrap import build_local_mcp_service
+        from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
+        from markdown_it import MarkdownIt
+
+        def assert_canonical_contract(actual, source):
+            # Compare parsed semantics/structure, not entity or whitespace spelling.
+            parser = MarkdownIt('commonmark')
+            self.assertEqual(parser.render(actual), parser.render(source))
+            self.assertEqual(markdown_to_plain_text(actual), markdown_to_plain_text(source))
+            self.assertEqual(canonicalize_markdown(actual), actual)
+            return actual
+
         service = build_local_mcp_service(actor_target_id='codex', resolved_data_root=self.root)
         with sqlite3.connect(self.root / 's_notes.db') as connection:
             connection.execute("INSERT INTO app_settings VALUES ('ai_modify_requires_confirmation', '0', '2026-01-01')")
@@ -105,19 +116,26 @@ class MarkdownCoreTests(unittest.TestCase):
         result = service.create_note(request_id='md-create', title='markdown fixture', content=body, ai_visibility='full', ai_targets=['common'])
         self.assertEqual(result['status'], 'created')
         note_id = result['note_id']
-        self.assertEqual(service._notes.get_note(note_id).content_markdown, body)
+        canonical_body = assert_canonical_contract(
+            service._notes.get_note(note_id).content_markdown, body,
+        )
         read = service.get_note(note_id)
         self.assertEqual(read['content'], markdown_to_plain_text(body))
         addition = '## appended\n\n**second**'
         result = service.append_note(request_id='md-append', note_id=note_id, content=addition, expected_version=read['version'])
         self.assertEqual(result['status'], 'updated')
-        self.assertEqual(service._notes.get_note(note_id).content_markdown, body + '\n\n' + addition)
+        assert_canonical_contract(
+            service._notes.get_note(note_id).content_markdown, body + '\n\n' + addition,
+        )
         read = service.get_note(note_id)
         service.prepend_note(request_id='md-prepend', note_id=note_id, content='# first', expected_version=read['version'])
-        self.assertTrue(service._notes.get_note(note_id).content_markdown.startswith('# first\n\n'))
+        assert_canonical_contract(
+            service._notes.get_note(note_id).content_markdown,
+            '# first\n\n' + body + '\n\n' + addition,
+        )
         with sqlite3.connect(self.root / 's_notes.db') as connection:
             snapshot = json.loads(connection.execute('SELECT before_snapshot FROM ai_note_history ORDER BY id LIMIT 1').fetchone()[0])
-        self.assertEqual(snapshot['content_markdown'], body)
+        self.assertEqual(snapshot['content_markdown'], canonical_body)
         self.assertNotIn('content_html', snapshot)
         self.assertNotIn('body_rich_text', snapshot)
 

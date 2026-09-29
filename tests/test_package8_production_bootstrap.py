@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 READ_ONLY_MCP_TOOLS = [
     "search_notes",
     "get_note",
+    "get_note_markdown",
     "list_reminder_labels",
     "list_reminder_tables",
     "get_reminder_table",

@@ -43,7 +43,25 @@ class Package8VisualPolishTests(unittest.TestCase):
                     "{ height: 0; }",
                     style,
                 )
-                self.assertNotIn("QScrollBar:horizontal", style)
+                # 6a91c1d added horizontal styling with Reminder R1.
+                self.assertIn(
+                    "QScrollBar:horizontal { height: 8px; background: transparent; }",
+                    style,
+                )
+                self.assertIn(
+                    "QScrollBar::handle:horizontal { min-width: 24px; "
+                    f"margin: 1px 0; border-radius: 3px; background: {tokens.scrollbar}; }}",
+                    style,
+                )
+                self.assertIn(
+                    "QScrollBar::handle:horizontal:disabled { background: transparent; }",
+                    style,
+                )
+                self.assertIn(
+                    "QScrollBar[scrollable='false']::handle:horizontal "
+                    "{ background: transparent; }",
+                    style,
+                )
 
                 self.application.setStyleSheet(style)
                 bar = QScrollBar(Qt.Vertical)
