@@ -11,11 +11,23 @@ REMINDER_HELPER_SPEC_FILE="$ROOT_DIR/packaging/snotes-reminder-helper.spec"
 ICON_SOURCE="$ROOT_DIR/resources/macos/icon/S-notes-icon-source-2048.png"
 BUILD_DIR="$ROOT_DIR/build"
 DIST_DIR="$ROOT_DIR/dist"
+STEP07_CANDIDATE="0"
+BUNDLE_IDENTIFIER="de.ke-den.snotes"
 if [[ "${1:-}" == "--candidate" ]]; then
     BUILD_DIR="$ROOT_DIR/build-d1-candidate"
     DIST_DIR="$ROOT_DIR/dist-d1-candidate"
+elif [[ "${1:-}" == "--step07-candidate" ]]; then
+    BUILD_DIR="$ROOT_DIR/build-step07-candidate"
+    DIST_DIR="$ROOT_DIR/dist-step07-candidate"
+    STEP07_CANDIDATE="1"
+    BUNDLE_IDENTIFIER="de.ke-den.snotes.step07candidate"
 elif [[ $# -gt 0 ]]; then
-    echo "Usage: $0 [--candidate]" >&2
+    echo "Usage: $0 [--candidate|--step07-candidate]" >&2
+    exit 2
+fi
+RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"
+if [[ "$RETIRE_REMINDER_HELPER" != "0" && "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    echo "S_NOTES_RETIRE_REMINDER_HELPER must be 0 or 1." >&2
     exit 2
 fi
 ICONSET_DIR="$BUILD_DIR/S-notes.iconset"
@@ -53,7 +65,8 @@ safe_clean() {
     local target="$1"
     case "$target" in
         "$ROOT_DIR/build"|"$ROOT_DIR/dist"|\
-        "$ROOT_DIR/build-d1-candidate"|"$ROOT_DIR/dist-d1-candidate")
+        "$ROOT_DIR/build-d1-candidate"|"$ROOT_DIR/dist-d1-candidate"|\
+        "$ROOT_DIR/build-step07-candidate"|"$ROOT_DIR/dist-step07-candidate")
             rm -rf -- "$target"
             ;;
         *)
@@ -75,7 +88,9 @@ echo "Repository: $ROOT_DIR"
 [[ -x "$PYTHON" ]] || fail "Project Python not found: $PYTHON"
 [[ -f "$SPEC_FILE" ]] || fail "PyInstaller spec not found: $SPEC_FILE"
 [[ -f "$HELPER_SPEC_FILE" ]] || fail "Helper PyInstaller spec not found: $HELPER_SPEC_FILE"
-[[ -f "$REMINDER_HELPER_SPEC_FILE" ]] || fail "Reminder helper PyInstaller spec not found: $REMINDER_HELPER_SPEC_FILE"
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    [[ -f "$REMINDER_HELPER_SPEC_FILE" ]] || fail "Reminder helper PyInstaller spec not found: $REMINDER_HELPER_SPEC_FILE"
+fi
 [[ -x "$MCP_LAUNCHER_SOURCE" ]] || fail "Packaged MCP launcher source is missing or not executable: $MCP_LAUNCHER_SOURCE"
 [[ -x "$YAN_MCP_LAUNCHER_SOURCE" ]] || fail "Yan MCP launcher source is missing or not executable: $YAN_MCP_LAUNCHER_SOURCE"
 [[ -f "$ICON_SOURCE" ]] || fail "Official icon source not found: $ICON_SOURCE"
@@ -109,13 +124,15 @@ fi
 [[ "$(grep -c '^[[:space:]]*datas=' "$SPEC_FILE")" == "1" ]] || fail "The spec must define exactly one datas whitelist."
 grep -Fq '(str(SVG_DIR), "src/icons")' "$SPEC_FILE" || fail "The App spec must include src/icons."
 grep -Fq '(str(HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the production helper."
-grep -Fq '(str(REMINDER_HELPER_BINARY), "bin")' "$SPEC_FILE" || fail "The App spec must include the Reminder helper."
+grep -Fq '[(str(REMINDER_HELPER_BINARY), "bin")]' "$SPEC_FILE" || fail "The App spec must retain the gated Reminder helper input."
 grep -Fq '(str(MCP_LAUNCHER), "bin")' "$SPEC_FILE" || fail "The App spec must include the packaged MCP launcher."
 grep -Fq '(str(YAN_MCP_LAUNCHER), "bin")' "$SPEC_FILE" || fail "The App spec must include the Yan MCP launcher."
 grep -Fq 'target_arch="arm64"' "$SPEC_FILE" || fail "The spec must target arm64."
 grep -Fq 'target_arch="arm64"' "$HELPER_SPEC_FILE" || fail "The helper spec must target arm64."
-grep -Fq 'target_arch="arm64"' "$REMINDER_HELPER_SPEC_FILE" || fail "The Reminder helper spec must target arm64."
-grep -Fq 'bundle_identifier="de.ke-den.snotes"' "$SPEC_FILE" || fail "The Bundle Identifier is missing from the spec."
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    grep -Fq 'target_arch="arm64"' "$REMINDER_HELPER_SPEC_FILE" || fail "The Reminder helper spec must target arm64."
+fi
+grep -Fq 'bundle_identifier=BUNDLE_IDENTIFIER' "$SPEC_FILE" || fail "The Bundle Identifier input is missing from the spec."
 grep -Fq '"CFBundleShortVersionString": "1.0.0"' "$SPEC_FILE" || fail "The short version is missing from the spec."
 grep -Fq '"CFBundleVersion": "1"' "$SPEC_FILE" || fail "The build version is missing from the spec."
 grep -Fq '"LSMinimumSystemVersion": "13.0"' "$SPEC_FILE" || fail "The minimum macOS version is missing from the spec."
@@ -175,18 +192,20 @@ echo "Building standalone production pull helper..."
 [[ "$("$HELPER_EXECUTABLE" --version)" == "snotes-gale-production-pull 1" ]] || fail "Production helper version check failed."
 codesign --verify --strict --verbose=2 "$HELPER_EXECUTABLE"
 
-echo "Building standalone Reminder helper..."
-"$PYTHON" -m PyInstaller \
-    --noconfirm \
-    --clean \
-    --workpath "$REMINDER_HELPER_WORK_DIR" \
-    --distpath "$REMINDER_HELPER_DIST_DIR" \
-    "$REMINDER_HELPER_SPEC_FILE"
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    echo "Building standalone Reminder helper..."
+    "$PYTHON" -m PyInstaller \
+        --noconfirm \
+        --clean \
+        --workpath "$REMINDER_HELPER_WORK_DIR" \
+        --distpath "$REMINDER_HELPER_DIST_DIR" \
+        "$REMINDER_HELPER_SPEC_FILE"
 
-[[ -x "$REMINDER_HELPER_EXECUTABLE" ]] || fail "Reminder helper was not created: $REMINDER_HELPER_EXECUTABLE"
-[[ "$(lipo -archs "$REMINDER_HELPER_EXECUTABLE")" == "arm64" ]] || fail "Reminder helper is not arm64."
-[[ "$("$REMINDER_HELPER_EXECUTABLE" --version)" == "snotes-reminder-helper 1" ]] || fail "Reminder helper version check failed."
-codesign --verify --strict --verbose=2 "$REMINDER_HELPER_EXECUTABLE"
+    [[ -x "$REMINDER_HELPER_EXECUTABLE" ]] || fail "Reminder helper was not created: $REMINDER_HELPER_EXECUTABLE"
+    [[ "$(lipo -archs "$REMINDER_HELPER_EXECUTABLE")" == "arm64" ]] || fail "Reminder helper is not arm64."
+    [[ "$("$REMINDER_HELPER_EXECUTABLE" --version)" == "snotes-reminder-helper 1" ]] || fail "Reminder helper version check failed."
+    codesign --verify --strict --verbose=2 "$REMINDER_HELPER_EXECUTABLE"
+fi
 
 icns_metadata="$(sips -g format -g pixelWidth -g pixelHeight "$ICNS_FILE")"
 grep -q "format: icns" <<<"$icns_metadata" || fail "Generated App icon must be ICNS."
@@ -199,6 +218,9 @@ env \
     S_NOTES_APP_ICON="$ICNS_FILE" \
     S_NOTES_HELPER_BINARY="$HELPER_EXECUTABLE" \
     S_NOTES_REMINDER_HELPER_BINARY="$REMINDER_HELPER_EXECUTABLE" \
+    S_NOTES_RETIRE_REMINDER_HELPER="$RETIRE_REMINDER_HELPER" \
+    S_NOTES_STEP07_CANDIDATE="$STEP07_CANDIDATE" \
+    S_NOTES_BUNDLE_IDENTIFIER="$BUNDLE_IDENTIFIER" \
     S_NOTES_SOURCE_COMMIT="$source_commit" \
     S_NOTES_SOURCE_DIRTY="$source_dirty" \
     "$PYTHON" -m PyInstaller \
@@ -211,28 +233,40 @@ env \
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle was not created: $APP_BUNDLE"
 [[ -x "$APP_EXECUTABLE" ]] || fail "App executable was not created: $APP_EXECUTABLE"
 [[ -x "$APP_HELPER" ]] || fail "Embedded production helper is missing or not executable: $APP_HELPER"
-[[ -x "$APP_REMINDER_HELPER" ]] || fail "Embedded Reminder helper is missing or not executable: $APP_REMINDER_HELPER"
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    [[ -x "$APP_REMINDER_HELPER" ]] || fail "Embedded Reminder helper is missing or not executable: $APP_REMINDER_HELPER"
+else
+    [[ ! -e "$APP_REMINDER_HELPER" ]] || fail "Retired Reminder helper is unexpectedly bundled: $APP_REMINDER_HELPER"
+fi
 [[ -x "$APP_MCP_LAUNCHER" ]] || fail "Packaged MCP launcher is missing or not executable: $APP_MCP_LAUNCHER"
 [[ -x "$APP_YAN_MCP_LAUNCHER" ]] || fail "Packaged Yan MCP launcher is missing or not executable: $APP_YAN_MCP_LAUNCHER"
 [[ "$(lipo -archs "$APP_HELPER")" == "arm64" ]] || fail "Embedded production helper is not arm64."
-[[ "$(lipo -archs "$APP_REMINDER_HELPER")" == "arm64" ]] || fail "Embedded Reminder helper is not arm64."
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    [[ "$(lipo -archs "$APP_REMINDER_HELPER")" == "arm64" ]] || fail "Embedded Reminder helper is not arm64."
+fi
 [[ "$("$APP_HELPER" --version)" == "snotes-gale-production-pull 1" ]] || fail "Embedded production helper version check failed."
-[[ "$("$APP_REMINDER_HELPER" --version)" == "snotes-reminder-helper 1" ]] || fail "Embedded Reminder helper version check failed."
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    [[ "$("$APP_REMINDER_HELPER" --version)" == "snotes-reminder-helper 1" ]] || fail "Embedded Reminder helper version check failed."
+fi
 helper_hash="$(shasum -a 256 "$HELPER_EXECUTABLE" | awk '{print $1}')"
 embedded_helper_hash="$(shasum -a 256 "$APP_HELPER" | awk '{print $1}')"
 [[ "$helper_hash" == "$embedded_helper_hash" ]] || fail "Embedded helper hash differs from the standalone build."
-reminder_helper_hash="$(shasum -a 256 "$REMINDER_HELPER_EXECUTABLE" | awk '{print $1}')"
-embedded_reminder_helper_hash="$(shasum -a 256 "$APP_REMINDER_HELPER" | awk '{print $1}')"
-[[ "$reminder_helper_hash" == "$embedded_reminder_helper_hash" ]] || fail "Embedded Reminder helper hash differs from the standalone build."
+reminder_helper_hash="retired"
+if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then
+    reminder_helper_hash="$(shasum -a 256 "$REMINDER_HELPER_EXECUTABLE" | awk '{print $1}')"
+    embedded_reminder_helper_hash="$(shasum -a 256 "$APP_REMINDER_HELPER" | awk '{print $1}')"
+    [[ "$reminder_helper_hash" == "$embedded_reminder_helper_hash" ]] || fail "Embedded Reminder helper hash differs from the standalone build."
+fi
 
 [[ "$(metadata_value CFBundleName)" == "S-notes" ]] || fail "Incorrect CFBundleName."
 [[ "$(metadata_value CFBundleDisplayName)" == "S-notes" ]] || fail "Incorrect CFBundleDisplayName."
-[[ "$(metadata_value CFBundleIdentifier)" == "de.ke-den.snotes" ]] || fail "Incorrect CFBundleIdentifier."
+[[ "$(metadata_value CFBundleIdentifier)" == "$BUNDLE_IDENTIFIER" ]] || fail "Incorrect CFBundleIdentifier."
 [[ "$(metadata_value CFBundleShortVersionString)" == "1.0.0" ]] || fail "Incorrect short version."
 [[ "$(metadata_value CFBundleVersion)" == "1" ]] || fail "Incorrect build version."
 [[ "$(metadata_value LSMinimumSystemVersion)" == "13.0" ]] || fail "Incorrect minimum macOS version."
 [[ "$(metadata_value SNotesSourceCommit)" == "$source_commit" ]] || fail "Incorrect source commit provenance."
 [[ "$(metadata_value SNotesSourceDirty)" == "$source_dirty" ]] || fail "Incorrect source dirty provenance."
+[[ "$(metadata_value SNotesStep07Candidate)" == "$([[ "$STEP07_CANDIDATE" == "1" ]] && echo true || echo false)" ]] || fail "Incorrect Step 7 candidate marker."
 
 executable_archs="$(lipo -archs "$APP_EXECUTABLE")"
 [[ "$executable_archs" == "arm64" ]] || fail "Expected arm64 executable, found: $executable_archs"

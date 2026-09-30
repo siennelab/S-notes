@@ -305,6 +305,9 @@ class ReminderR1Tests(unittest.TestCase):
         self.create("FICTIONAL_FUTURE_SOON", {"type": "one_time", "date": "2026-09-12"})
         paused = self.create("FICTIONAL_PAUSED_SORT", {"type": "one_time", "date": "2026-09-01"})
         done = self.create("FICTIONAL_DONE_SORT", {"type": "one_time", "date": "2026-09-01"})
+        # Create this sorting fixture in its intended current cycle; creation
+        # now materializes that cycle explicitly instead of deferring to GET.
+        self.clock.set(datetime(2026, 9, 10, 10, 0, tzinfo=SHANGHAI))
         recurring = self.create("FICTIONAL_RECURRING_DONE_SORT", {"type": "monthly_day", "day": 10})
         self.clock.set(datetime(2026, 9, 10, 10, 0, tzinfo=SHANGHAI))
         self.service.pause_reminder(paused.id)

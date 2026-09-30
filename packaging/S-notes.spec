@@ -21,6 +21,13 @@ REMINDER_HELPER_BINARY = Path(
         str(ROOT / "build" / "reminder-helper-dist" / "snotes-reminder-helper"),
     )
 )
+BUNDLE_IDENTIFIER = os.environ.get(
+    "S_NOTES_BUNDLE_IDENTIFIER", "de.ke-den.snotes"
+)
+STEP07_CANDIDATE = os.environ.get("S_NOTES_STEP07_CANDIDATE") == "1"
+RETIRE_REMINDER_HELPER = (
+    os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1"
+)
 
 
 analysis = Analysis(
@@ -31,10 +38,13 @@ analysis = Analysis(
         (str(SVG_DIR), "src/icons"),
         (str(ROOT / "web/markdown-editor/dist"), "web/markdown-editor/dist"),
         (str(HELPER_BINARY), "bin"),
-        (str(REMINDER_HELPER_BINARY), "bin"),
         (str(MCP_LAUNCHER), "bin"),
         (str(YAN_MCP_LAUNCHER), "bin"),
-    ],
+    ] + (
+        []
+        if RETIRE_REMINDER_HELPER
+        else [(str(REMINDER_HELPER_BINARY), "bin")]
+    ),
     hiddenimports=["PySide6.QtSvg", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"],
     hookspath=[],
     hooksconfig={},
@@ -75,7 +85,7 @@ app = BUNDLE(
     collected,
     name="S-notes.app",
     icon=str(APP_ICON),
-    bundle_identifier="de.ke-den.snotes",
+    bundle_identifier=BUNDLE_IDENTIFIER,
     version="1.0.0",
     info_plist={
         "CFBundleName": "S-notes",
@@ -86,5 +96,6 @@ app = BUNDLE(
         "NSHighResolutionCapable": True,
         "SNotesSourceCommit": os.environ.get("S_NOTES_SOURCE_COMMIT", "unknown"),
         "SNotesSourceDirty": os.environ.get("S_NOTES_SOURCE_DIRTY", "unknown"),
+        "SNotesStep07Candidate": STEP07_CANDIDATE,
     },
 )

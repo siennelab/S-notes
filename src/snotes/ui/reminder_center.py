@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
 from urllib.parse import urlparse
+from typing import Any
 
 from PySide6.QtCore import QDate, QEvent, QLocale, QSize, Qt, QTime, Signal
 from PySide6.QtGui import QColor, QPalette
@@ -62,8 +64,9 @@ class ReminderCenter(QWidget):
     changed = Signal()
     testNotificationRequested = Signal()
     filterChanged = Signal(object, str)
+    remoteWritableChanged = Signal(bool)
 
-    def __init__(self, service: ReminderService, parent: QWidget | None = None) -> None:
+    def __init__(self, service: ReminderService | object, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
         self.items: list[ReminderListItem] = []
@@ -78,6 +81,17 @@ class ReminderCenter(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 16, 24, 12)
         layout.setSpacing(10)
+
+        self.remote_status = QLabel("")
+        self.remote_status.setObjectName("reminderRemoteStatus")
+        self.remote_status.setVisible(bool(getattr(service, "is_remote", False)))
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.remote_status, 1)
+        self.remote_refresh_button = QPushButton("刷新")
+        self.remote_refresh_button.setVisible(self.is_remote)
+        self.remote_refresh_button.clicked.connect(self.refresh_remote)
+        status_row.addWidget(self.remote_refresh_button)
+        layout.addLayout(status_row)
 
         self.table_meta = QWidget()
         self.table_meta.setObjectName("reminderTableMeta")
@@ -187,6 +201,10 @@ class ReminderCenter(QWidget):
         self.topic_input.setPlaceholderText("Reminder ntfy topic")
         self.topic_input.setReadOnly(True)
         self.topic_input.setMinimumWidth(420)
+        self.endpoint_input = QLineEdit()
+        self.endpoint_input.setObjectName("reminderEndpointInput")
+        self.endpoint_input.setReadOnly(True)
+        self.endpoint_input.setMinimumWidth(190)
         self.copy_topic_button = QPushButton("复制 Topic")
         self.delete_table_button = QToolButton()
         self.delete_table_button.setObjectName("reminderDeleteTableButton")
@@ -196,6 +214,8 @@ class ReminderCenter(QWidget):
         settings.addWidget(self.enabled_check)
         settings.addWidget(_settings_label("时间"))
         settings.addWidget(self.time_edit)
+        settings.addWidget(_settings_label("Endpoint"))
+        settings.addWidget(self.endpoint_input)
         settings.addWidget(_settings_label("Topic"))
         settings.addWidget(self.topic_input, stretch=1)
         settings.addWidget(self.copy_topic_button)
@@ -219,8 +239,19 @@ class ReminderCenter(QWidget):
         self.enabled_check.stateChanged.connect(self._save_settings)
         self.time_edit.timeChanged.connect(self._save_settings)
         self.copy_topic_button.clicked.connect(self._copy_topic)
+        if self.is_remote:
+            self.service.snapshotChanged.connect(self._remote_snapshot_changed)
+            self.service.stateChanged.connect(self._remote_state_changed)
+            self.service.commandFailed.connect(self._remote_command_failed)
+            self.remote_status.setText(self.service.state_detail)
         self.refresh_theme()
         self.refresh()
+        if self.is_remote:
+            self.service.refresh()
+
+    @property
+    def is_remote(self) -> bool:
+        return bool(getattr(self.service, "is_remote", False))
 
     def eventFilter(self, watched, event) -> bool:
         if watched is self.table.viewport() and event.type() == QEvent.Resize:
@@ -267,7 +298,7 @@ class ReminderCenter(QWidget):
                 )
                 if tables:
                     self.selected_table_id = tables[0].table.id
-                else:
+                elif not self.is_remote:
                     self.selected_table_id = self.service.default_table().id
             self._load_table_metadata()
             self.items = self.service.list_reminders(
@@ -305,6 +336,26 @@ class ReminderCenter(QWidget):
         self._apply_table_widths()
         self._update_action_states()
 
+    def _remote_snapshot_changed(self) -> None:
+        available = {item.table.id for item in self.service.list_tables()}
+        if self.selected_table_id not in available:
+            self.selected_table_id = None
+        self.refresh()
+        self.changed.emit()
+
+    def _remote_state_changed(self, _state: str, detail: str) -> None:
+        self.remote_status.setText("正在处理…" if self.service.pending else detail)
+        self.remote_refresh_button.setEnabled(not self.service.pending)
+        self._update_action_states()
+        self.remoteWritableChanged.emit(not self.service.read_only)
+
+    def _remote_command_failed(self, _command: str, _kind: str, detail: str) -> None:
+        self.remote_status.setText(f"{self.service.state_detail} · {detail}")
+
+    def refresh_remote(self) -> None:
+        if self.is_remote:
+            self.service.refresh()
+
     def enter_default(self) -> None:
         self.trash_mode = False
         self.label_id = None
@@ -338,6 +389,33 @@ class ReminderCenter(QWidget):
 
     def labels(self) -> list[ReminderLabel]:
         return self.service.list_labels()
+
+    def create_table(self) -> None:
+        if self.is_remote:
+            self._command(
+                "create_table",
+                {},
+                on_success=lambda result: self.select_table(int(result["table_id"])),
+            )
+            return
+        table = self.service.create_table()
+        self.select_table(table.id)
+
+    def move_table(self, table_id: int, label_id: int) -> None:
+        if self.is_remote:
+            self._command("update_table_metadata", {"table_id": table_id, "label_id": label_id})
+            return
+        self.service.update_table_metadata(table_id, label_id=label_id)
+        self.select_table(table_id)
+
+    def delete_table(self, table_id: int) -> None:
+        if self.is_remote:
+            self._command("delete_table", {"table_id": table_id})
+            return
+        self.service.delete_table(table_id)
+        if self.selected_table_id == table_id:
+            self.selected_table_id = None
+        self.refresh()
 
     def refresh_theme(self) -> None:
         tokens = current_theme()
@@ -384,29 +462,51 @@ class ReminderCenter(QWidget):
         )
 
     def _new(self) -> None:
-        table_id = self.selected_table_id or self.service.default_table().id
+        if self.is_remote and self.service.read_only:
+            return
+        table_id = self.selected_table_id
+        if table_id is None:
+            if self.is_remote:
+                return
+            table_id = self.service.default_table().id
         dialog = ReminderDialog(
             parent=self,
             table_id=table_id,
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        self.service.create_reminder(dialog.draft())
+        draft = dialog.draft()
+        if self.is_remote:
+            self._command("create_reminder", _draft_payload(draft))
+            return
+        self.service.create_reminder(draft)
         self._after_change()
 
     def _edit(self) -> None:
+        if self.is_remote and self.service.read_only:
+            return
         reminder = self._selected_reminder()
         if reminder is None:
             return
         dialog = ReminderDialog(reminder, self, table_id=reminder.table_id)
         if dialog.exec() != QDialog.Accepted:
             return
-        self.service.update_reminder(reminder.id, dialog.draft())
+        draft = dialog.draft()
+        if self.is_remote:
+            self._command(
+                "update_reminder",
+                {"item_id": reminder.id, **_draft_payload(draft)},
+            )
+            return
+        self.service.update_reminder(reminder.id, draft)
         self._after_change()
 
     def _delete(self) -> None:
         reminder_id = self._selected_id()
         if reminder_id is None:
+            return
+        if self.is_remote:
+            self._command("delete_reminder", {"item_id": reminder_id})
             return
         self.service.delete_reminder(reminder_id)
         self._after_change()
@@ -414,6 +514,9 @@ class ReminderCenter(QWidget):
     def _restore(self) -> None:
         table_id = self._selected_id()
         if table_id is not None:
+            if self.is_remote:
+                self._command("restore_table", {"table_id": table_id})
+                return
             self.service.restore_table(table_id)
             self._after_change()
 
@@ -423,30 +526,45 @@ class ReminderCenter(QWidget):
             return
         if QMessageBox.question(self, "永久删除 Table", "确定永久删除这个 Reminder Table 及其中所有事项吗？此操作无法撤销。") != QMessageBox.Yes:
             return
+        if self.is_remote:
+            self._command("permanently_delete_table", {"table_id": table_id})
+            return
         self.service.permanently_delete_table(table_id)
         self._after_change()
 
     def _pause(self) -> None:
         reminder_id = self._selected_id()
         if reminder_id is not None:
+            if self.is_remote:
+                self._command("pause_reminder", {"item_id": reminder_id})
+                return
             self.service.pause_reminder(reminder_id)
             self._after_change()
 
     def _resume(self) -> None:
         reminder_id = self._selected_id()
         if reminder_id is not None:
+            if self.is_remote:
+                self._command("resume_reminder", {"item_id": reminder_id})
+                return
             self.service.resume_reminder(reminder_id)
             self._after_change()
 
     def _complete_occurrence(self) -> None:
         reminder_id = self._selected_id()
         if reminder_id is not None:
+            if self.is_remote:
+                self._command("complete_occurrence", {"item_id": reminder_id})
+                return
             self.service.complete_occurrence(reminder_id)
             self._after_change()
 
     def _complete(self) -> None:
         reminder_id = self._selected_id()
         if reminder_id is not None:
+            if self.is_remote:
+                self._command("complete_reminder", {"item_id": reminder_id})
+                return
             self.service.complete_reminder(reminder_id)
             self._after_change()
 
@@ -487,6 +605,12 @@ class ReminderCenter(QWidget):
         if not title:
             self._load_table_metadata()
             return
+        if self.is_remote:
+            self._command(
+                "update_table_metadata",
+                {"table_id": self.selected_table_id, "title": title},
+            )
+            return
         self.service.update_table_metadata(self.selected_table_id, title=title)
         self._after_change()
 
@@ -496,20 +620,33 @@ class ReminderCenter(QWidget):
         label_id = self.table_label_combo.currentData()
         if label_id is None:
             return
+        if self.is_remote:
+            self._command(
+                "update_table_metadata",
+                {"table_id": self.selected_table_id, "label_id": int(label_id)},
+            )
+            return
         self.service.update_table_metadata(self.selected_table_id, label_id=int(label_id))
         self._after_change()
 
     def _table_ai_changed(self, _index: int = -1) -> None:
         if self.trash_mode or self.selected_table_id is None or self.table_ai_combo.signalsBlocked():
             return
-        self.service.set_table_ai_visible(
-            self.selected_table_id,
-            bool(self.table_ai_combo.currentData()),
-        )
+        ai_visible = bool(self.table_ai_combo.currentData())
+        if self.is_remote:
+            self._command(
+                "set_table_ai_visible",
+                {"table_id": self.selected_table_id, "ai_visible": ai_visible},
+            )
+            return
+        self.service.set_table_ai_visible(self.selected_table_id, ai_visible)
         self._after_change()
 
     def _delete_current_table(self) -> None:
         if self.trash_mode or self.selected_table_id is None:
+            return
+        if self.is_remote:
+            self._command("delete_table", {"table_id": self.selected_table_id})
             return
         self.service.delete_table(self.selected_table_id)
         self.selected_table_id = None
@@ -524,6 +661,7 @@ class ReminderCenter(QWidget):
         self.enabled_check.setChecked(settings.notifications_enabled)
         parsed_time = QTime.fromString(settings.daily_time, "HH:mm")
         self.time_edit.setTime(parsed_time if parsed_time.isValid() else QTime(10, 0))
+        self.endpoint_input.setText(settings.ntfy_endpoint)
         self.topic_input.setText(settings.ntfy_topic)
         self.enabled_check.blockSignals(False)
         self.time_edit.blockSignals(False)
@@ -533,18 +671,55 @@ class ReminderCenter(QWidget):
         self.enabled_check.setText(
             "通知：开启" if self.enabled_check.isChecked() else "通知：关闭"
         )
-        self.service.save_settings(
-            ReminderSettings(
-                self.enabled_check.isChecked(),
-                self.time_edit.time().toString("HH:mm"),
-                self.service.settings().ntfy_endpoint,
-                self.topic_input.text().strip(),
-            )
+        settings = ReminderSettings(
+            self.enabled_check.isChecked(),
+            self.time_edit.time().toString("HH:mm"),
+            self.service.settings().ntfy_endpoint,
+            self.topic_input.text().strip(),
         )
+        if self.is_remote:
+            self._command(
+                "save_settings",
+                {
+                    "notifications_enabled": settings.notifications_enabled,
+                    "daily_time": settings.daily_time,
+                    "ntfy_topic": settings.ntfy_topic,
+                },
+            )
+            return
+        self.service.save_settings(settings)
 
     def _test_notification(self) -> None:
+        if self.is_remote:
+            self._command("send_test_notification", {}, refresh=False)
+            return
         self._save_settings()
         self.testNotificationRequested.emit()
+
+    def _command(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        *,
+        refresh: bool = True,
+        on_success=None,
+    ) -> bool:
+        if not self.is_remote:
+            return False
+
+        def finished(success: bool, result: object) -> None:
+            if success and on_success is not None and isinstance(result, dict):
+                on_success(result)
+            self._update_action_states()
+
+        submitted = self.service.submit(
+            name,
+            payload,
+            refresh=refresh,
+            callback=finished,
+        )
+        self._update_action_states()
+        return submitted
 
     def _copy_topic(self) -> None:
         clipboard = QApplication.clipboard()
@@ -562,6 +737,7 @@ class ReminderCenter(QWidget):
             )
 
     def _update_action_states(self) -> None:
+        writable = not self.is_remote or not self.service.read_only
         item = self._selected_item()
         selected = item is not None
         table_selected = self.trash_mode and self._selected_id() is not None
@@ -573,15 +749,15 @@ class ReminderCenter(QWidget):
         )
         recurring = item is not None and is_recurring(item.reminder.action_spec)
         occurrence_completed = item is not None and item.status == "occurrence_completed"
-        self.edit_button.setEnabled(selected)
-        self.delete_button.setEnabled(selected)
-        self.pause_button.setEnabled(selected and active and not completed)
-        self.resume_button.setEnabled(selected and paused)
+        self.edit_button.setEnabled(writable and selected)
+        self.delete_button.setEnabled(writable and selected)
+        self.pause_button.setEnabled(writable and selected and active and not completed)
+        self.resume_button.setEnabled(writable and selected and paused)
         self.complete_occurrence_button.setEnabled(
-            selected and active and recurring and not occurrence_completed
+            writable and selected and active and recurring and not occurrence_completed
         )
         self.complete_button.setEnabled(
-            selected and active and not recurring and not completed
+            writable and selected and active and not recurring and not completed
         )
         self.restore_button.setVisible(self.trash_mode)
         self.permanent_delete_button.setVisible(self.trash_mode)
@@ -595,12 +771,19 @@ class ReminderCenter(QWidget):
             self.complete_button,
         ):
             button.setVisible(not self.trash_mode)
-        self.restore_button.setEnabled(table_selected)
-        self.permanent_delete_button.setEnabled(table_selected)
+        self.new_button.setEnabled(writable and self.selected_table_id is not None)
+        self.restore_button.setEnabled(writable and table_selected)
+        self.permanent_delete_button.setEnabled(writable and table_selected)
+        self.delete_table_button.setEnabled(writable and self.selected_table_id is not None)
+        self.table_title_input.setReadOnly(not writable)
+        self.table_label_combo.setEnabled(writable)
+        self.table_ai_combo.setEnabled(writable)
+        self.enabled_check.setEnabled(writable)
+        self.time_edit.setEnabled(writable)
 
 
 class ReminderLabelManagerDialog(QDialog):
-    def __init__(self, service: ReminderService, parent: QWidget | None = None) -> None:
+    def __init__(self, service: ReminderService | object, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
         self.labels: list[ReminderLabel] = []
@@ -657,7 +840,14 @@ class ReminderLabelManagerDialog(QDialog):
         self.delete_button.clicked.connect(self._delete_label)
         self.move_up_button.clicked.connect(lambda: self._move_selected(-1))
         self.move_down_button.clicked.connect(lambda: self._move_selected(1))
+        if self.is_remote:
+            self.service.snapshotChanged.connect(self.refresh)
+            self.service.stateChanged.connect(lambda *_args: self._selection_changed())
         self.refresh()
+
+    @property
+    def is_remote(self) -> bool:
+        return bool(getattr(self.service, "is_remote", False))
 
     def refresh(self, selected_id: int | None = None) -> None:
         previous = selected_id if selected_id is not None else self._selected_label_id()
@@ -680,12 +870,15 @@ class ReminderLabelManagerDialog(QDialog):
     def _selection_changed(self) -> None:
         label = self._selected_label()
         selected = label is not None
+        writable = not self.is_remote or not self.service.read_only
         self.name_input.setText(label.name if label else "")
-        self.rename_button.setEnabled(selected)
-        self.delete_button.setEnabled(selected and not label.is_default)
+        self.name_input.setReadOnly(not writable)
+        self.create_button.setEnabled(writable)
+        self.rename_button.setEnabled(writable and selected)
+        self.delete_button.setEnabled(writable and selected and not label.is_default)
         row = self.label_list.currentRow()
-        self.move_up_button.setEnabled(selected and row > 0)
-        self.move_down_button.setEnabled(selected and row < len(self.labels) - 1)
+        self.move_up_button.setEnabled(writable and selected and row > 0)
+        self.move_down_button.setEnabled(writable and selected and row < len(self.labels) - 1)
 
     def _selected_label_id(self) -> int | None:
         item = self.label_list.currentItem()
@@ -705,6 +898,9 @@ class ReminderLabelManagerDialog(QDialog):
         if not name:
             self.status_label.setText("请输入标签名称")
             return
+        if self.is_remote:
+            self._submit("create_label", {"name": name}, "已新增标签")
+            return
         label = self.service.create_label(name)
         self.status_label.setText("已新增标签")
         self.refresh(label.id)
@@ -714,6 +910,9 @@ class ReminderLabelManagerDialog(QDialog):
         name = self._clean_name()
         if label is None or not name:
             self.status_label.setText("请选择标签并输入名称")
+            return
+        if self.is_remote:
+            self._submit("rename_label", {"label_id": label.id, "name": name}, "已重命名标签")
             return
         self.service.rename_label(label.id, name)
         self.status_label.setText("已重命名标签")
@@ -725,6 +924,9 @@ class ReminderLabelManagerDialog(QDialog):
             return
         if label.is_default:
             self.status_label.setText("默认标签不可删除")
+            return
+        if self.is_remote:
+            self._submit("delete_label", {"label_id": label.id}, "标签及其表格已移入 Reminder 回收站")
             return
         self.service.delete_label(label.id)
         self.status_label.setText("标签及其表格已移入 Reminder 回收站")
@@ -740,9 +942,21 @@ class ReminderLabelManagerDialog(QDialog):
         if target < 0 or target >= len(ids):
             return
         ids[index], ids[target] = ids[target], ids[index]
+        if self.is_remote:
+            self._submit("reorder_labels", {"label_ids": ids}, "已更新排序")
+            return
         self.service.reorder_labels(ids)
         self.status_label.setText("已更新排序")
         self.refresh(label.id)
+
+    def _submit(self, command: str, payload: dict[str, Any], success_text: str) -> None:
+        def finished(success: bool, _result: object) -> None:
+            self.status_label.setText(success_text if success else "操作失败")
+            self._selection_changed()
+
+        if self.service.submit(command, payload, callback=finished):
+            self.status_label.setText("正在保存…")
+        self._selection_changed()
 
 
 class ReminderDialog(QDialog):
@@ -1172,9 +1386,22 @@ def _status_text(item: ReminderListItem) -> str:
 
 def _endpoint_host(endpoint: str) -> str:
     if not endpoint.strip():
-        return "ntfy.sh"
+        return "" if os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1" else "ntfy.sh"
     parsed = urlparse(endpoint if "://" in endpoint else f"https://{endpoint}")
     return parsed.netloc or parsed.path or "ntfy.sh"
+
+
+def _draft_payload(draft: ReminderDraft) -> dict[str, Any]:
+    return {
+        "table_id": draft.table_id,
+        "title": draft.title,
+        "lifecycle": draft.lifecycle,
+        "action_spec": draft.action_spec,
+        "deadline_spec": draft.deadline_spec,
+        "note": draft.note,
+        "multi_notify": draft.multi_notify,
+        "recurrence_mode": draft.recurrence_mode,
+    }
 
 
 def _settings_label(text: str) -> QLabel:

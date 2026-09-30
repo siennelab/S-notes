@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+from src.snotes.application.local_mcp_service import LocalMcpService
+from src.snotes.application.remote_mcp_reminder import (
+    ACTOR_CREDENTIAL_DIRECTORY,
+    RemoteMcpReminderAdapter,
+    default_actor_credential_path,
+)
+from src.snotes.bootstrap import build_local_mcp_service
+from src.snotes.ui.reminder_owner import OwnerSnapshotCache
+
+
+class _RecordingCommandClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def command(self, name: str, payload: dict) -> dict:
+        self.calls.append((name, payload))
+        if name in {"list_reminder_tables", "list_reminder_items"}:
+            return {"status": "ok", "results": []}
+        return {"status": "ok"}
+
+
+class Step07RemoteMcpReminderTests(unittest.TestCase):
+    def test_actor_credential_uses_host_home_outside_candidate_home(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "HOME": "/private/tmp/step07-isolated-home",
+                "S_NOTES_STEP07_HOST_HOME": "/private/tmp/step07-host-home",
+            },
+        ):
+            self.assertEqual(
+                default_actor_credential_path("yan"),
+                Path("/private/tmp/step07-host-home")
+                / ACTOR_CREDENTIAL_DIRECTORY
+                / "yan",
+            )
+
+    def test_adapter_routes_every_actor_reminder_operation_to_cloud_commands(self) -> None:
+        client = _RecordingCommandClient()
+        adapter = RemoteMcpReminderAdapter(client)
+
+        adapter.list_reminder_labels()
+        adapter.create_reminder_label("r-label", "Work")
+        adapter.list_reminder_tables("find", 2, 7, 3, "visible")
+        adapter.get_reminder_table(11)
+        adapter.create_reminder_table("r-table", "Plan", 3)
+        adapter.update_reminder_table("r-table-update", 11, "Next", 4)
+        adapter.list_reminder_items(
+            11, "needle", 3, 5, "active", "2026-09-01", "2026-09-30"
+        )
+        adapter.get_reminder_item(21)
+        adapter.create_reminder_item(
+            "r-item",
+            11,
+            "Ship",
+            {"kind": "date", "date": "2026-10-01"},
+            {"kind": "date", "date": "2026-10-02"},
+            "note",
+            "active",
+        )
+        adapter.update_reminder_item(
+            "r-item-update",
+            21,
+            "Shipped",
+            "done",
+            {"kind": "none"},
+            None,
+            True,
+            "active",
+            False,
+        )
+        adapter.complete_reminder_item("r-complete", 21, False)
+        adapter.pause_reminder_item("r-pause", 21)
+        adapter.resume_reminder_item("r-resume", 21)
+
+        self.assertEqual(
+            [name for name, _payload in client.calls],
+            [
+                "list_reminder_labels",
+                "create_reminder_label",
+                "list_reminder_tables",
+                "get_reminder_table",
+                "create_reminder_table",
+                "update_reminder_table",
+                "list_reminder_items",
+                "get_reminder_item",
+                "create_reminder_item",
+                "update_reminder_item",
+                "complete_reminder_item",
+                "pause_reminder_item",
+                "resume_reminder_item",
+            ],
+        )
+        self.assertEqual(client.calls[2][1]["label_id"], 3)
+        self.assertNotIn("page", client.calls[2][1])
+        self.assertEqual(client.calls[6][1]["table_id"], 11)
+        self.assertNotIn("page_size", client.calls[6][1])
+        self.assertEqual(client.calls[9][1]["clear_deadline"], True)
+        self.assertEqual(client.calls[10][1]["current_occurrence_only"], False)
+
+    def test_local_facade_never_falls_back_when_remote_adapter_is_present(self) -> None:
+        remote = Mock(spec=RemoteMcpReminderAdapter)
+        service = object.__new__(LocalMcpService)
+        service._remote_reminders = remote
+        service._reminders = Mock()
+
+        service.list_reminder_labels()
+        service.create_reminder_label("r1", "Work")
+        service.list_reminder_tables()
+        service.get_reminder_table(11)
+        service.create_reminder_table("r2")
+        service.update_reminder_table("r3", 11)
+        service.list_reminder_items(11)
+        service.get_reminder_item(21)
+        service.create_reminder_item("r4", 11, "Ship", {"kind": "none"})
+        service.update_reminder_item("r5", 21)
+        service.complete_reminder_item("r6", 21)
+        service.pause_reminder_item("r7", 21)
+        service.resume_reminder_item("r8", 21)
+
+        self.assertEqual(
+            [call[0] for call in remote.mock_calls],
+            [
+                "list_reminder_labels",
+                "create_reminder_label",
+                "list_reminder_tables",
+                "get_reminder_table",
+                "create_reminder_table",
+                "update_reminder_table",
+                "list_reminder_items",
+                "get_reminder_item",
+                "create_reminder_item",
+                "update_reminder_item",
+                "complete_reminder_item",
+                "pause_reminder_item",
+                "resume_reminder_item",
+            ],
+        )
+        self.assertEqual(service._reminders.mock_calls, [])
+
+    def test_missing_actor_credential_fails_closed_without_local_reminder_or_gui_cache(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="snotes-step07-mcp-") as temporary:
+            root = Path(temporary)
+            cache_load = Mock(side_effect=AssertionError("GUI cache accessed"))
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "S_NOTES_REMOTE_REMINDER_ENDPOINT": "http://127.0.0.1:9",
+                        "S_NOTES_STEP07_HOST_HOME": str(root / "host-home"),
+                    },
+                ),
+                patch(
+                    "src.snotes.bootstrap.SQLiteReminderRepository",
+                    side_effect=AssertionError("local Reminder repository created"),
+                ) as local_repository,
+                patch.object(OwnerSnapshotCache, "load", cache_load),
+                patch(
+                    "src.snotes.ui.reminder_owner.owner_credential",
+                    side_effect=AssertionError("GUI owner credential accessed"),
+                ) as owner_credential,
+            ):
+                service = build_local_mcp_service(
+                    actor_target_id="yan",
+                    resolved_data_root=root / "data",
+                )
+                result = service.list_reminder_labels()
+
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("actor credential", result["reason"])
+            local_repository.assert_not_called()
+            owner_credential.assert_not_called()
+            cache_load.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

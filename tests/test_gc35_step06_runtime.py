@@ -59,10 +59,13 @@ class CloudReminderRuntimeTests(unittest.TestCase):
         return path
 
     def _initialize(self) -> None:
-        reminder_cloud.initialize_staging(
-            self.database,
-            business_date=self.business_date,
-        )
+        # Freeze both business and repository clocks while seeding fictional
+        # rows now that create materializes occurrences immediately.
+        instant = datetime(2026, 9, 29, 10, 0, tzinfo=SHANGHAI)
+        from src.snotes.application.reminder_service import ReminderService
+        from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
+        with patch.object(reminder_cloud, "ReminderService", side_effect=lambda repo: ReminderService(repo, clock=lambda: instant.timestamp())), patch.object(reminder_cloud, "SQLiteReminderRepository", side_effect=lambda connections: SQLiteReminderRepository(connections, clock=lambda: instant)):
+            reminder_cloud.initialize_staging(self.database, business_date=self.business_date)
 
     def test_init_is_absent_only_private_wal_and_fictional(self) -> None:
         self._initialize()

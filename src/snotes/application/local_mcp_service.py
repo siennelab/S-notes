@@ -23,6 +23,7 @@ from src.snotes.application.local_mcp_write_service import (
     LocalMcpWriteService,
     note_version_token,
 )
+from src.snotes.application.remote_mcp_reminder import RemoteMcpReminderAdapter
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.ports import TagRecord
 from src.snotes.application.reminder_service import ReminderService
@@ -55,6 +56,7 @@ class LocalMcpService:
         receipt_inbox: AiReceiptInboxService,
         authorization: AiWriteAuthorization | None = None,
         reminders: ReminderService | None = None,
+        remote_reminders: RemoteMcpReminderAdapter | None = None,
         create_confirmation_required: bool = False,
     ) -> None:
         if actor_target_id not in AI_ACTOR_IDS:
@@ -66,6 +68,7 @@ class LocalMcpService:
         self._safe_reads = safe_reads
         self._audit = audit
         self._reminders = reminders
+        self._remote_reminders = remote_reminders
         self._authorization = authorization or AiWriteAuthorization(
             directories, safe_reads
         )
@@ -357,6 +360,8 @@ class LocalMcpService:
         return self._writes.get_operation_status(request_id)
 
     def list_reminder_labels(self) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.list_reminder_labels()
         if self._reminders is None:
             return {"status": "failed", "labels": [], "reason": "Reminder 服务不可用。"}
         labels = self._reminders.list_labels()
@@ -375,6 +380,8 @@ class LocalMcpService:
         }
 
     def create_reminder_label(self, request_id: str, name: str) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.create_reminder_label(request_id, name)
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_create_label(
@@ -391,6 +398,14 @@ class LocalMcpService:
         label_id: int | None = None,
         ai_visibility: str = "all",
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.list_reminder_tables(
+                query=query,
+                page=page,
+                page_size=page_size,
+                label_id=label_id,
+                ai_visibility=ai_visibility,
+            )
         if self._reminders is None:
             return {
                 "status": "failed",
@@ -422,6 +437,8 @@ class LocalMcpService:
         }
 
     def get_reminder_table(self, table_id: int) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.get_reminder_table(table_id)
         if self._reminders is None:
             return {"status": "failed", "table_id": table_id, "reason": "Reminder 服务不可用。"}
         item = self._reminders.get_table(table_id, ai_access=True)
@@ -440,6 +457,12 @@ class LocalMcpService:
         title: str | None = None,
         label_id: int | None = None,
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.create_reminder_table(
+                request_id=request_id,
+                title=title,
+                label_id=label_id,
+            )
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_create_table(
@@ -456,6 +479,13 @@ class LocalMcpService:
         title: str | None = None,
         label_id: int | None = None,
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.update_reminder_table(
+                request_id=request_id,
+                table_id=table_id,
+                title=title,
+                label_id=label_id,
+            )
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, table_id=table_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_update_table_metadata(
@@ -476,6 +506,16 @@ class LocalMcpService:
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.list_reminder_items(
+                table_id=table_id,
+                query=query,
+                page=page,
+                page_size=page_size,
+                lifecycle=lifecycle,
+                date_from=date_from,
+                date_to=date_to,
+            )
         if self._reminders is None:
             return {
                 "status": "failed",
@@ -510,6 +550,8 @@ class LocalMcpService:
         }
 
     def get_reminder_item(self, item_id: int) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.get_reminder_item(item_id)
         if self._reminders is None:
             return {"status": "failed", "item_id": item_id, "reason": "Reminder 服务不可用。"}
         item = self._reminders.get_reminder(item_id, ai_access=True)
@@ -532,6 +574,16 @@ class LocalMcpService:
         note: str = "",
         lifecycle: str = REMINDER_ACTIVE,
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.create_reminder_item(
+                request_id=request_id,
+                table_id=table_id,
+                title=title,
+                action_spec=action_spec,
+                deadline_spec=deadline_spec,
+                note=note,
+                lifecycle=lifecycle,
+            )
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_create_item(
@@ -560,6 +612,18 @@ class LocalMcpService:
         lifecycle: str | None = None,
         multi_notify: bool | None = None,
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.update_reminder_item(
+                request_id=request_id,
+                item_id=item_id,
+                title=title,
+                note=note,
+                action_spec=action_spec,
+                deadline_spec=deadline_spec,
+                clear_deadline=clear_deadline,
+                lifecycle=lifecycle,
+                multi_notify=multi_notify,
+            )
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_update_item(
@@ -581,6 +645,12 @@ class LocalMcpService:
         item_id: int,
         current_occurrence_only: bool = True,
     ) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.complete_reminder_item(
+                request_id=request_id,
+                item_id=item_id,
+                current_occurrence_only=current_occurrence_only,
+            )
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_complete_item(
@@ -591,6 +661,8 @@ class LocalMcpService:
         )
 
     def pause_reminder_item(self, request_id: str, item_id: int) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.pause_reminder_item(request_id, item_id)
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_pause_item(
@@ -600,6 +672,8 @@ class LocalMcpService:
         )
 
     def resume_reminder_item(self, request_id: str, item_id: int) -> dict:
+        if self._remote_reminders is not None:
+            return self._remote_reminders.resume_reminder_item(request_id, item_id)
         if self._reminders is None:
             return _reminder_write_result("failed", request_id, item_id=item_id, reason="Reminder 服务不可用。")
         return self._reminders.ai_resume_item(

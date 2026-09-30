@@ -63,7 +63,10 @@ class ReminderService:
         self._clock = clock
 
     def create_reminder(self, draft: ReminderDraft) -> Reminder:
-        return self._repository.create(self._clean_draft(draft))
+        reminder = self._repository.create(self._clean_draft(draft))
+        if reminder.lifecycle == REMINDER_ACTIVE:
+            self._materialize_for_mutation(reminder)
+        return reminder
 
     def update_reminder(self, reminder_id: int, draft: ReminderDraft) -> Reminder:
         existing = self._required(reminder_id)
@@ -74,6 +77,8 @@ class ReminderService:
             or existing.deadline_spec != updated.deadline_spec
         ):
             self._repository.delete_pending_occurrences(reminder_id)
+        if updated.lifecycle == REMINDER_ACTIVE:
+            self._materialize_for_mutation(updated)
         return updated
 
     def delete_reminder(self, reminder_id: int) -> None:
@@ -96,10 +101,15 @@ class ReminderService:
         if reminder.lifecycle == REMINDER_COMPLETED:
             raise ValueError("completed_reminder_cannot_resume")
         self._repository.set_lifecycle(reminder_id, REMINDER_ACTIVE)
+        resumed = self._required(reminder_id)
+        self._materialize_active_occurrence(
+            resumed,
+            today_shanghai(self._now_datetime),
+        )
 
     def complete_reminder(self, reminder_id: int) -> None:
         now = self._timestamp()
-        item = self.get_reminder(reminder_id)
+        item = self.get_reminder(reminder_id, materialize_occurrences=True)
         if item is None:
             raise ValueError("reminder_not_found")
         if item.occurrence is not None:
@@ -108,14 +118,25 @@ class ReminderService:
 
     def complete_occurrence(self, reminder_id: int) -> None:
         now = self._timestamp()
-        item = self.get_reminder(reminder_id)
+        item = self.get_reminder(reminder_id, materialize_occurrences=True)
         if item is None:
             return
         if item.occurrence is None:
             return
         self._repository.mark_occurrence_completed(item.occurrence.id, now)
+        completed = self._latest_completed(reminder_id)
+        if completed is not None:
+            self._materialize_next_occurrence_after_completion(
+                item.reminder,
+                completed,
+            )
 
-    def list_reminders(self, query: ReminderQuery | None = None) -> list[ReminderListItem]:
+    def list_reminders(
+        self,
+        query: ReminderQuery | None = None,
+        *,
+        materialize_occurrences: bool = False,
+    ) -> list[ReminderListItem]:
         filters = query or ReminderQuery()
         today = today_shanghai(self._now_datetime)
         labels = {label.id: label for label in self._repository.list_labels(include_deleted=True)}
@@ -144,6 +165,8 @@ class ReminderService:
             if filters.ai_visibility == "hidden" and table.ai_visible:
                 continue
             try:
+                if materialize_occurrences and reminder.lifecycle == REMINDER_ACTIVE:
+                    self._materialize_active_occurrence(reminder, today)
                 item = self._list_item(
                     reminder,
                     table,
@@ -167,6 +190,7 @@ class ReminderService:
         *,
         ai_access: bool = False,
         include_deleted: bool = False,
+        materialize_occurrences: bool = False,
     ) -> ReminderListItem | None:
         reminder = self._repository.get(reminder_id, include_deleted=include_deleted)
         if reminder is None:
@@ -179,6 +203,11 @@ class ReminderService:
             return None
         label = self._repository.get_label(table.label_id, include_deleted=True)
         try:
+            if materialize_occurrences and reminder.lifecycle == REMINDER_ACTIVE:
+                self._materialize_active_occurrence(
+                    reminder,
+                    today_shanghai(self._now_datetime),
+                )
             return self._list_item(
                 reminder,
                 table,
@@ -744,6 +773,22 @@ class ReminderService:
 
     def settings(self) -> ReminderSettings:
         settings = self._repository.settings()
+        return self._effective_settings(settings)
+
+    def initialize_settings(self) -> ReminderSettings:
+        """Materialize effective settings from an explicit write lifecycle."""
+        settings = self._repository.settings()
+        normalized = self._effective_settings(settings, ensure_topic=True)
+        if normalized != settings:
+            self._repository.save_settings(normalized)
+        return normalized
+
+    def _effective_settings(
+        self,
+        settings: ReminderSettings,
+        *,
+        ensure_topic: bool = False,
+    ) -> ReminderSettings:
         endpoint = self._private_ntfy_endpoint(settings.ntfy_endpoint)
         normalized = ReminderSettings(
             settings.notifications_enabled,
@@ -751,15 +796,13 @@ class ReminderService:
             endpoint,
             settings.ntfy_topic,
         )
-        if not normalized.ntfy_topic:
+        if ensure_topic and not normalized.ntfy_topic:
             normalized = ReminderSettings(
                 normalized.notifications_enabled,
                 normalized.daily_time,
                 normalized.ntfy_endpoint,
                 f"snotes-reminder-{secrets.token_urlsafe(18)}",
             )
-        if normalized != settings:
-            self._repository.save_settings(normalized)
         return normalized
 
     @staticmethod
@@ -770,10 +813,12 @@ class ReminderService:
         return clean
 
     def save_settings(self, settings: ReminderSettings) -> None:
-        self._repository.save_settings(settings)
+        self._repository.save_settings(
+            self._effective_settings(settings, ensure_topic=True)
+        )
 
     def send_test_notification(self) -> None:
-        settings = self.settings()
+        settings = self.initialize_settings()
         if self._transport is None:
             raise RuntimeError("reminder_notification_transport_not_configured")
         self._transport.send(
@@ -784,7 +829,7 @@ class ReminderService:
         self._repository.set_text_setting(self.LAST_TEST_TOPIC_KEY, settings.ntfy_topic)
 
     def run_scheduled_once(self) -> int:
-        settings = self.settings()
+        settings = self.initialize_settings()
         if not settings.notifications_enabled:
             return 0
         if not self._notification_window_open(settings.daily_time):
@@ -803,7 +848,7 @@ class ReminderService:
     def _dispatch_due_notifications(self, today: date | None = None) -> int:
         if self._transport is None:
             raise RuntimeError("reminder_notification_transport_not_configured")
-        settings = self.settings()
+        settings = self.initialize_settings()
         business_today = today or today_shanghai(self._now_datetime)
         sent = 0
         for notification in self.pending_notifications(business_today):
@@ -823,7 +868,7 @@ class ReminderService:
     def pending_notifications(self, today: date | None = None) -> list[ReminderNotification]:
         business_today = today or today_shanghai(self._now_datetime)
         notifications: list[ReminderNotification] = []
-        for item in self.list_reminders():
+        for item in self.list_reminders(materialize_occurrences=True):
             occurrence = item.occurrence
             if occurrence is None or occurrence.status != OCCURRENCE_PENDING:
                 continue
@@ -952,10 +997,54 @@ class ReminderService:
                 return False
         return True
 
+    def _materialize_for_mutation(self, reminder: Reminder) -> None:
+        try:
+            self._materialize_active_occurrence(reminder, today_shanghai(self._now_datetime))
+        except ValueError as error:
+            # Existing create/update accepts calendar specs whose future range
+            # may be unavailable; reads still report that range error. Never
+            # turn an already persisted command into a false failed write.
+            if not str(error).startswith(("cn_a_share_calendar_year_not_supported:", "lunar_year_out_of_supported_range")):
+                raise
+
     def _active_occurrence(self, reminder: Reminder, today: date) -> ReminderOccurrence | None:
         completed = self._latest_completed(reminder.id)
         if completed is not None and is_recurring(reminder.action_spec):
             next_occurrence = self._next_occurrence_after_completion(
+                reminder,
+                completed,
+            )
+            if (
+                next_occurrence is None
+                or date.fromisoformat(next_occurrence.action_date) > today
+            ):
+                if next_occurrence is not None and (
+                    reminder.multi_notify or reminder.recurrence_mode is not None
+                ):
+                    return next_occurrence
+                return completed
+        current = self._current_uncompleted_occurrence(reminder)
+        if current is not None and date.fromisoformat(current.action_date) <= today:
+            return current
+        if current is not None and not is_recurring(reminder.action_spec):
+            return current
+        if current is not None and date.fromisoformat(current.action_date) > today:
+            return current
+        # Preserve schedule validation/error behavior without materializing the
+        # calculated date. A missing persisted occurrence stays absent.
+        self._current_or_next_action_date(
+            reminder, today, last_completed_at=completed.completed_at if completed else None
+        )
+        return None
+
+    def _materialize_active_occurrence(
+        self,
+        reminder: Reminder,
+        today: date,
+    ) -> ReminderOccurrence | None:
+        completed = self._latest_completed(reminder.id)
+        if completed is not None and is_recurring(reminder.action_spec):
+            next_occurrence = self._materialize_next_occurrence_after_completion(
                 reminder,
                 completed,
             )
@@ -1061,7 +1150,16 @@ class ReminderService:
     ) -> ReminderOccurrence | None:
         if not is_recurring(reminder.action_spec):
             return None
-        pending = self._current_uncompleted_occurrence(reminder)
+        return self._current_uncompleted_occurrence(reminder)
+
+    def _materialize_next_occurrence_after_completion(
+        self,
+        reminder: Reminder,
+        occurrence: ReminderOccurrence,
+    ) -> ReminderOccurrence | None:
+        if not is_recurring(reminder.action_spec):
+            return None
+        pending = self._next_occurrence_after_completion(reminder, occurrence)
         if pending is not None:
             return pending
         spec = reminder.action_spec

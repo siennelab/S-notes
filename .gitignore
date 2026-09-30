@@ -45,3 +45,6 @@ __pycache__/
 
 /web/markdown-editor/node_modules/
 /web/markdown-editor/dist/
+
+/build-step07-candidate/
+/dist-step07-candidate/

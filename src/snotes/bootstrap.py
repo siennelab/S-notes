@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -103,7 +104,19 @@ def build_application(
         tags=tag_service,
         ai_metadata=ai_access_metadata_service,
     )
-    reminder_service = compose_reminder_service(root)
+    remote_controller = None
+    if os.environ.get("S_NOTES_REMOTE_REMINDER_ENDPOINT"):
+        from src.snotes.transport.remote_reminder_client import RemoteReminderClient
+        from src.snotes.ui.remote_reminder_controller import RemoteReminderController
+        from src.snotes.ui.reminder_owner import OwnerSnapshotCache, owner_credential
+
+        remote_controller = RemoteReminderController(
+            RemoteReminderClient(os.environ["S_NOTES_REMOTE_REMINDER_ENDPOINT"], owner_credential),
+            cache=OwnerSnapshotCache(root / "gui-only-reminder" / "snapshot.json"),
+        )
+        reminder_service = None
+    else:
+        reminder_service = compose_reminder_service(root)
     window = MainWindow(
         note_service,
         theme_settings_path=root / "config" / "ui_settings.ini",
@@ -116,7 +129,12 @@ def build_application(
         ai_audit_service=ai_audit_service,
         gale_control_service=gale_control_service,
         reminder_service=reminder_service,
+        remote_reminder_controller=remote_controller,
     )
+    if remote_controller is not None:
+        from src.snotes.ui.reminder_legacy_check import start_legacy_check
+        window.setWindowTitle("S-notes Step 7 · GreenCloud staging")
+        start_legacy_check(window)
     application.aboutToQuit.connect(window.body_edit.page.deleteLater)
     return application, window
 
@@ -124,11 +142,11 @@ def build_application(
 def compose_reminder_service(root: Path) -> ReminderService:
     connections = initialize_database(Path(root) / "s_notes.db")
     repository = SQLiteReminderRepository(connections)
-    settings = repository.settings()
-    transport = NtfyReminderTransport(
-        ReminderService._private_ntfy_endpoint(settings.ntfy_endpoint)
-        or "https://ntfy.sh"
-    )
+    settings = ReminderService(repository).initialize_settings()
+    endpoint = ReminderService._private_ntfy_endpoint(settings.ntfy_endpoint)
+    if not endpoint and os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1":
+        raise RuntimeError("private_reminder_endpoint_required")
+    transport = NtfyReminderTransport(endpoint or "https://ntfy.sh")
     return ReminderService(repository, transport=transport)
 
 
@@ -168,8 +186,16 @@ def build_local_mcp_service(
             connections, tags_repository
         ),
     )
-    reminder_repository = SQLiteReminderRepository(connections)
-    reminder_service = ReminderService(reminder_repository)
+    remote_reminders = None
+    if os.environ.get("S_NOTES_REMOTE_REMINDER_ENDPOINT"):
+        from src.snotes.application.remote_mcp_reminder import compose_remote_mcp_reminder
+        remote_reminders = compose_remote_mcp_reminder(
+            actor_target_id, os.environ["S_NOTES_REMOTE_REMINDER_ENDPOINT"]
+        )
+        reminder_service = None
+    else:
+        reminder_repository = SQLiteReminderRepository(connections)
+        reminder_service = ReminderService(reminder_repository)
     return LocalMcpService(
         actor_target_id=actor_target_id,
         notes=notes,
@@ -181,6 +207,7 @@ def build_local_mcp_service(
         audit=audit,
         receipt_inbox=receipt_inbox,
         reminders=reminder_service,
+        remote_reminders=remote_reminders,
         create_confirmation_required=create_confirmation_required,
     )
 

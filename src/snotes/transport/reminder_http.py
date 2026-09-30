@@ -60,6 +60,7 @@ ACTOR_COMMANDS = frozenset(
 
 OWNER_ONLY_COMMANDS = frozenset(
     {
+        "ensure_default_table",
         "create_reminder",
         "update_reminder",
         "delete_reminder",
@@ -211,7 +212,10 @@ class ReminderHttpApplication:
     def _snapshot(self, credential: ReminderCredential) -> dict:
         actor_access = credential.role == ACTOR_ROLE
         tables = self._service.list_tables(ReminderQuery(ai_access=actor_access))
-        items = self._service.list_reminders(ReminderQuery(ai_access=actor_access))
+        items = self._service.list_reminders(
+            ReminderQuery(ai_access=actor_access),
+            materialize_occurrences=False,
+        )
         visible_label_ids = {item.table.label_id for item in tables}
         labels = [
             _label_payload(label)
@@ -452,6 +456,13 @@ class ReminderHttpApplication:
         return {"status": "updated", "item_id": item_id, "reminder_id": item_id}
 
     def _dispatch_owner(self, command: str, payload: dict) -> dict:
+        if command == "ensure_default_table":
+            _require_keys(payload, set())
+            table = self._service.default_table()
+            item = self._service.get_table(table.id)
+            if item is None:
+                raise RuntimeError("default_reminder_table_missing")
+            return {"status": "ok", "table": _table_payload(item)}
         item_id_commands = {
             "delete_reminder": self._service.delete_reminder,
             "complete_occurrence": self._service.complete_occurrence,

@@ -5,6 +5,14 @@ import sys
 
 
 def run() -> int:
+    from src.snotes.step07_candidate import configure_candidate
+
+    candidate = configure_candidate()
+    if "--step07-smoke" in sys.argv:
+        if not candidate:
+            return 2
+        from src.snotes.ui.reminder_remote_smoke import main as smoke
+        return smoke()
     if "--mcp-stdio" in sys.argv:
         from src.snotes.transport.mcp.server import main
 

@@ -174,6 +174,12 @@ class NoteSidebar(QWidget):
             f"AI中心 ({count})" if count else "AI中心"
         )
 
+    def set_reminder_writable(self, writable: bool) -> None:
+        self._reminder_writable = bool(writable)
+        if self.mode in {"reminder", "reminder_trash"}:
+            self.category_manager_button.setEnabled(writable)
+            self.new_note_button.setEnabled(writable)
+
     def set_reminder_badge_count(self, pending_count: int) -> None:
         button = self.smart_buttons.get("reminder")
         if button is None:
@@ -608,6 +614,9 @@ class NoteSidebar(QWidget):
         self.search_input.blockSignals(False)
 
     def _update_mode_states(self) -> None:
+        writable = self.mode not in {"reminder", "reminder_trash"} or getattr(self, "_reminder_writable", True)
+        self.new_note_button.setEnabled(writable)
+        self.category_manager_button.setEnabled(writable)
         for name, button in self.smart_buttons.items():
             button.setProperty("active", self.mode == "smart_view" and name == getattr(self, "active_smart_view", ""))
             button.setChecked(bool(button.property("active")))
@@ -658,7 +667,8 @@ class NoteSidebar(QWidget):
 
     def _new_button_clicked(self) -> None:
         if self.mode in {"reminder", "reminder_trash"}:
-            self.newReminderRequested.emit()
+            if getattr(self, "_reminder_writable", True):
+                self.newReminderRequested.emit()
         else:
             self.newNoteRequested.emit()
 
@@ -722,6 +732,8 @@ class NoteSidebar(QWidget):
             )
             action.setEnabled(label.id != self.main_filter_combo.currentData())
         menu.addAction("移入回收站", lambda: self.reminderTableDeleteRequested.emit(table_id))
+        for action in menu.actions():
+            action.setEnabled(getattr(self, "_reminder_writable", True))
         return menu
 
     def _selected_trash_ids(self) -> tuple[list[int], list[int]]:

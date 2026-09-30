@@ -1372,10 +1372,24 @@ class AiCenterDialog(QWidget):
         if self.reminders is None:
             self.reminder_log_more_button.setEnabled(False)
             return
+        if getattr(self.reminders, "is_remote", False):
+            self.reminder_log_more_button.setEnabled(False)
+            def finished(success, page):
+                if success:
+                    self._render_reminder_logs(page)
+                else:
+                    self.reminder_log_empty.setText("Reminder 操作记录暂不可用")
+            self.reminders.request_ai_operation_logs(
+                offset=self.reminder_log_offset, limit=self.reminder_log_limit, callback=finished
+            )
+            return
         page = self.reminders.list_ai_operation_logs(
             offset=self.reminder_log_offset,
             limit=self.reminder_log_limit,
         )
+        self._render_reminder_logs(page)
+
+    def _render_reminder_logs(self, page) -> None:
         start = self.reminder_log_table.rowCount()
         self.reminder_log_table.setRowCount(start + len(page.rows))
         for index, row in enumerate(page.rows, start=start):

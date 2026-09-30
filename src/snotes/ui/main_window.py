@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         ai_audit_service: AiAuditService | None = None,
         gale_control_service: GaleControlService | None = None,
         reminder_service: ReminderService | None = None,
+        remote_reminder_controller: object | None = None,
     ) -> None:
         super().__init__()
         self.note_service = note_service
@@ -82,7 +83,8 @@ class MainWindow(QMainWindow):
         self.ai_safe_export_service = ai_safe_export_service
         self.ai_audit_service = ai_audit_service
         self.gale_control_service = gale_control_service
-        self.reminder_service = reminder_service
+        self.remote_reminder_controller = remote_reminder_controller
+        self.reminder_service = remote_reminder_controller or reminder_service
         self.ai_center_dialog: AiCenterDialog | None = None
         self.theme_settings_path = Path(theme_settings_path)
         self.current_note: Note | None = None
@@ -101,7 +103,7 @@ class MainWindow(QMainWindow):
         self.resize(1420, 880)
         self.shell = SnotesShell(
             self.theme_settings_path,
-            reminder_service=reminder_service,
+            reminder_service=self.reminder_service,
         )
         self.shell.sidebar.set_ai_center_available(
             self.receipt_inbox_service is not None
@@ -195,6 +197,9 @@ class MainWindow(QMainWindow):
             self.shell.reminder_center.testNotificationRequested.connect(
                 self.send_reminder_test_notification
             )
+            self.shell.reminder_center.remoteWritableChanged.connect(
+                sidebar.set_reminder_writable
+            )
         self.title_input.textChanged.connect(self.mark_note_dirty)
         self.body_edit.changed.connect(self._markdown_changed)
         self.body_edit.loaded.connect(self._markdown_loaded)
@@ -280,6 +285,9 @@ class MainWindow(QMainWindow):
         self.shell.sidebar.set_reminder_badge_count(count)
 
     def send_reminder_test_notification(self) -> None:
+        if self.remote_reminder_controller is not None:
+            self.remote_reminder_controller.submit("send_test_notification", {}, refresh=False)
+            return
         if self.reminder_service is None:
             return
         try:
@@ -379,9 +387,7 @@ class MainWindow(QMainWindow):
         self.current_mode = "smart_view"
         self.current_filter = "reminder"
         self.shell.show_reminder_surface()
-        table = self.shell.reminder_center.service.create_table()
-        self.shell.reminder_center.select_table(table.id)
-        self._sync_sidebar_reminder_filters()
+        self.shell.reminder_center.create_table()
 
     def select_reminder_table(self, table_id: int, matching_item_id: object = None) -> None:
         if self.shell.reminder_center is None:
@@ -440,22 +446,16 @@ class MainWindow(QMainWindow):
         center.table_title_input.selectAll()
 
     def move_reminder_table(self, table_id: int, label_id: int) -> None:
-        if self.reminder_service is None:
+        center = self.shell.reminder_center
+        if center is None:
             return
-        self.reminder_service.update_table_metadata(table_id, label_id=label_id)
-        if self.shell.reminder_center is not None:
-            self.shell.reminder_center.select_table(table_id)
-        self._sync_sidebar_reminder_filters()
+        center.move_table(table_id, label_id)
 
     def delete_reminder_table(self, table_id: int) -> None:
-        if self.reminder_service is None:
-            return
-        self.reminder_service.delete_table(table_id)
         center = self.shell.reminder_center
-        if center is not None and center.selected_table_id == table_id:
-            center.selected_table_id = None
-            center.refresh()
-        self._sync_sidebar_reminder_filters()
+        if center is None:
+            return
+        center.delete_table(table_id)
 
     def _sync_sidebar_reminder_filters(self, *_args) -> None:
         center = self.shell.reminder_center
@@ -493,6 +493,9 @@ class MainWindow(QMainWindow):
             center.label_id,
             center.ai_visibility,
             center.selected_table_id,
+        )
+        self.shell.sidebar.set_reminder_writable(
+            not center.is_remote or not center.service.read_only
         )
 
     def switch_note(self, note_id: int) -> None:
@@ -1076,6 +1079,14 @@ class MainWindow(QMainWindow):
                     self.body_edit.prepareClose()
             return
         if self.force_save_current_note():
+            controller = self.remote_reminder_controller
+            if controller is not None and getattr(controller, "_threads", None):
+                event.ignore()
+                if not getattr(self, "_remote_close_pending", False):
+                    self._remote_close_pending = True
+                    controller.shutdownFinished.connect(self._remote_shutdown_finished)
+                    controller.begin_shutdown()
+                return
             self._pending_note = None  # A late loaded/failed must not touch a closed window.
             self.receipt_refresh_timer.stop()
             event.accept()
@@ -1084,3 +1095,7 @@ class MainWindow(QMainWindow):
             self.body_edit.closing = False
             self.body_edit.setReadOnly(False)
             event.ignore()
+
+    def _remote_shutdown_finished(self) -> None:
+        self._remote_close_pending = False
+        QTimer.singleShot(0, self.close)
