@@ -1,4 +1,4 @@
-# GreenCloud Step 6 staging — immediate gate PASS, observation pending
+# GreenCloud Step 6 staging — 24h observation PASS, CLOSED
 
 2026-09-29 UTC. Branch `codex/gc35-step06-cloud-reminder-staging`.
 Implementation `690d6ab`; deployed runtime fix `bd8d967`.
@@ -52,6 +52,53 @@ for this gate. `caddy validate` PASS; original Caddy bytes still unchanged.
 `STEP06_IMPLEMENTATION=READY`
 `STEP06_LOCAL_AND_CLOUD_GATE=PASS`
 `STEP06_IMMEDIATE_GATE=PASS`
-`STEP06_24H_OBSERVATION=PENDING`
+`STEP06_24H_OBSERVATION=PASS`
+`STEP06_CLOSED=YES`
 
-Staging remains running. No earlier than 2026-09-30 08:56:56 UTC, inspect timer execution, dedupe marks/journal and service errors since successful startup; confirm next-day fixture notification and daily backup. Final closure/merge requires these observation checks. Do not enter Step 7.
+## 24h observation closeout — PASS (2026-09-30 UTC)
+
+Observation window: **2026-09-29 08:56:56 UTC through 2026-09-30
+12:13:55 UTC**, elapsed **27h 16m 59s**. Read-only inspection of Step 6
+service/timer state, the complete journal within this fixed window, staging DB,
+and existing daily backup; no scheduler or backup was manually rerun.
+Baseline report commit `de820e1` on `codex/gc35-step06-cloud-reminder-staging`.
+
+1. **Timer/scheduler PASS.** All 327 expected five-minute slots from September 29
+   09:00 through September 30 12:10 UTC have a start within 3 seconds of schedule;
+   no missing slots. Including initial startup and the previously documented
+   catch-up, journal records 329 starts and 329 successful finishes. Maximum
+   start-to-start gap 300.486 seconds. Both timers remain active, Persistent=yes;
+   backup timer fired at September 30 03:15 UTC.
+2. **Duplicate/dedupe PASS.** Scheduler journal reports 2 sends at September 29
+   08:56:57 UTC, 1 at September 30 02:00:00.997551 UTC, and zero on all other
+   327 passes. Exactly 3 notification marks exist: reminder 1 action, reminder 2
+   advance_7, and reminder 3 action. No duplicate (reminder_id, occurrence_key)
+   groups. Live and backup occurrence rows/marks agree; no evidence of duplicate
+   sends in the complete scheduler journal.
+3. **Service errors/restarts PASS.** API has remained active since September 29
+   08:56:56 UTC. API, scheduler and backup each report Result=success,
+   ExecMainStatus=0 and NRestarts=0. Complete service journals contain no error,
+   crash, failed run or abnormal restart after successful startup; no priority
+   0–3 records. API journal has only its startup; scheduler has only successful
+   run messages and send counts; backup has two successful runs (initial and
+   daily). Normal oneshot starts/exits are scheduled execution, not crashes.
+4. **Next-day fixture PASS.** Fictional reminder 3, occurrence 2, scheduled for
+   September 30, has action_notified_at=2026-09-30T10:00:00+08:00
+   (02:00 UTC). That scheduler pass reports exactly 1 send; all subsequent passes
+   through the observation endpoint report 0. The send path records its mark
+   and increments its count only after transport success. This verifies server
+   delivery/dispatch evidence, not handset display.
+5. **Daily backup PASS.** The scheduled September 30 03:15 run produced
+   `/srv/snotes/backups/reminder/reminder-20260930T031500909758Z.db`;
+   it and `reminder-latest.db` have identical SHA256
+   `7e16e236987adb35d89d677e02a2d4899c064f01b6e11e73914cd23dfc93137b`.
+   Latest file mtime is 2026-09-30 03:15:00.906610 UTC, size 245760 bytes.
+   Both live staging and latest backup open read-only and return `ok` from
+   `PRAGMA integrity_check`. Matching counts: reminders=4, reminder_tables=3,
+   reminder_occurrences=4, reminder_labels=1, ai_reminder_operations=30;
+   the four original fictional observation fixtures and 3 marks are preserved.
+
+Step 6 is CLOSED. Staging remains running. This closeout changes only this report;
+no development, repeated HTTPS gate, permissions audit, project tests, formal
+Reminder migration, authority switch, Mac helper retirement, merge, push or
+Step 7 work. The six pre-existing untracked user documents remain untouched.
