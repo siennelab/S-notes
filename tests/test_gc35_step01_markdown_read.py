@@ -15,6 +15,7 @@ from src.snotes.application.ai_access_metadata_service import AiAccessMetadataSe
 from src.snotes.application.local_mcp_write_service import note_version_token
 from src.snotes.application.note_service import NoteService
 from src.snotes.bootstrap import build_local_mcp_service
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
@@ -45,7 +46,9 @@ class GreenCloudStep01MarkdownReadTests(unittest.IsolatedAsyncioTestCase):
         self.notes = NoteService(repository)
         self.metadata = AiAccessMetadataService(repository)
         self.service = build_local_mcp_service(
-            actor_target_id="yan", resolved_data_root=self.root
+            actor_target_id="yan",
+            resolved_data_root=self.root,
+            reminder_authority=LOCAL_REMINDER_AUTHORITY,
         )
         self.ids = {
             "full": self._seed(MARKDOWN, "full", ("yan",)),
@@ -153,6 +156,7 @@ class GreenCloudStep01MarkdownReadTests(unittest.IsolatedAsyncioTestCase):
             "SNOTES_MCP_READ_ONLY": "1" if read_only else "0",
             "SNOTES_MCP_ACTOR_TARGET_ID": "yan",
             "SNOTES_GALE_TUNNEL_ALLOW_DATA_ROOT_OVERRIDE": "1",
+            "S_NOTES_REMINDER_AUTHORITY": "local",
         }
         if allowlist is not None:
             env["SNOTES_MCP_TOOL_ALLOWLIST"] = ",".join(sorted(allowlist))

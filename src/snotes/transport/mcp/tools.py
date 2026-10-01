@@ -976,6 +976,7 @@ def _write_response(result: dict) -> WriteReceipt:
 
 
 def _reminder_write_response(result: dict) -> ReminderWriteReceipt:
+    outcome_unknown = bool(result.get("outcome_unknown"))
     return ReminderWriteReceipt(
         status=result["status"],
         request_id=result["request_id"],
@@ -984,10 +985,13 @@ def _reminder_write_response(result: dict) -> ReminderWriteReceipt:
         reminder_id=result.get("reminder_id"),
         title=result.get("title", ""),
         processing_mode=result.get("handling_mode", "none"),
-        changed_formal_reminder=bool(result.get("modified_formal_reminder")),
+        changed_formal_reminder=(
+            None if outcome_unknown else bool(result.get("modified_formal_reminder"))
+        ),
         pending_confirmation=bool(result.get("entered_confirmation")),
         failure_or_conflict_reason=result.get("reason", ""),
         previous_status=result.get("previous_status"),
+        outcome_unknown=outcome_unknown,
     )
 
 

@@ -10,6 +10,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Settings
 
 from src.snotes.bootstrap import build_local_mcp_service
+from src.snotes.reminder_authority import (
+    ReminderAuthority,
+    ReminderAuthorityError,
+    resolve_reminder_authority,
+)
 from src.snotes.transport.mcp.runtime import (
     RuntimeConfigurationError,
     RuntimeConfig,
@@ -18,11 +23,20 @@ from src.snotes.transport.mcp.runtime import (
 from src.snotes.transport.mcp.tools import register_tools
 
 
-def build_server(config: RuntimeConfig) -> FastMCP:
+def build_server(
+    config: RuntimeConfig,
+    *,
+    reminder_authority: ReminderAuthority | None = None,
+) -> FastMCP:
     Settings.model_config["env_file"] = None
     service = build_local_mcp_service(
         actor_target_id=config.actor_target_id,
         resolved_data_root=config.data_root,
+        reminder_authority=(
+            reminder_authority
+            if reminder_authority is not None
+            else resolve_reminder_authority()
+        ),
         create_confirmation_required=(
             config.tool_allowlist is not None
             and (
@@ -76,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         server.run(transport="stdio")
         return 0
-    except RuntimeConfigurationError as error:
+    except (RuntimeConfigurationError, ReminderAuthorityError) as error:
         _startup_error(str(error))
         return 2
     except KeyboardInterrupt:

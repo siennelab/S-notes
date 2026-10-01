@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QHeaderView
 
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
 from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.theme import THEMES, build_app_style
@@ -38,7 +39,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
         )
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
-        _application, self.window = build_application([], data_root=self.data_root)
+        _application, self.window = build_application([], data_root=self.data_root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.addCleanup(self._close_window)
         self.rules_path = (
             self.data_root / "config" / "local_redaction_rules.json"

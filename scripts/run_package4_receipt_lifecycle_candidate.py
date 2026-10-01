@@ -7,13 +7,18 @@ import argparse
 from pathlib import Path
 
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import resolve_reminder_authority
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", required=True, type=Path)
     arguments = parser.parse_args()
-    application, window = build_application([], data_root=arguments.data_root)
+    application, window = build_application(
+        [],
+        data_root=arguments.data_root,
+        reminder_authority=resolve_reminder_authority(),
+    )
     window.show()
     return application.exec()
 

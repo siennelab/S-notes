@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime
 from urllib.parse import urlparse
 from typing import Any
@@ -48,6 +47,7 @@ from src.snotes.domain.reminders import (
     REMINDER_ACTIVE,
     REMINDER_COMPLETED,
     REMINDER_PAUSED,
+    REMINDER_STATUS_SCHEDULE_ERROR,
     Reminder,
     ReminderDraft,
     ReminderLabel,
@@ -57,6 +57,7 @@ from src.snotes.domain.reminders import (
     ReminderTableListItem,
 )
 from src.snotes.ui.floating_combo import FloatingComboBox
+from src.snotes.ui.remote_reminder_controller import describe_failure
 from src.snotes.ui.theme import apply_selection_palette, current_theme, repolish, themed_icon
 
 
@@ -749,12 +750,18 @@ class ReminderCenter(QWidget):
         )
         recurring = item is not None and is_recurring(item.reminder.action_spec)
         occurrence_completed = item is not None and item.status == "occurrence_completed"
+        schedule_error = item is not None and item.status == REMINDER_STATUS_SCHEDULE_ERROR
         self.edit_button.setEnabled(writable and selected)
         self.delete_button.setEnabled(writable and selected)
         self.pause_button.setEnabled(writable and selected and active and not completed)
         self.resume_button.setEnabled(writable and selected and paused)
         self.complete_occurrence_button.setEnabled(
-            writable and selected and active and recurring and not occurrence_completed
+            writable
+            and selected
+            and active
+            and recurring
+            and not occurrence_completed
+            and not schedule_error
         )
         self.complete_button.setEnabled(
             writable and selected and active and not recurring and not completed
@@ -950,8 +957,8 @@ class ReminderLabelManagerDialog(QDialog):
         self.refresh(label.id)
 
     def _submit(self, command: str, payload: dict[str, Any], success_text: str) -> None:
-        def finished(success: bool, _result: object) -> None:
-            self.status_label.setText(success_text if success else "操作失败")
+        def finished(success: bool, result: object) -> None:
+            self.status_label.setText(success_text if success else describe_failure(result))
             self._selection_changed()
 
         if self.service.submit(command, payload, callback=finished):
@@ -1386,7 +1393,7 @@ def _status_text(item: ReminderListItem) -> str:
 
 def _endpoint_host(endpoint: str) -> str:
     if not endpoint.strip():
-        return "" if os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1" else "ntfy.sh"
+        return "ntfy.sh"
     parsed = urlparse(endpoint if "://" in endpoint else f"https://{endpoint}")
     return parsed.netloc or parsed.path or "ntfy.sh"
 

@@ -29,7 +29,9 @@ REMINDER_STATUS_LABELS = {
     "paused": "已暂停",
     "completed": "已完成",
     "deleted": "回收站",
+    "schedule_error": "日程无法计算",
 }
+REMINDER_STATUS_SCHEDULE_ERROR = "schedule_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +147,8 @@ class ReminderListItem:
 
     @property
     def status_label(self) -> str:
-        return REMINDER_STATUS_LABELS[self.status]
+        # A remote snapshot may carry a status added after this client shipped.
+        return REMINDER_STATUS_LABELS.get(self.status, self.status)
 
 
 @dataclass(frozen=True, slots=True)

@@ -98,6 +98,7 @@ class MarkdownCoreTests(unittest.TestCase):
 
     def test_mcp_markdown_writes_plain_reads_and_snapshot(self):
         from src.snotes.bootstrap import build_local_mcp_service
+        from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
         from src.snotes.ui.markdown_canonicalizer import canonicalize_markdown
         from markdown_it import MarkdownIt
 
@@ -109,7 +110,7 @@ class MarkdownCoreTests(unittest.TestCase):
             self.assertEqual(canonicalize_markdown(actual), actual)
             return actual
 
-        service = build_local_mcp_service(actor_target_id='codex', resolved_data_root=self.root)
+        service = build_local_mcp_service(actor_target_id='codex', resolved_data_root=self.root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         with sqlite3.connect(self.root / 's_notes.db') as connection:
             connection.execute("INSERT INTO app_settings VALUES ('ai_modify_requires_confirmation', '0', '2026-01-01')")
         body = '# 标题\n\n这是 **重点**\n\n- item'
@@ -141,14 +142,15 @@ class MarkdownCoreTests(unittest.TestCase):
 
     def test_helper_bootstraps_reject_missing_marker(self):
         from src.snotes.bootstrap import compose_reminder_service, build_local_mcp_service
+        from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
         from src.snotes.gale_bootstrap import build_gale_control_service
         path = self.root / 's_notes.db'
         initialize_database(path)
         with sqlite3.connect(path) as connection:
             connection.execute("DELETE FROM schema_meta WHERE meta_key='body_format'")
         before = path.read_bytes()
-        calls = [lambda: compose_reminder_service(self.root),
-                 lambda: build_local_mcp_service(actor_target_id='codex', resolved_data_root=self.root),
+        calls = [lambda: compose_reminder_service(self.root, LOCAL_REMINDER_AUTHORITY),
+                 lambda: build_local_mcp_service(actor_target_id='codex', resolved_data_root=self.root, reminder_authority=LOCAL_REMINDER_AUTHORITY),
                  lambda: build_gale_control_service(data_root=self.root)]
         for call in calls:
             with self.assertRaisesRegex(RuntimeError, 'Markdown migration'):

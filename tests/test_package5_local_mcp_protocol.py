@@ -264,6 +264,7 @@ class Package5LocalMcpProtocolTests(unittest.IsolatedAsyncioTestCase):
             "SNOTES_MCP_READ_ONLY": "1" if read_only else "0",
             "SNOTES_MCP_ACTOR_TARGET_ID": actor,
             "SNOTES_GALE_TUNNEL_ALLOW_DATA_ROOT_OVERRIDE": "1",
+            "S_NOTES_REMINDER_AUTHORITY": "local",
         }
         if tool_allowlist is not None:
             values["SNOTES_MCP_TOOL_ALLOWLIST"] = ",".join(sorted(tool_allowlist))

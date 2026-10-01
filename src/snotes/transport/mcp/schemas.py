@@ -508,7 +508,10 @@ class ReminderWriteReceipt(StrictModel):
     reminder_id: int | None = None
     title: str = ""
     processing_mode: str
-    changed_formal_reminder: bool
+    # None only together with outcome_unknown: the Cloud write may or may not
+    # have been committed.
+    changed_formal_reminder: bool | None
     pending_confirmation: bool
     failure_or_conflict_reason: str = ""
     previous_status: str | None = None
+    outcome_unknown: bool = False

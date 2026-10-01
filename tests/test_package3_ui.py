@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.reminders import REMINDER_ACTIVE, ReminderDraft
 from src.snotes.domain.models import NoteLocation
 from src.snotes.ui.reminder_center import ReminderDialog, ReminderLabelManagerDialog
@@ -55,7 +56,7 @@ class Package3UiTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
-        _application, self.window = build_application([], data_root=self.data_root)
+        _application, self.window = build_application([], data_root=self.data_root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.addCleanup(self._close_window)
 
     def wait_note(self, note_id: int, timeout: float = 15.0) -> None:

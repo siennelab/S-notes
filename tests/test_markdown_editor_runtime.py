@@ -12,6 +12,7 @@ from PySide6.QtGui import QInputMethodEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 
 
@@ -25,7 +26,7 @@ class MarkdownEditorRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='snotes-markdown-ui-')
         self.root = Path(self.temp.name)
-        _, self.window = build_application([], data_root=self.root)
+        _, self.window = build_application([], data_root=self.root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.windows.append(self.window)
         self.window.show()
         self.editor = self.window.body_edit
@@ -539,5 +540,5 @@ class MarkdownEditorRuntimeTests(unittest.TestCase):
             connection.execute("DELETE FROM schema_meta WHERE meta_key='body_format'")
         before = path.read_bytes()
         with self.assertRaisesRegex(RuntimeError, 'Markdown migration'):
-            build_application([], data_root=self.root)
+            build_application([], data_root=self.root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.assertEqual(path.read_bytes(), before)

@@ -22,8 +22,12 @@ def run() -> int:
 
         return main()
     from src.snotes.bootstrap import DATA_ROOT_ENV, main
+    from src.snotes.reminder_authority import ReminderAuthorityError
     try:
         return main()
+    except ReminderAuthorityError as error:
+        print(f"S-notes startup failed: {error}", file=sys.stderr)
+        return 2
     except RuntimeError as error:
         if DATA_ROOT_ENV not in str(error):
             raise

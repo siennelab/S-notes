@@ -29,6 +29,9 @@ def configure_candidate() -> bool:
     os.environ['S_NOTES_STEP07_HOST_HOME'] = str(host_home)
     os.environ['HOME'] = str(isolated_home)
     os.environ['S_NOTES_DATA_ROOT'] = str(root)
+    # Explicit Step 7 staging authority; a packaged candidate's Info.plist
+    # declares the same values, and the resolver rejects any mismatch.
+    os.environ['S_NOTES_REMINDER_AUTHORITY'] = 'remote'
     os.environ['S_NOTES_REMOTE_REMINDER_ENDPOINT'] = STAGING_ENDPOINT
     os.environ['S_NOTES_STEP07_CANDIDATE'] = '1'
     return True

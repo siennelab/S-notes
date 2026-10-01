@@ -13,6 +13,7 @@ from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptField
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.storage.connection import SQLiteConnectionFactory
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
@@ -177,7 +178,7 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
         )
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
-        _application, self.window = build_application([], data_root=self.data_root)
+        _application, self.window = build_application([], data_root=self.data_root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.addCleanup(self.window.close)
         self.connections = SQLiteConnectionFactory(self.data_root / "s_notes.db")
 

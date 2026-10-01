@@ -18,6 +18,7 @@ from src.snotes.background.reminder import (
     write_launch_agent_template,
 )
 from src.snotes.bootstrap import compose_reminder_service
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.reminder_schedule import (
     is_cn_a_share_trading_day,
     lunar_to_solar,
@@ -637,12 +638,13 @@ class ReminderR1Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lunar_year_out_of_supported_range"):
             lunar_to_solar(2051, 1, 1)
         self.clock.set(datetime(2051, 1, 1, 10, 0, tzinfo=SHANGHAI))
-        self.create(
-            "FICTIONAL_LUNAR_OUT_OF_RANGE",
-            {"type": "lunar_yearly", "month": 1, "day": 1, "leap_month": False},
-        )
+        # The uncomputable schedule is rejected before anything is persisted.
         with self.assertRaisesRegex(ValueError, "lunar_year_out_of_supported_range"):
-            self.service.list_reminders()
+            self.create(
+                "FICTIONAL_LUNAR_OUT_OF_RANGE",
+                {"type": "lunar_yearly", "month": 1, "day": 1, "leap_month": False},
+            )
+        self.assertEqual(self.service.list_reminders(), [])
 
     def test_a_share_day_five_or_next_actual_trading_day(self) -> None:
         self.assertFalse(is_cn_a_share_trading_day(date(2026, 5, 5)))
@@ -661,15 +663,16 @@ class ReminderR1Tests(unittest.TestCase):
         ):
             is_cn_a_share_trading_day(date(2027, 1, 5))
         self.clock.set(datetime(2027, 1, 1, 10, 0, tzinfo=SHANGHAI))
-        self.create(
-            "FICTIONAL_MARKET_UNSUPPORTED_YEAR",
-            {"type": "cn_a_share_on_or_after", "day": 5},
-        )
+        # The uncomputable schedule is rejected before anything is persisted.
         with self.assertRaisesRegex(
             ValueError,
             "cn_a_share_calendar_year_not_supported:2027",
         ):
-            self.service.list_reminders()
+            self.create(
+                "FICTIONAL_MARKET_UNSUPPORTED_YEAR",
+                {"type": "cn_a_share_on_or_after", "day": 5},
+            )
+        self.assertEqual(self.service.list_reminders(), [])
 
     def test_asia_shanghai_independent_from_machine_timezone(self) -> None:
         self.clock.set(datetime(2026, 9, 9, 18, 30, tzinfo=ZoneInfo("UTC")))
@@ -795,7 +798,7 @@ class ReminderR1Tests(unittest.TestCase):
 
     def test_helper_composition_uses_public_ntfy_default(self) -> None:
         root = Path(self.temporary.name) / "formal-root"
-        service = compose_reminder_service(root)
+        service = compose_reminder_service(root, LOCAL_REMINDER_AUTHORITY)
         self.assertEqual(service._transport.endpoint, "https://ntfy.sh/")
 
     def test_migration_from_pre_reminder_schema_preserves_existing_content(self) -> None:

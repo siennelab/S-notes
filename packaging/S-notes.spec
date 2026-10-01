@@ -28,6 +28,20 @@ STEP07_CANDIDATE = os.environ.get("S_NOTES_STEP07_CANDIDATE") == "1"
 RETIRE_REMINDER_HELPER = (
     os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1"
 )
+# Runtime Reminder authority is a build input carried in Info.plist; a packaged
+# App never relies on the build shell's environment.
+REMINDER_AUTHORITY = os.environ.get("S_NOTES_REMINDER_AUTHORITY", "")
+REMOTE_REMINDER_ENDPOINT = os.environ.get("S_NOTES_REMOTE_REMINDER_ENDPOINT", "")
+if REMINDER_AUTHORITY not in {"local", "remote"} or (
+    (REMINDER_AUTHORITY == "remote") != bool(REMOTE_REMINDER_ENDPOINT)
+):
+    raise SystemExit("An explicit Reminder authority (and remote endpoint) is required.")
+REMINDER_AUTHORITY_INFO = {
+    "SNotesReminderAuthority": REMINDER_AUTHORITY,
+    "SNotesReminderHelperRetired": RETIRE_REMINDER_HELPER,
+}
+if REMOTE_REMINDER_ENDPOINT:
+    REMINDER_AUTHORITY_INFO["SNotesRemoteReminderEndpoint"] = REMOTE_REMINDER_ENDPOINT
 
 
 analysis = Analysis(
@@ -97,5 +111,6 @@ app = BUNDLE(
         "SNotesSourceCommit": os.environ.get("S_NOTES_SOURCE_COMMIT", "unknown"),
         "SNotesSourceDirty": os.environ.get("S_NOTES_SOURCE_DIRTY", "unknown"),
         "SNotesStep07Candidate": STEP07_CANDIDATE,
+        **REMINDER_AUTHORITY_INFO,
     },
 )

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.connection import SQLiteConnectionFactory
 
@@ -38,7 +39,7 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
         )
         self.addCleanup(self.temporary.cleanup)
         self.data_root = Path(self.temporary.name) / "data"
-        _application, self.window = build_application([], data_root=self.data_root)
+        _application, self.window = build_application([], data_root=self.data_root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.addCleanup(self._close_window)
         self.connections = SQLiteConnectionFactory(self.data_root / "s_notes.db")
 

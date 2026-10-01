@@ -70,6 +70,11 @@ class RemoteGuiTests(unittest.TestCase):
         self.assertFalse(self.center.new_button.isEnabled())
         self.online()
         self.assertEqual(self.controller.get_reminder(self.item.id).reminder.lifecycle,'paused')
+    def test_shutdown_releases_pooled_connections(self):
+        self.online();closed=[]
+        self.client.close=lambda:closed.append(True)
+        self.controller.begin_shutdown()
+        self.wait(lambda:closed==[True])
     def test_offline_snapshot_time_and_all_write_controls_disabled(self):
         self.online();saved=self.controller.snapshot_time
         self.client.error='offline';self.controller.refresh()

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.ai_receipts import GaleReceiptImport
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
@@ -52,7 +53,7 @@ class Package7FullParityTests(unittest.TestCase):
         )
         self.assertTrue(created)
 
-        _application, window = build_application([], data_root=self.data_root)
+        _application, window = build_application([], data_root=self.data_root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.addCleanup(window.close)
         button = window.shell.sidebar.ai_center_button
         self.assertEqual(button.text(), "AI中心 (1)")

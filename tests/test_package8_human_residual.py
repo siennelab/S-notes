@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.ai_receipts import GaleReceiptImport
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
@@ -30,7 +31,7 @@ class Package8HumanResidualTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="snotes-r2-p8-residual-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "data"
-        _application, self.window = build_application([], data_root=self.root)
+        _application, self.window = build_application([], data_root=self.root, reminder_authority=LOCAL_REMINDER_AUTHORITY)
         self.addCleanup(self.window.close)
 
     def test_single_and_multi_soft_delete_skip_confirmation(self) -> None:

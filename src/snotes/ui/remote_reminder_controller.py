@@ -13,6 +13,11 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
+from src.snotes.domain.reminder_remote_contract import (
+    OUTCOME_UNKNOWN,
+    REMINDER_WIRE_SCHEMA_VERSION,
+    RemoteReminderError,
+)
 from src.snotes.domain.reminders import (
     Reminder,
     ReminderLabel,
@@ -34,6 +39,12 @@ REMOTE_STATE_OFFLINE = "offline"
 REMOTE_STATE_AUTH = "auth"
 REMOTE_STATE_SCHEMA_MISMATCH = "schema_mismatch"
 REMOTE_STATE_SERVER = "server"
+# A write may or may not have been committed; refresh before retrying.
+REMOTE_STATE_OUTCOME_UNKNOWN = "outcome_unknown"
+# A write was confirmed, but the authoritative refresh after it failed.
+REMOTE_STATE_STALE = "stale"
+# commandFailed kind for a definite server-side rejection of one command.
+COMMAND_REJECTED = "rejected"
 
 
 @dataclass(slots=True)
@@ -43,10 +54,22 @@ class _Request:
     payload: dict[str, Any]
     refresh: bool
     callback: Callable[[bool, object], None] | None
+    # A read-only command has no write outcome to be uncertain about.
+    read_command: bool = False
+
+
+@dataclass(slots=True)
+class _Outcome:
+    result: object = None
+    snapshot: object = None
+    # Raised by the command itself: the command failed or its outcome is unknown.
+    command_error: Exception | None = None
+    # Raised after a confirmed command (or by a plain refresh).
+    refresh_error: Exception | None = None
 
 
 class _RemoteReminderWorker(QObject):
-    finished = Signal(object, object, object)
+    finished = Signal(object, object)
 
     def __init__(self, client: object, request: _Request) -> None:
         super().__init__()
@@ -55,10 +78,17 @@ class _RemoteReminderWorker(QObject):
 
     @Slot()
     def run(self) -> None:
+        outcome = _Outcome()
+        if self.request.command is not None:
+            try:
+                outcome.result = self.client.command(
+                    self.request.command, self.request.payload
+                )
+            except Exception as error:  # delivered to the GUI thread
+                outcome.command_error = error
+                self.finished.emit(self.request, outcome)
+                return
         try:
-            result: object = None
-            if self.request.command is not None:
-                result = self.client.command(self.request.command, self.request.payload)
             snapshot = self.client.snapshot() if self.request.refresh else None
             if snapshot is not None:
                 _validate_snapshot(snapshot)
@@ -72,9 +102,10 @@ class _RemoteReminderWorker(QObject):
                 self.client.command("ensure_default_table", {})
                 snapshot = self.client.snapshot()
                 _validate_snapshot(snapshot)
-            self.finished.emit(self.request, result, snapshot)
+            outcome.snapshot = snapshot
         except Exception as error:  # delivered to the GUI thread
-            self.finished.emit(self.request, error, None)
+            outcome.refresh_error = error
+        self.finished.emit(self.request, outcome)
 
 
 class RemoteReminderController(QObject):
@@ -106,6 +137,7 @@ class RemoteReminderController(QObject):
         self._threads: set[QThread] = set()
         self._workers: dict[QThread, _RemoteReminderWorker] = {}
         self._closing = False
+        self.shutdownFinished.connect(self._close_client)
         if cache is not None:
             try:
                 cached = cache.load()
@@ -152,10 +184,17 @@ class RemoteReminderController(QObject):
         *,
         refresh: bool = True,
         callback: Callable[[bool, object], None] | None = None,
+        read_command: bool = False,
     ) -> bool:
         if self._closing or self.read_only:
             return False
-        self._start(command, payload, refresh=refresh, callback=callback)
+        self._start(
+            command,
+            payload,
+            refresh=refresh,
+            callback=callback,
+            read_command=read_command,
+        )
         return True
 
     def _start(
@@ -165,9 +204,12 @@ class RemoteReminderController(QObject):
         *,
         refresh: bool,
         callback: Callable[[bool, object], None] | None,
+        read_command: bool = False,
     ) -> None:
         self._generation += 1
-        request = _Request(self._generation, command, dict(payload), refresh, callback)
+        request = _Request(
+            self._generation, command, dict(payload), refresh, callback, read_command
+        )
         self._pending += 1
         if command is None and self._snapshot is None:
             self._set_state(REMOTE_STATE_LOADING, "正在连接…")
@@ -192,50 +234,83 @@ class RemoteReminderController(QObject):
         if self._closing and not self._threads:
             self.shutdownFinished.emit()
 
-    @Slot(object, object, object)
-    def _finished(self, request: _Request, result: object, snapshot: object) -> None:
+    @Slot(object, object)
+    def _finished(self, request: _Request, outcome: _Outcome) -> None:
         self._pending = max(0, self._pending - 1)
         is_latest = request.generation == self._generation
-        if isinstance(result, Exception):
-            kind = _error_kind(result)
-            detail = _state_text(kind, self.snapshot_time)
-            if is_latest and request.generation >= self._applied_generation:
-                self._applied_generation = request.generation
-                self._set_state(kind, detail)
-                self.snapshotChanged.emit()
-            if request.command is not None:
-                self.commandFailed.emit(request.command, kind, str(result))
-            if request.callback is not None:
-                request.callback(False, result)
+        applies = is_latest and request.generation >= self._applied_generation
+        error = outcome.command_error
+        if error is not None:
+            self._command_error(request, error, applies=applies)
             if not is_latest:
                 self.stateChanged.emit(self._state, self._detail)
             return
 
-        # A response from any superseded request may complete its command, but
-        # must never replace state rendered for a newer request.
-        if not is_latest or request.generation < self._applied_generation:
-            if request.command is not None:
-                self.commandFinished.emit(request.command, result)
-            if request.callback is not None:
-                request.callback(True, result)
+        # The command (if any) is confirmed by the server from here on: a later
+        # refresh failure must never be reported as a failed command.
+        if applies:
+            self._applied_generation = request.generation
+            if outcome.refresh_error is not None:
+                if request.command is not None and not request.read_command:
+                    self._set_state(
+                        REMOTE_STATE_STALE,
+                        _stale_text(self.snapshot_time),
+                    )
+                else:
+                    kind = _error_kind(outcome.refresh_error)
+                    self._set_state(kind, _state_text(kind, self.snapshot_time))
+                self.snapshotChanged.emit()
+            else:
+                if isinstance(outcome.snapshot, dict):
+                    self._snapshot = outcome.snapshot
+                    if self.cache is not None:
+                        try:
+                            self.cache.save(outcome.snapshot)
+                        except Exception:
+                            # A cache write failure must not turn a live Cloud
+                            # response into an unavailable Reminder surface.
+                            pass
+                self._set_state(REMOTE_STATE_ONLINE, "已连接")
+                self.snapshotChanged.emit()
+        else:
+            # A superseded response may complete its command, but must never
+            # replace state rendered for a newer request.
             self.stateChanged.emit(self._state, self._detail)
-            return
-        self._applied_generation = request.generation
-        if isinstance(snapshot, dict):
-            self._snapshot = snapshot
-            if self.cache is not None:
-                try:
-                    self.cache.save(snapshot)
-                except Exception:
-                    # A cache write failure must not turn a live Cloud response
-                    # into an unavailable Reminder surface.
-                    pass
-        self._set_state(REMOTE_STATE_ONLINE, "已连接")
-        self.snapshotChanged.emit()
         if request.command is not None:
-            self.commandFinished.emit(request.command, result)
+            self.commandFinished.emit(request.command, outcome.result)
         if request.callback is not None:
-            request.callback(True, result)
+            request.callback(True, outcome.result)
+
+    def _command_error(self, request: _Request, error: Exception, *, applies: bool) -> None:
+        kind = _error_kind(error)
+        unknown = (
+            getattr(error, "outcome", None) == OUTCOME_UNKNOWN
+            and not request.read_command
+        )
+        rejected = not unknown and _is_rejection(error)
+        if applies and not rejected:
+            self._applied_generation = request.generation
+            if unknown:
+                self._set_state(
+                    REMOTE_STATE_OUTCOME_UNKNOWN,
+                    _unknown_text(self.snapshot_time),
+                )
+            else:
+                self._set_state(kind, _state_text(kind, self.snapshot_time))
+            self.snapshotChanged.emit()
+        elif rejected:
+            # The server answered and refused this command; the connection and
+            # the rendered snapshot stay valid.
+            self.stateChanged.emit(self._state, self._detail)
+        failure_kind = (
+            REMOTE_STATE_OUTCOME_UNKNOWN if unknown
+            else COMMAND_REJECTED if rejected
+            else kind
+        )
+        if request.command is not None:
+            self.commandFailed.emit(request.command, failure_kind, describe_failure(error))
+        if request.callback is not None:
+            request.callback(False, error)
 
     def request_ai_operation_logs(
         self,
@@ -260,6 +335,7 @@ class RemoteReminderController(QObject):
             {"offset": int(offset), "limit": int(limit)},
             refresh=False,
             callback=parsed,
+            read_command=True,
         )
 
     def shutdown(self, *, timeout_ms: int = 5000) -> bool:
@@ -268,12 +344,16 @@ class RemoteReminderController(QObject):
         deadline = max(0, int(timeout_ms))
         threads = tuple(self._threads)
         if not threads:
+            self._close_client()
             return True
         per_thread = max(1, deadline // len(threads)) if deadline else 0
         for thread in threads:
             thread.requestInterruption()
             thread.quit()
-        return all(thread.wait(per_thread) for thread in threads)
+        stopped = all(thread.wait(per_thread) for thread in threads)
+        if stopped:
+            self._close_client()
+        return stopped
 
     def begin_shutdown(self) -> None:
         """Stop new work; emit shutdownFinished after workers return naturally."""
@@ -284,6 +364,11 @@ class RemoteReminderController(QObject):
         for thread in tuple(self._threads):
             thread.requestInterruption()
             thread.quit()
+
+    def _close_client(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
 
     def _set_state(self, state: str, detail: str) -> None:
         self._state = state
@@ -392,6 +477,35 @@ def _error_kind(error: Exception) -> str:
     if kind in {REMOTE_STATE_OFFLINE, REMOTE_STATE_AUTH, REMOTE_STATE_SCHEMA_MISMATCH, REMOTE_STATE_SERVER}:
         return kind
     return REMOTE_STATE_SERVER
+
+
+def _is_rejection(error: Exception) -> bool:
+    status = getattr(error, "status", None)
+    return (
+        getattr(error, "kind", None) == REMOTE_STATE_SERVER
+        and isinstance(status, int)
+        and 400 <= status < 500
+    )
+
+
+def describe_failure(error: object) -> str:
+    """User-facing text for a command callback's failure value."""
+    if getattr(error, "outcome", None) == OUTCOME_UNKNOWN:
+        return "操作结果未知，请先刷新确认后再重试"
+    if isinstance(error, Exception) and _is_rejection(error):
+        code = getattr(error, "code", None)
+        return f"操作被拒绝：{code}" if code else "操作被拒绝"
+    return "操作失败"
+
+
+def _unknown_text(snapshot_time: str) -> str:
+    suffix = f" · 快照时间 {snapshot_time}" if snapshot_time else ""
+    return f"操作结果未知 · 请先刷新确认后再重试 · 只读{suffix}"
+
+
+def _stale_text(snapshot_time: str) -> str:
+    suffix = f" · 快照时间 {snapshot_time}" if snapshot_time else ""
+    return f"操作已被服务器确认 · 列表刷新失败，显示可能已过期 · 只读{suffix}"
 
 
 def _state_text(kind: str, snapshot_time: str) -> str:
@@ -559,11 +673,9 @@ def _parse_operation_page(value: object, *, offset: int, limit: int) -> Reminder
 
 
 def _validate_snapshot(snapshot):
-    from src.snotes.storage.schema import REMINDER_SCHEMA_VERSION
-    from src.snotes.transport.remote_reminder_client import RemoteReminderError
     if not isinstance(snapshot, dict) or type(snapshot.get("schema_version")) is not int:
         raise RemoteReminderError("server", code="snapshot_invalid")
-    if snapshot["schema_version"] > int(REMINDER_SCHEMA_VERSION):
+    if snapshot["schema_version"] > REMINDER_WIRE_SCHEMA_VERSION:
         raise RemoteReminderError("schema_mismatch")
     if not isinstance(snapshot.get("snapshot_time"), str) or not isinstance(snapshot.get("settings"), dict):
         raise RemoteReminderError("server", code="snapshot_invalid")

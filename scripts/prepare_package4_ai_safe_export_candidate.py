@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from src.snotes.bootstrap import build_application, resolve_rebuild_data_root
+from src.snotes.reminder_authority import resolve_reminder_authority
 
 
 def main() -> int:
@@ -19,7 +20,11 @@ def main() -> int:
     if database_path.exists():
         raise RuntimeError("Candidate database already exists; use a fresh root")
 
-    application, window = build_application([], data_root=data_root)
+    application, window = build_application(
+        [],
+        data_root=data_root,
+        reminder_authority=resolve_reminder_authority(),
+    )
     rules_path = data_root / "config" / "local_redaction_rules.json"
     rules_path.parent.mkdir(parents=True, exist_ok=True)
     rules_path.write_text(

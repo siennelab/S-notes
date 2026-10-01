@@ -9,6 +9,7 @@ from pathlib import Path
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
 from src.snotes.bootstrap import build_application, resolve_rebuild_data_root
+from src.snotes.reminder_authority import resolve_reminder_authority
 from src.snotes.storage.connection import SQLiteConnectionFactory
 
 
@@ -21,7 +22,11 @@ def main() -> int:
     if database_path.exists():
         raise RuntimeError("Candidate database already exists; use a fresh isolated root")
 
-    application, window = build_application([], data_root=data_root)
+    application, window = build_application(
+        [],
+        data_root=data_root,
+        reminder_authority=resolve_reminder_authority(),
+    )
 
     def add_note(
         title: str,

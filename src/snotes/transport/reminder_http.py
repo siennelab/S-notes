@@ -24,7 +24,7 @@ from src.snotes.domain.reminders import (
     ReminderQuery,
     ReminderSettings,
 )
-from src.snotes.storage.schema import REMINDER_SCHEMA_VERSION
+from src.snotes.domain.reminder_remote_contract import REMINDER_WIRE_SCHEMA_VERSION
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -140,7 +140,12 @@ class ReminderHttpApplication:
         # Serializing requests prevents a concurrent owner visibility change from
         # racing an actor's check-and-mutate sequence inside ReminderService.
         with self._request_lock:
-            return self._handle(method, path, headers=headers, body=body)
+            try:
+                return self._handle(method, path, headers=headers, body=body)
+            except Exception:
+                # A controlled response instead of a dropped connection, which a
+                # client could only misread as the network being offline.
+                return _error(500, "internal_error")
 
     def _handle(
         self,
@@ -234,7 +239,8 @@ class ReminderHttpApplication:
             instant = instant.replace(tzinfo=timezone.utc)
         timestamp = instant.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         result = {
-            "schema_version": int(REMINDER_SCHEMA_VERSION),
+            # Wire contract version, independent from the storage schema.
+            "schema_version": REMINDER_WIRE_SCHEMA_VERSION,
             "server_time": timestamp,
             "snapshot_time": timestamp,
             "labels": labels,

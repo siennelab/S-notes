@@ -13,6 +13,7 @@ from src.snotes.application.remote_mcp_reminder import (
     default_actor_credential_path,
 )
 from src.snotes.bootstrap import build_local_mcp_service
+from src.snotes.reminder_authority import ReminderAuthority
 from src.snotes.ui.reminder_owner import OwnerSnapshotCache
 
 
@@ -154,7 +155,6 @@ class Step07RemoteMcpReminderTests(unittest.TestCase):
                 patch.dict(
                     os.environ,
                     {
-                        "S_NOTES_REMOTE_REMINDER_ENDPOINT": "http://127.0.0.1:9",
                         "S_NOTES_STEP07_HOST_HOME": str(root / "host-home"),
                     },
                 ),
@@ -171,6 +171,9 @@ class Step07RemoteMcpReminderTests(unittest.TestCase):
                 service = build_local_mcp_service(
                     actor_target_id="yan",
                     resolved_data_root=root / "data",
+                    reminder_authority=ReminderAuthority(
+                        "remote", "http://127.0.0.1:9"
+                    ),
                 )
                 result = service.list_reminder_labels()
 

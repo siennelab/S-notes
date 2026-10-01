@@ -9,13 +9,18 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import resolve_reminder_authority
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("data_root", type=Path)
     args = parser.parse_args()
-    application, window = build_application([], data_root=args.data_root)
+    application, window = build_application(
+        [],
+        data_root=args.data_root,
+        reminder_authority=resolve_reminder_authority(),
+    )
     result = {"ok": False, "error": "event loop did not finish"}
 
     def verify_and_close() -> None:

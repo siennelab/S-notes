@@ -145,6 +145,7 @@ class YanMcpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "SNOTES_MCP_READ_ONLY": "0",
             "SNOTES_MCP_ACTOR_TARGET_ID": actor,
             "SNOTES_YAN_ALLOW_DATA_ROOT_OVERRIDE": "1",
+            "S_NOTES_REMINDER_AUTHORITY": "local",
         }
         if tool_allowlist is not None:
             values["SNOTES_MCP_TOOL_ALLOWLIST"] = ",".join(sorted(tool_allowlist))

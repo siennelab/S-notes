@@ -13,6 +13,11 @@ BUILD_DIR="$ROOT_DIR/build"
 DIST_DIR="$ROOT_DIR/dist"
 STEP07_CANDIDATE="0"
 BUNDLE_IDENTIFIER="de.ke-den.snotes"
+# Each profile declares its Reminder authority explicitly; the App reads it
+# from Info.plist at runtime and fails closed without it. The formal profile is
+# still the legacy local authority until Step 8.
+REMINDER_AUTHORITY="local"
+REMOTE_REMINDER_ENDPOINT=""
 if [[ "${1:-}" == "--candidate" ]]; then
     BUILD_DIR="$ROOT_DIR/build-d1-candidate"
     DIST_DIR="$ROOT_DIR/dist-d1-candidate"
@@ -21,6 +26,8 @@ elif [[ "${1:-}" == "--step07-candidate" ]]; then
     DIST_DIR="$ROOT_DIR/dist-step07-candidate"
     STEP07_CANDIDATE="1"
     BUNDLE_IDENTIFIER="de.ke-den.snotes.step07candidate"
+    REMINDER_AUTHORITY="remote"
+    REMOTE_REMINDER_ENDPOINT="https://reminder.ke-den.de"
 elif [[ $# -gt 0 ]]; then
     echo "Usage: $0 [--candidate|--step07-candidate]" >&2
     exit 2
@@ -219,6 +226,8 @@ env \
     S_NOTES_HELPER_BINARY="$HELPER_EXECUTABLE" \
     S_NOTES_REMINDER_HELPER_BINARY="$REMINDER_HELPER_EXECUTABLE" \
     S_NOTES_RETIRE_REMINDER_HELPER="$RETIRE_REMINDER_HELPER" \
+    S_NOTES_REMINDER_AUTHORITY="$REMINDER_AUTHORITY" \
+    S_NOTES_REMOTE_REMINDER_ENDPOINT="$REMOTE_REMINDER_ENDPOINT" \
     S_NOTES_STEP07_CANDIDATE="$STEP07_CANDIDATE" \
     S_NOTES_BUNDLE_IDENTIFIER="$BUNDLE_IDENTIFIER" \
     S_NOTES_SOURCE_COMMIT="$source_commit" \
@@ -267,6 +276,13 @@ fi
 [[ "$(metadata_value SNotesSourceCommit)" == "$source_commit" ]] || fail "Incorrect source commit provenance."
 [[ "$(metadata_value SNotesSourceDirty)" == "$source_dirty" ]] || fail "Incorrect source dirty provenance."
 [[ "$(metadata_value SNotesStep07Candidate)" == "$([[ "$STEP07_CANDIDATE" == "1" ]] && echo true || echo false)" ]] || fail "Incorrect Step 7 candidate marker."
+[[ "$(metadata_value SNotesReminderAuthority)" == "$REMINDER_AUTHORITY" ]] || fail "Incorrect Reminder authority."
+if [[ "$REMINDER_AUTHORITY" == "remote" ]]; then
+    [[ "$(metadata_value SNotesRemoteReminderEndpoint)" == "$REMOTE_REMINDER_ENDPOINT" ]] || fail "Incorrect remote Reminder endpoint."
+else
+    ! metadata_value SNotesRemoteReminderEndpoint >/dev/null 2>&1 || fail "Local Reminder authority must not carry an endpoint."
+fi
+[[ "$(metadata_value SNotesReminderHelperRetired)" == "$([[ "$RETIRE_REMINDER_HELPER" == "1" ]] && echo true || echo false)" ]] || fail "Incorrect Reminder helper retirement marker."
 
 executable_archs="$(lipo -archs "$APP_EXECUTABLE")"
 [[ "$executable_archs" == "arm64" ]] || fail "Expected arm64 executable, found: $executable_archs"

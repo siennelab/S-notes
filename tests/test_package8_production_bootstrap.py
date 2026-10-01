@@ -12,6 +12,7 @@ from src.app_paths import APP_NAME, DATA_ROOT_ENV_NAME, default_data_root
 from src.snotes.bootstrap import resolve_rebuild_data_root
 from src.snotes.gale_bootstrap import resolve_gale_data_root
 from src.snotes.transport.mcp.server import build_server
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.transport.mcp.runtime import (
     RuntimeConfigurationError,
     load_runtime_config,
@@ -74,7 +75,7 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
             )
             self.assertEqual(config.actor_target_id, "clawbot")
             self.assertTrue(config.read_only)
-            server = build_server(config)
+            server = build_server(config, reminder_authority=LOCAL_REMINDER_AUTHORITY)
             self.assertEqual(
                 [tool.name for tool in server._tool_manager.list_tools()],
                 READ_ONLY_MCP_TOOLS,
@@ -91,7 +92,7 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
             }
             with patch.dict(os.environ, environment, clear=True):
                 config = load_runtime_config()
-                server = build_server(config)
+                server = build_server(config, reminder_authority=LOCAL_REMINDER_AUTHORITY)
             self.assertEqual(config.data_root, isolated)
             self.assertEqual(
                 [tool.name for tool in server._tool_manager.list_tools()],
@@ -142,6 +143,7 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
                 {
                     "HOME": str(home),
                     DATA_ROOT_ENV_NAME: str(blocker / "child"),
+                    "S_NOTES_REMINDER_AUTHORITY": "local",
                     "QT_QPA_PLATFORM": "offscreen",
                     "PYTHONPYCACHEPREFIX": str(
                         Path(temporary_directory) / "pycache"
@@ -182,8 +184,9 @@ class Package8ProductionBootstrapTest(unittest.TestCase):
 from pathlib import Path
 from PySide6.QtCore import QTimer
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 
-application, window = build_application([])
+application, window = build_application([], reminder_authority=LOCAL_REMINDER_AUTHORITY)
 expected = Path.home() / "Library" / "Application Support" / "S-notes"
 assert (expected / "s_notes.db").is_file()
 window.show()

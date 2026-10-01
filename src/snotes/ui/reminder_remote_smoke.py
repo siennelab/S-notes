@@ -16,9 +16,14 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix='snotes-step07-gui-smoke-') as directory:
         os.environ.update(HOME=directory,S_NOTES_DATA_ROOT=directory,
                           S_NOTES_STEP07_HOST_HOME=host_home,
+                          S_NOTES_REMINDER_AUTHORITY='remote',
                           S_NOTES_REMOTE_REMINDER_ENDPOINT='https://reminder.ke-den.de')
         from src.snotes.bootstrap import build_application
-        app,window=build_application(sys.argv, data_root=Path(directory))
+        from src.snotes.reminder_authority import resolve_reminder_authority
+        authority=resolve_reminder_authority()
+        if not authority.is_remote:
+            return 1
+        app,window=build_application(sys.argv, data_root=Path(directory), reminder_authority=authority)
         controller=window.remote_reminder_controller
         result={'online':False,'heartbeat_ticks':0,'credential_not_in_db_env':False,'legacy_warning':False}
         started=time.monotonic()

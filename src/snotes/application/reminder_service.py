@@ -6,6 +6,7 @@ import hashlib
 import json
 import secrets
 import time
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from typing import Sequence
 
@@ -14,6 +15,7 @@ from src.snotes.application.ports import (
     ReminderRepository,
 )
 from src.snotes.domain.reminder_schedule import (
+    ScheduleRangeError,
     deadline_for,
     describe_schedule,
     is_recurring,
@@ -31,6 +33,7 @@ from src.snotes.domain.reminders import (
     REMINDER_COMPLETED,
     REMINDER_DELETED,
     REMINDER_PAUSED,
+    REMINDER_STATUS_SCHEDULE_ERROR,
     Reminder,
     ReminderDraft,
     ReminderLabel,
@@ -46,6 +49,13 @@ from src.snotes.domain.reminders import (
 )
 from src.snotes.domain.reminder_schedule import SHANGHAI
 
+
+# Occurrence decision modes: a read never computes-and-persists a missing
+# occurrence; a plan computes everything a write would, without writing, so a
+# transition can fail before any change; a write persists the computed rows.
+_READ = "read"
+_PLAN = "plan"
+_WRITE = "write"
 
 class ReminderService:
     LAST_SCHEDULED_DATE_KEY = "reminder/last_scheduled_date"
@@ -63,14 +73,40 @@ class ReminderService:
         self._clock = clock
 
     def create_reminder(self, draft: ReminderDraft) -> Reminder:
-        reminder = self._repository.create(self._clean_draft(draft))
+        cleaned = self._clean_draft(draft)
+        today = today_shanghai(self._now_datetime)
+        if cleaned.lifecycle == REMINDER_ACTIVE:
+            self._resolve_active_occurrence(self._preview(cleaned), today, mode=_PLAN)
+        reminder = self._repository.create(cleaned)
         if reminder.lifecycle == REMINDER_ACTIVE:
-            self._materialize_for_mutation(reminder)
+            self._materialize_active_occurrence(reminder, today)
         return reminder
 
     def update_reminder(self, reminder_id: int, draft: ReminderDraft) -> Reminder:
         existing = self._required(reminder_id)
         cleaned = self._clean_draft(draft, existing=existing)
+        today = today_shanghai(self._now_datetime)
+        if cleaned.lifecycle == REMINDER_ACTIVE:
+            preview = replace(
+                existing,
+                table_id=cleaned.table_id,
+                title=cleaned.title,
+                lifecycle=cleaned.lifecycle,
+                action_spec=cleaned.action_spec,
+                deadline_spec=cleaned.deadline_spec,
+                note=cleaned.note,
+                multi_notify=cleaned.multi_notify,
+                recurrence_mode=cleaned.recurrence_mode,
+            )
+            self._resolve_active_occurrence(
+                preview,
+                today,
+                mode=_PLAN,
+                pending_cleared=(
+                    existing.action_spec != cleaned.action_spec
+                    or existing.deadline_spec != cleaned.deadline_spec
+                ),
+            )
         updated = self._repository.update(reminder_id, cleaned)
         if (
             existing.action_spec != updated.action_spec
@@ -78,7 +114,7 @@ class ReminderService:
         ):
             self._repository.delete_pending_occurrences(reminder_id)
         if updated.lifecycle == REMINDER_ACTIVE:
-            self._materialize_for_mutation(updated)
+            self._materialize_active_occurrence(updated, today)
         return updated
 
     def delete_reminder(self, reminder_id: int) -> None:
@@ -100,6 +136,11 @@ class ReminderService:
         reminder = self._required(reminder_id)
         if reminder.lifecycle == REMINDER_COMPLETED:
             raise ValueError("completed_reminder_cannot_resume")
+        self._resolve_active_occurrence(
+            replace(reminder, lifecycle=REMINDER_ACTIVE),
+            today_shanghai(self._now_datetime),
+            mode=_PLAN,
+        )
         self._repository.set_lifecycle(reminder_id, REMINDER_ACTIVE)
         resumed = self._required(reminder_id)
         self._materialize_active_occurrence(
@@ -123,6 +164,17 @@ class ReminderService:
             return
         if item.occurrence is None:
             return
+        if is_recurring(item.reminder.action_spec):
+            # The follow-up must be computable before completion commits, so an
+            # unsupported next year rejects the whole transition.
+            self._next_action_after_completion(
+                item.reminder,
+                replace(
+                    item.occurrence,
+                    status=OCCURRENCE_COMPLETED,
+                    completed_at=now,
+                ),
+            )
         self._repository.mark_occurrence_completed(item.occurrence.id, now)
         completed = self._latest_completed(reminder_id)
         if completed is not None:
@@ -173,6 +225,14 @@ class ReminderService:
                     labels.get(table.label_id) or self._repository.default_label(),
                     today,
                 )
+            except ScheduleRangeError:
+                # One uncomputable schedule must not fail the whole list (and
+                # with it every snapshot, owner repair and scheduler pass).
+                item = self._schedule_error_item(
+                    reminder,
+                    table,
+                    labels.get(table.label_id) or self._repository.default_label(),
+                )
             except ValueError as error:
                 if _is_unsupported_schedule_kind(error):
                     continue
@@ -213,6 +273,15 @@ class ReminderService:
                 table,
                 label or self._repository.default_label(),
                 today_shanghai(self._now_datetime),
+            )
+        except ScheduleRangeError:
+            if materialize_occurrences:
+                # A mutation must reject the transition, not act on a stub.
+                raise
+            return self._schedule_error_item(
+                reminder,
+                table,
+                label or self._repository.default_label(),
             )
         except ValueError as error:
             if _is_unsupported_schedule_kind(error):
@@ -923,6 +992,7 @@ class ReminderService:
     def _sort_key(item: ReminderListItem) -> tuple:
         reminder = item.reminder
         status_rank = {
+            "schedule_error": 0,
             "overdue": 0,
             "due": 1,
             "upcoming": 2,
@@ -997,72 +1067,75 @@ class ReminderService:
                 return False
         return True
 
-    def _materialize_for_mutation(self, reminder: Reminder) -> None:
-        try:
-            self._materialize_active_occurrence(reminder, today_shanghai(self._now_datetime))
-        except ValueError as error:
-            # Existing create/update accepts calendar specs whose future range
-            # may be unavailable; reads still report that range error. Never
-            # turn an already persisted command into a false failed write.
-            if not str(error).startswith(("cn_a_share_calendar_year_not_supported:", "lunar_year_out_of_supported_range")):
-                raise
+    @staticmethod
+    def _schedule_error_item(
+        reminder: Reminder,
+        table: ReminderTable,
+        label: ReminderLabel,
+    ) -> ReminderListItem:
+        return ReminderListItem(
+            reminder, table, label, None, REMINDER_STATUS_SCHEDULE_ERROR, None, None
+        )
+
+    def _preview(self, draft: ReminderDraft) -> Reminder:
+        """An unsaved reminder for write preflight; id 0 owns no occurrences."""
+        now = self._timestamp()
+        return Reminder(
+            0,
+            int(draft.table_id or 0),
+            draft.title,
+            draft.lifecycle,
+            draft.action_spec,
+            draft.deadline_spec,
+            draft.note,
+            now,
+            now,
+            multi_notify=draft.multi_notify,
+            recurrence_mode=draft.recurrence_mode,
+        )
 
     def _active_occurrence(self, reminder: Reminder, today: date) -> ReminderOccurrence | None:
-        completed = self._latest_completed(reminder.id)
-        if completed is not None and is_recurring(reminder.action_spec):
-            next_occurrence = self._next_occurrence_after_completion(
-                reminder,
-                completed,
-            )
-            if (
-                next_occurrence is None
-                or date.fromisoformat(next_occurrence.action_date) > today
-            ):
-                if next_occurrence is not None and (
-                    reminder.multi_notify or reminder.recurrence_mode is not None
-                ):
-                    return next_occurrence
-                return completed
-        current = self._current_uncompleted_occurrence(reminder)
-        if current is not None and date.fromisoformat(current.action_date) <= today:
-            return current
-        if current is not None and not is_recurring(reminder.action_spec):
-            return current
-        if current is not None and date.fromisoformat(current.action_date) > today:
-            return current
-        # Preserve schedule validation/error behavior without materializing the
-        # calculated date. A missing persisted occurrence stays absent.
-        self._current_or_next_action_date(
-            reminder, today, last_completed_at=completed.completed_at if completed else None
-        )
-        return None
+        return self._resolve_active_occurrence(reminder, today, mode=_READ)
 
     def _materialize_active_occurrence(
         self,
         reminder: Reminder,
         today: date,
     ) -> ReminderOccurrence | None:
+        return self._resolve_active_occurrence(reminder, today, mode=_WRITE)
+
+    def _resolve_active_occurrence(
+        self,
+        reminder: Reminder,
+        today: date,
+        *,
+        mode: str,
+        pending_cleared: bool = False,
+    ) -> ReminderOccurrence | None:
+        """Single occurrence decision shared by reads, preflight and writes.
+
+        Every mode performs the same schedule computations, so an uncomputable
+        schedule raises in a read as well; only ``write`` persists rows.
+        """
         completed = self._latest_completed(reminder.id)
+        current = None if pending_cleared else self._current_uncompleted_occurrence(reminder)
         if completed is not None and is_recurring(reminder.action_spec):
-            next_occurrence = self._materialize_next_occurrence_after_completion(
-                reminder,
-                completed,
-            )
+            following = current
+            if following is None:
+                action = self._next_action_after_completion(reminder, completed)
+                if action is not None and mode != _READ:
+                    following = self._occurrence_for(reminder, action, persist=mode == _WRITE)
             if (
-                next_occurrence is None
-                or date.fromisoformat(next_occurrence.action_date) > today
+                following is None
+                or date.fromisoformat(following.action_date) > today
             ):
-                if next_occurrence is not None and (
+                if following is not None and (
                     reminder.multi_notify or reminder.recurrence_mode is not None
                 ):
-                    return next_occurrence
+                    return following
                 return completed
-        current = self._current_uncompleted_occurrence(reminder)
-        if current is not None and date.fromisoformat(current.action_date) <= today:
-            return current
-        if current is not None and not is_recurring(reminder.action_spec):
-            return current
-        if current is not None and date.fromisoformat(current.action_date) > today:
+            current = following
+        if current is not None:
             return current
         completed_at = completed.completed_at if completed else None
         action = self._current_or_next_action_date(
@@ -1070,14 +1143,41 @@ class ReminderService:
             today,
             last_completed_at=completed_at,
         )
-        if action is None:
+        if action is None or mode == _READ:
+            # A read never materializes: a missing persisted occurrence stays absent.
             return None
+        return self._occurrence_for(reminder, action, persist=mode == _WRITE)
+
+    def _occurrence_for(
+        self,
+        reminder: Reminder,
+        action: date,
+        *,
+        persist: bool,
+    ) -> ReminderOccurrence:
         deadline = deadline_for(action, reminder.deadline_spec)
-        return self._repository.upsert_occurrence(
+        deadline_text = deadline.isoformat() if deadline else None
+        if persist:
+            return self._repository.upsert_occurrence(
+                reminder.id,
+                occurrence_key(action),
+                action.isoformat(),
+                deadline_text,
+            )
+        # A planned occurrence only feeds the same decision; it is never stored
+        # or returned to a caller outside preflight.
+        return ReminderOccurrence(
+            0,
             reminder.id,
             occurrence_key(action),
             action.isoformat(),
-            deadline.isoformat() if deadline else None,
+            deadline_text,
+            OCCURRENCE_PENDING,
+            None,
+            None,
+            None,
+            "",
+            "",
         )
 
     def _current_or_next_action_date(
@@ -1162,6 +1262,19 @@ class ReminderService:
         pending = self._next_occurrence_after_completion(reminder, occurrence)
         if pending is not None:
             return pending
+        action = self._next_action_after_completion(reminder, occurrence)
+        if action is None:
+            return None
+        return self._occurrence_for(reminder, action, persist=True)
+
+    def _next_action_after_completion(
+        self,
+        reminder: Reminder,
+        occurrence: ReminderOccurrence,
+    ) -> date | None:
+        """Pure follow-up date after ``occurrence`` completed; never writes."""
+        if not is_recurring(reminder.action_spec):
+            return None
         spec = reminder.action_spec
         if reminder.recurrence_mode is not None and spec.get("type") in {
             "interval_days", "interval_from_completion",
@@ -1178,19 +1291,10 @@ class ReminderService:
             after = date.fromisoformat(occurrence.action_date)
             if spec.get("type") != "interval_from_completion":
                 after += timedelta(days=1)
-        action = next_action_date(
+        return next_action_date(
             spec,
             on_or_after=after,
             last_completed_at=occurrence.completed_at,
-        )
-        if action is None:
-            return None
-        deadline = deadline_for(action, reminder.deadline_spec)
-        return self._repository.upsert_occurrence(
-            reminder.id,
-            occurrence_key(action),
-            action.isoformat(),
-            deadline.isoformat() if deadline else None,
         )
 
     def _required(self, reminder_id: int) -> Reminder:

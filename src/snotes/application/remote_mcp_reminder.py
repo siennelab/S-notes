@@ -1,7 +1,8 @@
 """Cloud Reminder adapter for the Mac-local MCP process.
 
 This module deliberately owns only actor credentials.  It never reads the GUI
-owner credential or the GUI offline snapshot cache.
+owner credential or the GUI offline snapshot cache.  The HTTP client is injected
+by the composition root, so this application module stays transport-free.
 """
 
 from __future__ import annotations
@@ -11,8 +12,8 @@ import stat
 from pathlib import Path
 from typing import Callable, Protocol
 
-from src.snotes.transport.remote_reminder_client import (
-    RemoteReminderClient,
+from src.snotes.domain.reminder_remote_contract import (
+    OUTCOME_UNKNOWN,
     RemoteReminderError,
 )
 
@@ -315,6 +316,8 @@ class RemoteMcpReminderAdapter:
         try:
             return self._client.command(command, payload)
         except RemoteReminderError as error:
+            if error.outcome == OUTCOME_UNKNOWN:
+                return _write_unknown(request_id, table_id=table_id, item_id=item_id)
             return _write_failure(
                 request_id,
                 table_id=table_id,
@@ -328,8 +331,8 @@ def compose_remote_mcp_reminder(
     endpoint: str,
     *,
     credential_path: Path | None = None,
+    client_factory: Callable[..., RemoteReminderCommandClient],
     timeout_seconds: float = 4.0,
-    client_factory: Callable[..., RemoteReminderCommandClient] = RemoteReminderClient,
 ) -> RemoteMcpReminderAdapter:
     provider = ActorReminderCredentialProvider(
         actor_target_id,
@@ -386,4 +389,27 @@ def _write_failure(
         "modified_formal_reminder": False,
         "entered_confirmation": False,
         "reason": reason,
+    }
+
+
+def _write_unknown(
+    request_id: str,
+    *,
+    table_id: int | None = None,
+    item_id: int | None = None,
+) -> dict:
+    # The write may have been committed: never claim the formal Reminder is
+    # unchanged. Retrying with the same request_id is idempotent server-side.
+    return {
+        **_write_failure(
+            request_id,
+            table_id=table_id,
+            item_id=item_id,
+            reason=(
+                "Cloud Reminder 写入结果未知；请先查询确认，"
+                "或使用同一 request_id 重试。"
+            ),
+        ),
+        "modified_formal_reminder": None,
+        "outcome_unknown": True,
     }

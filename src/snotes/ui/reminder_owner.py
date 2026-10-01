@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QThread
-from src.snotes.storage.schema import REMINDER_SCHEMA_VERSION
+from src.snotes.domain.reminder_remote_contract import REMINDER_WIRE_SCHEMA_VERSION
 
 OWNER_KEYCHAIN_SERVICE = 'de.ke-den.snotes.step07.reminder-owner'
 OWNER_KEYCHAIN_ACCOUNT = 'owner'
@@ -46,7 +46,7 @@ class OwnerSnapshotCache:
         return (
             isinstance(snapshot, dict)
             and type(snapshot.get('schema_version')) is int
-            and snapshot['schema_version'] == int(REMINDER_SCHEMA_VERSION)
+            and snapshot['schema_version'] == REMINDER_WIRE_SCHEMA_VERSION
             and isinstance(snapshot.get('snapshot_time'), str)
             and all(isinstance(snapshot.get(key), list) for key in ('labels', 'tables', 'items'))
             and isinstance(snapshot.get('settings'), dict)

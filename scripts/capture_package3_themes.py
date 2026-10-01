@@ -11,6 +11,7 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.bootstrap import build_application
+from src.snotes.reminder_authority import resolve_reminder_authority
 
 
 def main() -> int:
@@ -19,7 +20,11 @@ def main() -> int:
     parser.add_argument("output_root", type=Path)
     args = parser.parse_args()
     args.output_root.mkdir(parents=True, exist_ok=True)
-    application, window = build_application([], data_root=args.data_root)
+    application, window = build_application(
+        [],
+        data_root=args.data_root,
+        reminder_authority=resolve_reminder_authority(),
+    )
     first = window.note_service.list_active_notes()[0]
     window.load_note(first.id)
     window.shell.set_metadata_expanded(True)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -35,6 +34,11 @@ from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 from src.snotes.storage.schema import initialize_database
 from src.snotes.gale_bootstrap import compose_gale_control
+from src.snotes.reminder_authority import (
+    ReminderAuthority,
+    ReminderAuthorityError,
+    resolve_reminder_authority,
+)
 from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
 from src.snotes.ui.main_window import MainWindow
 from src.snotes.ui.markdown_canonicalizer import MarkdownCanonicalizer
@@ -55,8 +59,12 @@ def build_application(
     argv: Sequence[str] | None = None,
     *,
     data_root: Path | None = None,
+    reminder_authority: ReminderAuthority,
 ) -> tuple[QApplication, MainWindow]:
-    """Compose the application against the canonical or isolated data root."""
+    """Compose the application against the canonical or isolated data root.
+
+    ``reminder_authority`` is required: composition never guesses it.
+    """
     application = QApplication.instance()
     if application is None:
         application = QApplication(list(argv) if argv is not None else sys.argv)
@@ -105,18 +113,18 @@ def build_application(
         ai_metadata=ai_access_metadata_service,
     )
     remote_controller = None
-    if os.environ.get("S_NOTES_REMOTE_REMINDER_ENDPOINT"):
+    if reminder_authority.is_remote:
         from src.snotes.transport.remote_reminder_client import RemoteReminderClient
         from src.snotes.ui.remote_reminder_controller import RemoteReminderController
         from src.snotes.ui.reminder_owner import OwnerSnapshotCache, owner_credential
 
         remote_controller = RemoteReminderController(
-            RemoteReminderClient(os.environ["S_NOTES_REMOTE_REMINDER_ENDPOINT"], owner_credential),
+            RemoteReminderClient(reminder_authority.endpoint, owner_credential),
             cache=OwnerSnapshotCache(root / "gui-only-reminder" / "snapshot.json"),
         )
         reminder_service = None
     else:
-        reminder_service = compose_reminder_service(root)
+        reminder_service = compose_reminder_service(root, reminder_authority)
     window = MainWindow(
         note_service,
         theme_settings_path=root / "config" / "ui_settings.ini",
@@ -139,12 +147,17 @@ def build_application(
     return application, window
 
 
-def compose_reminder_service(root: Path) -> ReminderService:
+def compose_reminder_service(
+    root: Path,
+    reminder_authority: ReminderAuthority,
+) -> ReminderService:
+    if reminder_authority.is_remote:
+        raise ReminderAuthorityError("local_reminder_service_requires_local_authority")
     connections = initialize_database(Path(root) / "s_notes.db")
     repository = SQLiteReminderRepository(connections)
     settings = ReminderService(repository).initialize_settings()
     endpoint = ReminderService._private_ntfy_endpoint(settings.ntfy_endpoint)
-    if not endpoint and os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1":
+    if not endpoint and reminder_authority.helper_retired:
         raise RuntimeError("private_reminder_endpoint_required")
     transport = NtfyReminderTransport(endpoint or "https://ntfy.sh")
     return ReminderService(repository, transport=transport)
@@ -154,6 +167,7 @@ def build_local_mcp_service(
     *,
     actor_target_id: str,
     resolved_data_root: Path,
+    reminder_authority: ReminderAuthority,
     create_confirmation_required: bool = False,
 ) -> LocalMcpService:
     """Compose MCP after its runtime owner has resolved the data root."""
@@ -187,10 +201,14 @@ def build_local_mcp_service(
         ),
     )
     remote_reminders = None
-    if os.environ.get("S_NOTES_REMOTE_REMINDER_ENDPOINT"):
+    if reminder_authority.is_remote:
         from src.snotes.application.remote_mcp_reminder import compose_remote_mcp_reminder
+        from src.snotes.transport.remote_reminder_client import RemoteReminderClient
+
         remote_reminders = compose_remote_mcp_reminder(
-            actor_target_id, os.environ["S_NOTES_REMOTE_REMINDER_ENDPOINT"]
+            actor_target_id,
+            reminder_authority.endpoint,
+            client_factory=RemoteReminderClient,
         )
         reminder_service = None
     else:
@@ -212,8 +230,21 @@ def build_local_mcp_service(
     )
 
 
-def main(argv: Sequence[str] | None = None, *, data_root: Path | None = None) -> int:
-    application, window = build_application(argv, data_root=data_root)
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    data_root: Path | None = None,
+    reminder_authority: ReminderAuthority | None = None,
+) -> int:
+    application, window = build_application(
+        argv,
+        data_root=data_root,
+        reminder_authority=(
+            reminder_authority
+            if reminder_authority is not None
+            else resolve_reminder_authority()
+        ),
+    )
     window.show()
     return application.exec()
 

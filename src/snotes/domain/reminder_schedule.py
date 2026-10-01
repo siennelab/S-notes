@@ -10,6 +10,11 @@ from src.snotes.domain.reminders import REMINDER_TIMEZONE
 
 
 SHANGHAI = ZoneInfo(REMINDER_TIMEZONE)
+
+
+class ScheduleRangeError(ValueError):
+    """A valid schedule needs a calendar year this build cannot compute."""
+
 WEEKDAYS = {
     "monday": 0,
     "tuesday": 1,
@@ -264,7 +269,7 @@ def is_cn_a_share_trading_day(value: date) -> bool:
     try:
         closed_dates = CN_A_SHARE_CLOSED_DATES_BY_YEAR[value.year]
     except KeyError as error:
-        raise ValueError(
+        raise ScheduleRangeError(
             f"cn_a_share_calendar_year_not_supported:{value.year}"
         ) from error
     if value.weekday() >= 5:
@@ -330,12 +335,12 @@ def _next_lunar_yearly(
         candidate = lunar_to_solar(year, month, day, leap_month=leap_month)
         if candidate >= on_or_after:
             return candidate
-    raise ValueError("lunar_year_out_of_supported_range")
+    raise ScheduleRangeError("lunar_year_out_of_supported_range")
 
 
 def lunar_to_solar(year: int, month: int, day: int, *, leap_month: bool = False) -> date:
     if year < LUNAR_FIRST_YEAR or year > LUNAR_LAST_YEAR:
-        raise ValueError("lunar_year_out_of_supported_range")
+        raise ScheduleRangeError("lunar_year_out_of_supported_range")
     offset = sum(_lunar_year_days(y) for y in range(LUNAR_FIRST_YEAR, year))
     leap = _leap_month(year)
     for lunar_month in range(1, month):
