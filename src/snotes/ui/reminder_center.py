@@ -205,7 +205,6 @@ class ReminderCenter(QWidget):
         self.endpoint_input = QLineEdit()
         self.endpoint_input.setObjectName("reminderEndpointInput")
         self.endpoint_input.setReadOnly(True)
-        self.endpoint_input.setMinimumWidth(190)
         self.copy_topic_button = QPushButton("复制 Topic")
         self.delete_table_button = QToolButton()
         self.delete_table_button.setObjectName("reminderDeleteTableButton")

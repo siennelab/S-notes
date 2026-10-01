@@ -388,6 +388,7 @@ class MainWindow(QMainWindow):
         self.current_filter = "reminder"
         self.shell.show_reminder_surface()
         self.shell.reminder_center.create_table()
+        self._sync_sidebar_reminder_filters()
 
     def select_reminder_table(self, table_id: int, matching_item_id: object = None) -> None:
         if self.shell.reminder_center is None:
@@ -450,12 +451,14 @@ class MainWindow(QMainWindow):
         if center is None:
             return
         center.move_table(table_id, label_id)
+        self._sync_sidebar_reminder_filters()
 
     def delete_reminder_table(self, table_id: int) -> None:
         center = self.shell.reminder_center
         if center is None:
             return
         center.delete_table(table_id)
+        self._sync_sidebar_reminder_filters()
 
     def _sync_sidebar_reminder_filters(self, *_args) -> None:
         center = self.shell.reminder_center
