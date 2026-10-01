@@ -87,8 +87,9 @@ Real LaunchAgent execution against fictional data published both actors; a
 second execution reported UNCHANGED for both. The temporary agent was unloaded.
 Production plist is installed at
 `~/Library/LaunchAgents/com.snotes.greencloud-mirror-publish.plist`, mode 0600,
-RunAtLoad=true, StartInterval=300. It uses the formal repository `.venv/bin/python`
-with `WorkingDirectory=/Users/s/Documents/项目/S-notes` (see Post-Vibe audit below).
+RunAtLoad=true, StartInterval=300. It uses the formal repository `.venv/bin/python`;
+since 2026-10-01 its `WorkingDirectory` is a pinned source export, not the
+developer checkout (see "Runtime re-pin" below).
 Dedicated existing key was reused, not regenerated.
 
 Production agent was loaded and first execution exited 0. Both actor state
@@ -205,3 +206,22 @@ Non-blocking maintenance notes, intentionally not implemented:
    payloads. Its script-only common eligibility SQL is kept as-is.
 4. Cloud reader does not re-assert mirror `target_actor` (receiver validation
    and OS group permissions already enforce it; defense-in-depth only).
+
+## Runtime re-pin (2026-10-01)
+
+After the P1 closure the formal repository itself became the construction
+checkout (Step 7 branch), so the publisher again imported whatever branch was
+checked out. The agent now runs a `git archive` export of formal main
+`fdbb6eb97f90b6cbf50b62df196582f9f7ad51b2` at
+`~/Library/Application Support/S-notes/runtime/greencloud-publisher/<rev>/`
+(`REVISION` file, no `.git`), installed per `deploy/greencloud/INSTALL.md`
+("Mac publisher runtime"). All 50 publisher-imported `src` files are byte-identical
+to runtime source `e85d7ed`; interpreter is unchanged.
+
+- Previous plist moved to
+  `~/Library/Application Support/S-notes/backups/greencloud-publisher-devcheckout-retire-20261001-162326/`.
+- RunAtLoad run exit 0; manual publish from the export: both actors `UNCHANGED`
+  (no upload needed), exit 0, no failure or retry. Cloud `current.db` mtimes
+  match the last recorded successes. GreenCloud was not changed.
+- `scripts/greencloud_publish_schedule.py` now takes `--source` and refuses a
+  directory with `.git` or without `REVISION`.

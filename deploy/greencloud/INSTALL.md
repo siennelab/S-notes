@@ -68,6 +68,36 @@ and `mcp==1.28.1`. `source-manifest.json` records deployed source hashes and the
 implementation commit; `requirements-installed.txt` records actual dependencies.
 The Mac private key never leaves the Mac.
 
+## Mac publisher runtime
+
+The five-minute LaunchAgent `com.snotes.greencloud-mirror-publish` must not run
+from the developer checkout, which switches to construction branches. It runs a
+pinned `src/` export of an approved revision, outside any Git checkout:
+
+```sh
+rev=$(git rev-parse --verify 'main^{commit}')
+dest="$HOME/Library/Application Support/S-notes/runtime/greencloud-publisher/$rev"
+mkdir -m 700 "$dest"
+git archive "$rev" src | tar -x -C "$dest"
+printf '%s\n' "$rev" > "$dest/REVISION"
+```
+
+Then stop the current agent, move its plist into a private directory under
+`~/Library/Application Support/S-notes/backups/`, and render/load the new one:
+
+```sh
+launchctl bootout gui/$(id -u)/com.snotes.greencloud-mirror-publish
+.venv/bin/python scripts/greencloud_publish_schedule.py \
+  --python "$PWD/.venv/bin/python" --source "$dest" \
+  --destination ~/Library/LaunchAgents/com.snotes.greencloud-mirror-publish.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.snotes.greencloud-mirror-publish.plist
+```
+
+The renderer refuses a source containing `.git` or lacking `REVISION`. Upgrading
+the publisher is a new export plus re-render; nothing tracks a branch. The
+interpreter is the existing repository `.venv` (only `markdown-it-py`/`mdurl`
+are needed); checkouts do not change it. The previous export stays for rollback.
+
 ## Rollback
 
 Stop the Mac schedule first:
