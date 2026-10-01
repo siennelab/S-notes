@@ -295,3 +295,26 @@ P2-1（staging ntfy/topic 硬编码）→ Step 8；P2-3（occurrence 重复逻�
 - 新增 `tests/test_gc35_step07_repair.py` 22/22 PASS：2027 create/update/resume 原子拒绝；2026 年末 completion 无部分提交（owner 与 actor 均如此）；预置坏行时 snapshot（owner/actor）可用、scheduler 仍发送健康 reminder、owner 可修复与删除、complete 明确拒绝；真实 socket 下 snapshot 异常返回受控 500；DB schema 版本变化不影响 wire 版本，wire+1 仍为 mismatch；architecture PASS；authority 各 profile、Info.plist 冲突、candidate=remote staging；GUI/MCP/仓库 MCP 脚本/legacy helper 缺 authority 一律 exit 2 且未创建任何 `s_notes.db`；helper 在 remote 下拒绝运行；POST ok/400/500/超时/断连/未连接的 outcome 分类且每个写只发一次；controller stale/unknown/rejected/只读命令；MCP unknown receipt；actor request_id 幂等。
 - Step 6 + Step 7 + Reminder 子系统回归 113/113 PASS（临时 HOME、虚构 DB）。
 - 全库 597 tests：2 failures，即 `test_package3_ui` 的 `test_frozen_r1_geometry_and_approved_two_level_classification`（307≠360）与 `test_reminder_sidebar_table_title_rename_and_delete_stay_synced`（reminder table item not found）。与干净 `4a63ea5` 完全一致；原基线中的 architecture gate 失败已消除。**更正：这两项在 `fdbb6eb`（Step 7 之前）均 PASS，属 Step 7 引入的回归，并非既有问题。** 后者根因：`MainWindow.create_reminder()` 改走 `center.create_table()` 后，local 分支丢失了 `_sync_sidebar_reminder_filters()`，本地模式新建的表不会出现在侧栏。不在本次授权范围内，未修复，交由 re-audit / S 裁定。
+
+### Candidate 与边界
+
+- 从干净提交 `ecd8843` 重建 `dist-step07-candidate/S-notes.app`（`--step07-candidate`，`S_NOTES_RETIRE_REMINDER_HELPER=0`）：BUILD SUCCESS，`Tracked Source Dirty: NO`，arm64，ad-hoc codesign 通过。Info.plist：`SNotesReminderAuthority=remote`、`SNotesRemoteReminderEndpoint=https://reminder.ke-den.de`、`SNotesReminderHelperRetired=false`（构建脚本已校验）。
+- Packaged runtime 读取 plist：candidate 内嵌 legacy helper（临时 HOME / 数据根）以 `Reminder authority is remote` exit 2；环境变量冲突以 `reminder_authority_conflict` exit 2；未创建任何 DB。
+- 打包 candidate `--step07-smoke` PASS（现有 staging）：online=true、50 次心跳、snapshot_items=8、credential_not_in_db_env=true、legacy_warning=true。
+- 打包 candidate actor MCP stdio smoke（yan、claude-code，只读）PASS：`list_reminder_labels` / `list_reminder_tables` 均 status=ok。
+- Staging 服务端 runtime **未更新**：服务端修复已在本地受控时钟下验证，staging 时钟无法复现 2027 场景；新客户端与现有 staging 兼容（wire version 仍为 4）。未做 DB 迁移，未改 ntfy、helper 或 authority。
+- 正式 `dist/S-notes.app` 指纹前后一致（`5bd0df24…`，本轮相对路径 + 内容哈希算法）；正式 helper plist 一致（`ad0c3f85…`），仍为 loaded。正式 Reminder DB 未读取、未写入。未 merge、未 push、未进入 Step 8。
+- 范围外观察（未处理）：`com.snotes.greencloud-mirror-publish` 以本仓库目录为 WorkingDirectory，而本目录当前 checkout 的是施工分支，因此生产 publisher 实际运行的是施工分支代码。它只依赖本轮做了增量修改的 `domain.reminders`，当前无行为影响。
+
+真人复核建议只看 P2-2 新提示语：candidate 打开 Reminder 后断网，执行一次暂停 / 完成，应看到"操作结果未知 · 请先刷新确认后再重试 · 只读"（若请求未发出则为离线只读）；恢复网络点"刷新"回到"已连接"。其余已验收行为未改变，无需重测。
+
+```text
+P1_1_REPAIR=DONE
+P1_2_REPAIR=DONE
+P1_3_REPAIR=DONE
+P2_2_REPAIR=DONE
+ARCHITECTURE_CHECK=PASS
+REPAIR_PACKAGE_READY_FOR_REAUDIT=YES
+STEP07_CLOSED=NO
+STEP08_STARTED=NO
+```
