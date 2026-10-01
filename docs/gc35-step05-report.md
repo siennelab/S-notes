@@ -87,9 +87,9 @@ Real LaunchAgent execution against fictional data published both actors; a
 second execution reported UNCHANGED for both. The temporary agent was unloaded.
 Production plist is installed at
 `~/Library/LaunchAgents/com.snotes.greencloud-mirror-publish.plist`, mode 0600,
-RunAtLoad=true, StartInterval=300. It uses the formal repository `.venv/bin/python`;
-since 2026-10-01 its `WorkingDirectory` is a pinned source export, not the
-developer checkout (see "Runtime re-pin" below).
+RunAtLoad=true, StartInterval=300. Since 2026-10-01 it runs a pinned source
+export with its own revision-scoped venv, not the developer checkout or its
+`.venv` (see "Runtime re-pin" below).
 Dedicated existing key was reused, not regenerated.
 
 Production agent was loaded and first execution exited 0. Both actor state
@@ -216,7 +216,7 @@ checked out. The agent now runs a `git archive` export of formal main
 `~/Library/Application Support/S-notes/runtime/greencloud-publisher/<rev>/`
 (`REVISION` file, no `.git`), installed per `deploy/greencloud/INSTALL.md`
 ("Mac publisher runtime"). All 50 publisher-imported `src` files are byte-identical
-to runtime source `e85d7ed`; interpreter is unchanged.
+to runtime source `e85d7ed`.
 
 - Previous plist moved to
   `~/Library/Application Support/S-notes/backups/greencloud-publisher-devcheckout-retire-20261001-162326/`.
@@ -225,3 +225,15 @@ to runtime source `e85d7ed`; interpreter is unchanged.
   match the last recorded successes. GreenCloud was not changed.
 - `scripts/greencloud_publish_schedule.py` now takes `--source` and refuses a
   directory with `.git` or without `REVISION`.
+
+Interpreter follow-up (same day, explicitly authorized new venv for this agent
+only): the agent no longer uses the developer `.venv`. The script now takes
+`--base-python` (refuses a venv) and creates
+`~/Library/Application Support/S-notes/runtime/greencloud-publisher/venvs/<rev>/`
+from Homebrew `python@3.13` 3.13.13, installing only `markdown-it-py==4.2.0`
+from the export's `requirements.txt` (pinned with the source; resolved `mdurl`
+0.1.2, same as before). Previous plist moved to
+`backups/greencloud-publisher-devvenv-retire-20261001-163307/`. RunAtLoad run
+exit 0; manual publish with the new interpreter: both actors `UNCHANGED`, exit 0,
+no failure or retry. Live plist, launchd program and the imported module set
+contain no developer-repository path.
