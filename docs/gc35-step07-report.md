@@ -1,4 +1,95 @@
-# GreenCloud 3.5-B / Step 7 — HUMAN_GATE_READY
+# GreenCloud 3.5-B / Step 7 — CLOSED
+
+2026-10-01（America/Los_Angeles）Formal Closeout：`STEP07_CLOSED=YES`。
+S 已接受真人 Gate，部署后独立 focused re-audit 的 P0=0 / P1=0 作为最终 audit Gate；本次仅封 Step 7，Step 8 未开始。
+
+## 最终交付与真人验收
+
+- Remote Reminder Client 与 GUI remote controller 已交付；GUI owner credential、两个 MCP actor credential 与 GUI cache 相互隔离。
+- 离线仅显示 last compatible snapshot 且只读；没有 local Reminder fallback、离线写队列或写操作自动重试。
+- GUI / MCP / helper 共用显式 Reminder authority；wire contract 独立于 DB schema。
+- 写结果区分 definite failure、confirmed-but-refresh-failed（stale）与 outcome unknown；unknown / stale 下先刷新确认，再恢复写入。
+- helper retirement gate 已准备，尚未执行；正式 authority cutover 留待 Step 8。
+- S 已完成并接受 initial load、create/edit/pause/resume/complete/delete、连续操作 <2 秒、offline behavior 与 remote CRUD UX。本次不要求重做真人 Gate；<2 秒是已验收的连续操作表现，不是所有网络条件下的硬 SLA。
+
+## 最终 candidate 与 closeout 验证
+
+- source commit：`b379d5f39fc5f79f3748cfa48ee3e60cfc0e2b9d`；构建前分支为 `codex/gc35-step07-remote-reminder-client`，tracked source / worktree clean，包内 `SNotesSourceDirty=NO`。
+- path：`/Users/s/Documents/项目/S-notes/dist-step07-candidate/S-notes.app`。
+- bundle ID：`de.ke-den.snotes.step07candidate`；保留独立 HOME/data：`~/Library/Application Support/S-notes-Step07/home` / `~/Library/Application Support/S-notes-Step07`。
+- packaged authority=`remote`，endpoint=`https://reminder.ke-den.de`（既有 GreenCloud staging），`SNotesReminderHelperRetired=false`。未改变 candidate 产品设计，未替换正式 App。
+- 使用现有 `.venv` 和 `scripts/build_macos_app.sh --step07-candidate` 重建；arm64、凭据/数据文件排除、certifi CA、Mach-O 路径及 ad-hoc codesign 全部 PASS。构建缓存仅置于临时目录。
+- 本机 Qt framework 的 `Versions` 下存在一个空 `Resources` 残留，打包器误选它为版本，首轮签名校验失败。确认目录为空后移开残留，再完整重建并通过签名；没有修改依赖代码、版本、产品源码或重建 `.venv`。
+- **真实打包 executable GUI smoke PASS**：临时 HOME/DB，online=true，snapshot_items=8，heartbeat_ticks=53，credential_not_in_db_env=true，legacy_warning=true；正常 window.close 退出。输出仅包含非凭据结果字段。
+- **真实打包 executable actor MCP smoke PASS**：`yan` / `claude-code` 各自用现有独立 actor credential provider，临时 HOME/DB，`list_reminder_labels` / `list_reminder_tables` 均成功，未创建或读取 owner cache。
+- **真实打包 helper refusal PASS**：读取 candidate Info.plist 的 remote authority 后 exit 2（`Reminder authority is remote`），临时目录未创建 DB。
+- **candidate PYZ 编译模块的 GUI/controller CRUD smoke PASS**：从最终包加载 transport/controller/ReminderCenter 等 23 个 `src` 模块，使用仓库现有 `.venv` 的匹配 Qt runtime、临时 HOME/cache，在既有 FICTIONAL staging table 内新建唯一 paused 虚构事项，完成 create → authoritative read → update → refresh → delete；云 snapshot 与 GUI list 均确认删除，fixture 已清理，131 个 GUI 心跳，未创建 DB。该项验证包内模块行为；上述打包 executable smoke 验证完整打包启动。
+- 最终包中 11 个关键模块（candidate、authority、main_window、sidebar、shell、reminder_center、remote controller、owner provider、HTTP client、actor adapter、wire contract）的编译代码与 tracked HEAD 逐模块相等。确认已含 create/move/delete 后 sidebar sync、360px sidebar 验收/恢复路径、保留 Endpoint 且旧 `setMinimumWidth(190)` 已移除；实际 Endpoint minimumWidth=0。三类 outcome 与 write no-auto-retry 代码同样包含在最终包中，不重造网络事故。
+- `scripts/check_architecture.py`：PASS，109 files，0 errors；22 个既有 owner/重复责任 warnings 保留为维护提示，未更改 checker / allowlist。
+- **63/63 targeted tests PASS**：Step 7 transport/MCP/owner/GUI/snapshot purity 33，Reminder repair 22，两个 sidebar 回归 2，部署 owner 的本地 fixture/mock tests 6。所有检查使用 temporary HOME/data 与现有 `.venv`；sidebar 两项各在独立 Cocoa 进程通过。repair fixture finalizer 曾输出 ignored SQLite Connection ResourceWarning；行为断言全部通过。
+- 未重跑全库 597、完整 Post-Vibe audit 或长时间 Step 6 observation。
+
+## Audit 与修复历史（保留最终裁定）
+
+1. 首次独立 Post-Vibe audit：**P0=0 / P1=3 / P2=4**，当时尚不能关闭 Step 7。
+2. `ecd8843` 修复 P1-1（schedule range / atomicity / bad-item isolation / HTTP error mapping）、P1-2（架构方向与独立 wire contract）、P1-3（显式 authority/config fail closed），并按 S 明确决定修复当次 audit 的 P2-2（write outcome semantics）。
+3. `e99a49a` 修复两个 Step 7 sidebar 回归：Reminder table create/move/delete 后 sync、移除 Endpoint 190px minimum width；不再把它们记为 Step 7 前既有问题。
+4. `290adfb` 将生产 Notes publisher source 固定到 stable revision export；`7434fd3` 将 interpreter 固定到同 revision 的生产 venv，解除开发仓库及其 `.venv` 依赖。
+5. 第一次 re-audit：**P0=0 / P1=1**；唯一 blocker 是 live Reminder runtime 尚未部署本地修复，不能把这一轮写成 PASS。
+6. `b379d5f` 通过现有 staging owner 部署验证过的 Reminder 修复；没有 DB 迁移或 authority cutover。
+7. 部署后的独立 focused re-audit：**P0=0 / P1=0**，`FOCUSED_REAUDIT_STATUS=PASS`、`LIVE_RUNTIME_IDENTITY=PASS`、`FORMER_P1_CLEARED=YES`、`P1_1_LIVE_FIXED=YES`、`P1_2_LIVE_FIXED=YES`；poison create、year-end atomicity、bad-item isolation、HTTP error mapping、live snapshot/scheduler、architecture 与 single source of truth 均 PASS；`READY_TO_CLOSE_STEP07=YES`、`READY_FOR_STEP08=YES`。本次沿用该独立 audit Gate。
+
+## 最后只读确认的 runtime 边界
+
+- GreenCloud Reminder manifest source revision=`b379d5f39fc5f79f3748cfa48ee3e60cfc0e2b9d`，25-file runtime source closure 与本地 HEAD 完全一致，fingerprint=`a1141d41e2d46c501e087b34f83dde3224944572a633463b2cf0e4937d83d303`。`LIVE_P1_1_FIXED=YES`、`LIVE_P1_2_FIXED=YES`；API active/running，scheduler 最近一次成功，scheduler/backup timers active/waiting。未再部署或 restart。
+- Notes publisher LaunchAgent 仍 loaded，最近 exit=0；source export 与 venv 均固定在 `fdbb6eb97f90b6cbf50b62df196582f9f7ad51b2`。只 import 核对的 50 个 src modules 均逐字节等于该 revision，无开发仓库 sys.path 或 module dependency；未运行 publish 或修改 publisher。
+- 正式 `dist/S-notes.app` 本轮前后完整指纹一致：`19a5063dc6cd5f3c4fedbd686846d63feb551d66b50de6683c649406805d55c1`（本轮算法计入 symlink 目标，regular files=3266）；正式 helper plist 前后 SHA-256 均为 `ad0c3f8582d8eff9aebb448049c320bc65c8b5c2aee8eeee1f51464c6ad4acf3`，权限不变，launchctl 仍 loaded。
+- 正式 Reminder DB 未由本任务读取、写入或迁移；正式 helper 自然运行期间可能自行写入，不声称 DB 字节恒定。未安装 candidate、退役 helper 或执行 Step 8 authority cutover。
+
+## Deferred maintenance：内容与触发节点
+
+以下按最终保留事项编号；首次 audit 的 P2-2 write outcome 已修复，不与这里的 no-occurrence maintenance 混同。
+
+| 事项 | 保留内容与约束 | 触发节点 |
+| --- | --- | --- |
+| **P2-1｜ntfy/topic/config ownership** | 当前 staging hardcode 保留；正式 topic / endpoint / config ownership 在生产切换时一起收口。 | **Step 8 production cutover** |
+| **P2-2｜no-occurrence display semantics** | 当前有效 active item 没有 occurrence 时，部分显示路径仍可能呈现 completed 语义。migration 后若现实可达，做窄修；若不可达，保留为非阻塞 maintenance，不扩状态机。 | **Step 8 migration rehearsal** |
+| **P2-3｜Reminder owner slimming / dead local path cleanup** | 当前不拆 `reminder_service.py`、`reminder_center.py`、`reminder_http.py`、`local_mcp_service.py`、`remote_reminder_controller.py`。Step 8 authority cutover / helper retirement 后先清 dead local writable path，再收窄责任边界，避免现在拆 1000+ 行核心 owner 制造回归。**Step 8 施工期间不要向这些大 owner 添加与 cutover 无关的新职责。** | **3.5-B CLOSED 后** |
+| **P2-4｜Endpoint/sidebar max-width UI tail** | 真正 regression 已修：360px sidebar 验收/恢复路径通过，旧 190px minimum width 已移除，Endpoint 保留。剩余最大可拖宽约 463px，而 Step 7 前理论上限约 480px，属 UI polish，不阻塞 Step 8。 | **3.5-B 后续 UI maintenance / owner cleanup 时** |
+
+## 最终状态与 Git 边界
+
+本次 closeout commit 仅包含本报告；candidate 构建源为其 parent `b379d5f`，closeout 不改变产品源码。commit 身份由 `git log -1 -- docs/gc35-step07-report.md` 获取，提交后 worktree clean。没有 merge main、push、删除 task branch，或编写新的总进度书。
+
+```text
+STEP07_FINAL_CANDIDATE_REBUILT=YES
+STEP07_FINAL_CANDIDATE_SOURCE=b379d5f39fc5f79f3748cfa48ee3e60cfc0e2b9d
+STEP07_FINAL_CANDIDATE_PATH=/Users/s/Documents/项目/S-notes/dist-step07-candidate/S-notes.app
+STEP07_FINAL_CANDIDATE_SMOKE=PASS
+SIDEBAR_REGRESSIONS_IN_FINAL_CANDIDATE=PASS
+OUTCOME_SEMANTICS_IN_FINAL_CANDIDATE=PASS
+ARCHITECTURE_CHECK=PASS
+TARGETED_TESTS=PASS (63/63)
+POST_VIBE_FINAL_P0=0
+POST_VIBE_FINAL_P1=0
+LIVE_REMINDER_REPAIR=PASS
+PUBLISHER_RUNTIME_DECOUPLED=PASS
+FORMAL_APP_UNCHANGED=YES
+FORMAL_REMINDER_DATA_UNCHANGED=YES
+FORMAL_HELPER_UNCHANGED=YES
+STEP08_STARTED=NO
+STEP07_REPORT_UPDATED=YES
+STEP07_CLOSEOUT_COMMIT=THIS_REPORT_COMMIT
+WORKTREE=CLEAN
+STEP07_CLOSED=YES
+READY_FOR_STEP08=YES
+DEFERRED_P2_1=Step 8 production cutover
+DEFERRED_P2_2=Step 8 migration rehearsal
+DEFERRED_P2_3=3.5-B CLOSED 后
+DEFERRED_P2_4=3.5-B 后续 UI maintenance / owner cleanup 时
+```
+
+## 历史施工记录（以下阶段状态已由本次 CLOSED 取代）
 
 2026-10-01 更新：首轮真人验收除 remote mutation 延迟外均正常；下方记录本次共用写链路修复。真人 Gate 仍未 CLOSED，Step 8 未开始。
 
