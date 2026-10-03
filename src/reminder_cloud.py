@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Callable, Sequence
@@ -36,16 +37,87 @@ from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
 DATABASE_PATH = Path("/srv/snotes/data/reminder.db")
 FORMAL_DATABASE_PATH = Path("/srv/snotes/data/reminder-production.db")
 BACKUP_DIRECTORY = Path("/srv/snotes/backups/reminder")
+PRODUCTION_BACKUP_DIRECTORY = Path("/srv/snotes/backups/reminder-production")
 LATEST_BACKUP_NAME = "reminder-latest.db"
 BACKUP_RETENTION = 14
 API_HOST = "127.0.0.1"
 API_PORT = 8766
 NTFY_ENDPOINT = "https://ntfy.ke-den.de"
 NTFY_TOPIC = "s-step06"
+PRODUCTION_NTFY_TOPIC = "s-reminder-prod"
+PRODUCTION_NTFY_TOPIC_ENV = "SNOTES_REMINDER_NTFY_TOPIC"
 API_CREDENTIAL_NAME = "reminder-api.json"
 NTFY_CREDENTIAL_NAME = "reminder-ntfy-token"
+PRODUCTION_NTFY_CREDENTIAL_NAME = "reminder-ntfy-production-token"
 API_IDENTITIES = frozenset({"owner", "yan", "claude-code", "clawbot"})
 _BACKUP_NAME = re.compile(r"^reminder-\d{8}T\d{12}Z\.db$")
+
+
+@dataclass(frozen=True)
+class NotificationRuntimeConfig:
+    endpoint: str
+    topic: str
+    credential_name: str
+
+
+class _RuntimeReminderRepository:
+    """Keep service-owned transport config outside the formal database."""
+
+    def __init__(
+        self,
+        repository: SQLiteReminderRepository,
+        config: NotificationRuntimeConfig,
+    ) -> None:
+        self._repository = repository
+        self._config = config
+
+    def __getattr__(self, name: str):
+        return getattr(self._repository, name)
+
+    def settings(self) -> ReminderSettings:
+        settings = self._repository.settings()
+        return ReminderSettings(
+            settings.notifications_enabled,
+            settings.daily_time,
+            self._config.endpoint,
+            self._config.topic,
+        )
+
+    def save_settings(self, settings: ReminderSettings) -> None:
+        # Transport destination is service-owned in production.  Owner writes
+        # retain the two business settings without materializing transport
+        # configuration in the formal database.
+        self._repository.set_text_setting(
+            "reminder/notifications_enabled",
+            "1" if settings.notifications_enabled else "0",
+        )
+        self._repository.set_text_setting(
+            "reminder/daily_time",
+            settings.daily_time or "10:00",
+        )
+
+
+def _is_formal_database(database_path: Path) -> bool:
+    return Path(database_path).resolve(strict=False) == FORMAL_DATABASE_PATH.resolve(
+        strict=False
+    )
+
+
+def _notification_runtime_config(database_path: Path) -> NotificationRuntimeConfig:
+    if not _is_formal_database(database_path):
+        return NotificationRuntimeConfig(
+            NTFY_ENDPOINT,
+            NTFY_TOPIC,
+            NTFY_CREDENTIAL_NAME,
+        )
+    topic = os.environ.get(PRODUCTION_NTFY_TOPIC_ENV, "")
+    if topic != PRODUCTION_NTFY_TOPIC:
+        raise RuntimeError("reminder_production_ntfy_configuration_invalid")
+    return NotificationRuntimeConfig(
+        NTFY_ENDPOINT,
+        PRODUCTION_NTFY_TOPIC,
+        PRODUCTION_NTFY_CREDENTIAL_NAME,
+    )
 
 
 def _private_mode(path: Path, *, expected: int = 0o600) -> None:
@@ -78,12 +150,18 @@ def compose_cloud_reminder_service(
     *,
     transport: NtfyReminderTransport | None = None,
     clock: Callable[[], float] = time.time,
+    runtime_config: NotificationRuntimeConfig | None = None,
 ) -> ReminderService:
     connections = _existing_database(database_path)
     repository = SQLiteReminderRepository(
         connections,
         clock=_service_clock(clock),
     )
+    if _is_formal_database(database_path):
+        repository = _RuntimeReminderRepository(
+            repository,
+            runtime_config or _notification_runtime_config(database_path),
+        )
     return ReminderService(repository, transport=transport, clock=clock)
 
 
@@ -216,9 +294,9 @@ def _credential_bytes(name: str, *, limit: int) -> bytes:
     return payload
 
 
-def load_ntfy_token() -> str:
+def load_ntfy_token(credential_name: str = NTFY_CREDENTIAL_NAME) -> str:
     try:
-        token = _credential_bytes(NTFY_CREDENTIAL_NAME, limit=4096).decode("utf-8").strip()
+        token = _credential_bytes(credential_name, limit=4096).decode("utf-8").strip()
     except UnicodeDecodeError as error:
         raise RuntimeError("reminder_ntfy_credential_invalid") from error
     if not token or any(character.isspace() for character in token):
@@ -265,22 +343,34 @@ def run_schedule_once(
     *,
     clock: Callable[[], float] = time.time,
 ) -> int:
-    transport = _authenticated_ntfy_transport()
+    config = _notification_runtime_config(database_path)
+    transport = _authenticated_ntfy_transport(config)
     service = compose_cloud_reminder_service(
         database_path,
         transport=transport,
         clock=clock,
+        runtime_config=config,
     )
     settings = service.settings()
-    if settings.ntfy_endpoint.rstrip("/") != NTFY_ENDPOINT or settings.ntfy_topic != NTFY_TOPIC:
-        raise RuntimeError("reminder_staging_ntfy_configuration_invalid")
+    if (
+        settings.ntfy_endpoint.rstrip("/") != config.endpoint
+        or settings.ntfy_topic != config.topic
+    ):
+        raise RuntimeError("reminder_ntfy_configuration_invalid")
     return service.run_scheduled_once()
 
 
-def _authenticated_ntfy_transport() -> NtfyReminderTransport:
-    return NtfyReminderTransport(
+def _authenticated_ntfy_transport(
+    config: NotificationRuntimeConfig | None = None,
+) -> NtfyReminderTransport:
+    selected = config or NotificationRuntimeConfig(
         NTFY_ENDPOINT,
-        bearer_token=load_ntfy_token(),
+        NTFY_TOPIC,
+        NTFY_CREDENTIAL_NAME,
+    )
+    return NtfyReminderTransport(
+        selected.endpoint,
+        bearer_token=load_ntfy_token(selected.credential_name),
     )
 
 
@@ -288,13 +378,18 @@ def serve_reminder_api(database_path: Path = DATABASE_PATH) -> None:
     from src.snotes.transport.reminder_http import ReminderHttpApplication, serve
 
     credentials = load_api_credentials()
+    config = _notification_runtime_config(database_path)
     service = compose_cloud_reminder_service(
         database_path,
-        transport=_authenticated_ntfy_transport(),
+        transport=_authenticated_ntfy_transport(config),
+        runtime_config=config,
     )
     settings = service.settings()
-    if settings.ntfy_endpoint.rstrip("/") != NTFY_ENDPOINT or settings.ntfy_topic != NTFY_TOPIC:
-        raise RuntimeError("reminder_staging_ntfy_configuration_invalid")
+    if (
+        settings.ntfy_endpoint.rstrip("/") != config.endpoint
+        or settings.ntfy_topic != config.topic
+    ):
+        raise RuntimeError("reminder_ntfy_configuration_invalid")
     application = ReminderHttpApplication(service, credentials)
     serve(application, host=API_HOST, port=API_PORT)
 
@@ -431,6 +526,12 @@ def _parser() -> argparse.ArgumentParser:
             f"(default: {DATABASE_PATH})"
         ),
     )
+    parser.add_argument(
+        "--backup-directory",
+        type=Path,
+        metavar="PATH",
+        help="Backup directory for backup or export-backup",
+    )
     return parser
 
 
@@ -439,6 +540,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = arguments.command
     database_path = arguments.database or DATABASE_PATH
     try:
+        if (
+            arguments.backup_directory is not None
+            and command not in {"backup", "export-backup"}
+        ):
+            raise ValueError("reminder_backup_directory_argument_not_applicable")
         if command == "export-backup" and arguments.database is not None:
             raise ValueError("reminder_export_database_argument_not_applicable")
         if command == "init-staging":
@@ -448,9 +554,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif command == "schedule":
             print(run_schedule_once(database_path))
         elif command == "backup":
-            print(create_backup(database_path))
+            backup_directory = arguments.backup_directory
+            if backup_directory is not None:
+                print(create_backup(database_path, backup_directory))
+            elif _is_formal_database(database_path):
+                print(create_backup(database_path, PRODUCTION_BACKUP_DIRECTORY))
+            else:
+                print(create_backup(database_path))
         elif command == "export-backup":
-            export_latest_backup()
+            export_latest_backup(arguments.backup_directory or BACKUP_DIRECTORY)
         return 0
     except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
         print(f"snotes-reminder-cloud: {error}", file=sys.stderr)

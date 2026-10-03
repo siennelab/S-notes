@@ -541,8 +541,8 @@ class ReminderHttpApplication:
         if command == "save_settings":
             _require_keys(payload, {"notifications_enabled", "daily_time", "ntfy_topic"})
             existing = self._service.settings()
-            topic = _optional_str(payload, "ntfy_topic", STAGING_TOPIC)
-            if topic != STAGING_TOPIC:
+            topic = _optional_str(payload, "ntfy_topic", existing.ntfy_topic)
+            if topic != existing.ntfy_topic:
                 raise ValueError("staging_topic_required")
             daily_time = _optional_str(payload, "daily_time", existing.daily_time)
             _validate_daily_time(daily_time)
@@ -551,7 +551,7 @@ class ReminderHttpApplication:
                     _optional_bool(payload, "notifications_enabled", existing.notifications_enabled),
                     daily_time,
                     existing.ntfy_endpoint,
-                    STAGING_TOPIC,
+                    existing.ntfy_topic,
                 )
             )
             return {"status": "updated"}

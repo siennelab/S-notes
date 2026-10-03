@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily S-notes Reminder production backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=snotes-reminder-backup.service
+
+[Install]
+WantedBy=timers.target

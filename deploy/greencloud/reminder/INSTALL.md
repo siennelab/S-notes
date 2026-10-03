@@ -99,8 +99,75 @@ database at `/srv/snotes/data/reminder.db`. Step 8B migration separately creates
 the formal database at `/srv/snotes/data/reminder-production.db`; do not use
 `init-staging` for that path. The runtime accepts `--database PATH` so the formal
 path can be configured later, but no active unit uses it during Step 8B.
-Production API, scheduler, backup, and transport activation remain part of
-Step 8C.
+Production API, scheduler, backup, and transport activation are Step 8C work,
+using the separate `production/` templates described below. Root-level Step 6
+templates remain staging-only for `install-first.sh`.
+
+## Step 8C production cutover
+
+S/G approved `s-reminder-prod` at the D2 gate. `s-reminder` was only an old
+example; `s-step06` remains staging. Endpoint stays `https://ntfy.ke-den.de`.
+The production sender `snotes-reminder-production` has exactly write-only
+access to `s-reminder-prod`; anonymous access remains denied. The existing S
+subscriber account's `s-*` rule covers the production topic.
+
+`scripts/gc35_step08c_prepare_credentials.py` uses the existing ntfy CLI and
+SQLite-safe auth backup, then stores a new root-only credential at
+`/root/greencloud-secrets/reminder-ntfy-production-token`. It does not print the
+token, reuse staging credentials or send a notification. Never restore the
+whole auth backup over subsequent changes; rollback stops production consumers
+and leaves unrelated identities intact.
+
+Production `serve` and `schedule` require both
+`--database /srv/snotes/data/reminder-production.db` and
+`SNOTES_REMINDER_NTFY_TOPIC=s-reminder-prod`. systemd loads the distinct
+`reminder-ntfy-production-token`; the API keeps its existing owner/actor
+`reminder-api.json`. Missing or wrong production configuration fails closed.
+The runtime supplies endpoint/topic without storing them in the formal DB;
+owner settings retain the existing request shape but cannot redirect transport.
+
+Use the existing packager, then `scripts/gc35_step08c_deploy.py` with a fresh
+explicit `--rollback-dir /root/greencloud-backups/step08c-<stamp>`:
+
+1. `prepare --archive <package>` saves existing runtime/units/export wrapper,
+   service state and a SQLite-safe formal DB backup, without activation.
+2. `cutover` stops/disables/verifies the staging scheduler before changing the
+   shared runtime. It reuses the same API, scheduler and backup unit names,
+   installs production templates, then starts API and backup only.
+3. Run `gc35_step08c_smoke.py` on the server: `no-notification` uses a disposable
+   formal clone with a non-network transport; `api` checks local/public auth and
+   observes actual API file descriptors; `backup` checks production backup.
+4. `enable-scheduler --confirm-no-notification-smoke` starts the single timer
+   with the production target after those checks. No second scheduler exists.
+5. Stop at S's iPhone subscription gate. Lock-screen and same-occurrence
+   multi-notification live acceptance are required before Step 8C PASS.
+
+`scripts/gc35_step08c_live_acceptance.py` is the narrow multi-node acceptance
+runner. Its private manifest selects the two explicit fictional owner-created
+records; it validates IDs, titles, schedules and the same occurrence before
+calling the actual production scheduler/transport. Temporarily stop the normal
+timer and service during these scoped controlled-date runs, load the production
+credential and manifest through systemd, then restore the timer. Each node runs
+twice (expected 1/0), checks persisted marks and unchanged unscoped tables, and
+does not write the global scheduler date. Inspect actual marks and message
+evidence before any resumed run; never reset marks or recreate existing fixtures
+to manufacture a pass. Clean fixtures through the owner API and retain aggregate
+evidence outside Git. The completed Step 8C report records actual results.
+
+Run the smoke script with the deployed runtime on `PYTHONPATH`; production
+config is required for the scheduler clone. It prints only aggregate results.
+
+Production backups use `/srv/snotes/backups/reminder-production`, retaining the
+existing latest-plus-14 policy. The same backup service/timer and off-VPS export
+wrapper now target production. Historical `/srv/snotes/backups/reminder` files
+and staging data/credentials remain intact. The public API hostname, loopback
+port, Caddy route, UTC server clock and Asia/Shanghai business timezone stay as
+before. Scheduler `Persistent=true` remains enabled.
+
+`rollback` restores the saved runtime/units/export wrapper and prior staging
+service states; it preserves the current formal DB separately and never
+restores database contents or ntfy auth automatically. It does not reopen the
+Mac App/MCP/helper. Mac cutover remains Step 8D.
 
 ## Rollback
 

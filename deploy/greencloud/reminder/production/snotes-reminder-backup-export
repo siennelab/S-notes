@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+cd /srv/snotes/reminder-runtime
+exec /usr/bin/env -i \
+    HOME=/srv/snotes \
+    PATH=/srv/snotes/runtime/.venv/bin:/usr/bin:/bin \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Asia/Shanghai \
+    /srv/snotes/runtime/.venv/bin/python -B -m src.reminder_cloud export-backup \
+    --backup-directory /srv/snotes/backups/reminder-production

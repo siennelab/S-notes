@@ -1,5 +1,232 @@
 # GreenCloud 3.5-B / Step 8
 
+## 8C Cloud Production Activation — PASS; stop before 8D
+
+**STEP08C=PASS. READY_FOR_STEP08D=YES. STEP08D_STARTED=NO.** Production API,
+scheduler, backup and private ntfy are active; S confirmed the real lock-screen
+notification. Eight live multi-notification nodes and all duplicate passes
+passed. Test fixtures are cleaned. Mac App/MCP/helper are stopped at closeout;
+the discovered MCP restart and renewed freeze are documented below.
+
+S/G explicitly resolved the D2 gate in this chat:
+`PRODUCTION_NTFY_TOPIC=s-reminder-prod`. The earlier `s-reminder` text was only
+an example; `s-step06` remains staging. Step 8A/8B were not repeated.
+Construction branch remains `codex/gc35-step08-reminder-cutover`; parent HEAD
+is Step 8B `9b27eb9a84459ffe047296c22fe7ac8c8447d737`. The Step 8C implementation,
+deployment support, tests and this report form a separate closeout commit.
+No amend, main merge or push.
+
+### Runtime and deployment
+
+- Fixed formal DB: `/srv/snotes/data/reminder-production.db`. Formal
+  serve/schedule require explicit `SNOTES_REMINDER_NTFY_TOPIC=s-reminder-prod`
+  and the independent systemd credential `reminder-ntfy-production-token`.
+  Endpoint is fixed to `https://ntfy.ke-den.de`; missing/wrong config fails
+  closed without staging or public ntfy fallback.
+- Production transport configuration is supplied by the runtime's narrow
+  repository adapter, not imported from the Mac or written into formal settings.
+  Owner can change business settings but cannot redirect endpoint/topic. HTTP
+  request/response structure and actor/owner credential model are unchanged.
+- Existing `snotes-reminder-api.service`, scheduler service/timer and backup
+  service/timer were reused. Production templates live under
+  `deploy/greencloud/reminder/production/`; historical root Step 6 templates
+  remain byte-identical so `install-first.sh` retains its staging behavior.
+- Before replacing runtime, staging scheduler timer was stopped and disabled,
+  and both timer/service verified inactive. API and backup were stopped for
+  the swap. Production API and backup then started while scheduler stayed
+  disabled; production scheduler was enabled only after successful smoke.
+- There is one Reminder scheduler timer, now production, active/waiting with
+  `Persistent=true`. The staging scheduler role is disabled; no second daemon
+  or timer was created. Production command explicitly names the formal DB.
+- Public API remains `https://reminder.ke-den.de`, loopback `127.0.0.1:8766`.
+  Caddy was not changed. OS timezone remains Etc/UTC; business timezone remains
+  Asia/Shanghai.
+
+Source package SHA-256:
+`e3f5889a7f414faa18afb30a7fbbfcc2d2d7e75e3130d40cea13be5e4a4071fd`.
+Its manifest verified all packaged hashes (25 source files and 18 deployment
+assets). Production units passed `systemd-analyze verify` before activation.
+
+Rollback material:
+`/root/greencloud-backups/step08c-runtime-20261003T022700Z` includes prior
+runtime, units, export wrapper, service states and a SQLite-safe formal DB
+snapshot. The deploy script's `rollback` phase stops production, preserves
+current formal DB as evidence and restores prior staging runtime/state. It
+does not overwrite formal data, restore the whole ntfy auth DB, or reopen any
+Mac writer. No rollback was executed.
+
+### Authentication, API and scheduler evidence
+
+Production sender `snotes-reminder-production` has exactly one ACL:
+**write-only `s-reminder-prod`**. No wildcard or staging permission was added.
+The separate root-only production token was generated with the existing ntfy
+CLI, never printed or committed. Auth backup:
+`/root/greencloud-backups/step08c-credentials-20261003T021925Z`.
+Anonymous access remains denied; the existing S subscriber account already
+has access to `s-*`. Read-only HTTP checks returned 403 for anonymous production
+read, sender production read and sender staging read; no notification was sent.
+
+Localhost and public HTTPS owner snapshots returned 200; missing credentials
+returned 401; wrong credentials returned controlled 403. Observing the live
+API process's file descriptors during requests confirmed that it opened
+`reminder-production.db`, with no staging DB opened. Raw formal counts remain
+2 labels / 5 tables / 51 reminders / 66 occurrences / 87 operation rows,
+with 2 eligible business settings. Owner's active snapshot is 1 label / 1 table /
+48 items, matching the formal read-only business view; archived/deleted rows
+are correctly excluded from that view.
+
+Before timer activation, the production scheduler on a disposable SQLite-safe
+formal clone with all network sends intercepted completed successfully with
+zero due notifications and zero transport calls. After activation, the actual
+production service completed successfully (exit 0); its first manual pass and
+next timer pass each reported **0 sends**. Read-only comparison to the pre-8C
+backup confirms all five Reminder business tables, occurrence notification
+marks and the two eligible settings remain identical. Scheduler execution
+metadata may legitimately change. Formal quick_check ok; FK violations zero.
+
+Targeted production/staging runtime and API settings checks passed (20 cases),
+as did the full 5-case Step 6 API suite; checks used fictional DBs and temporary
+HOME. No migration rehearsal or broad staging acceptance suite was repeated.
+
+### Production backup
+
+The existing backup service/timer and off-VPS export wrapper now source formal
+data. Separate directory `/srv/snotes/backups/reminder-production` preserves
+the previous latest-plus-14 retention policy without deleting historical
+staging backups. Actual backup and export smoke passed:
+
+`/srv/snotes/backups/reminder-production/reminder-latest.db`
+
+SHA-256: `11f9f9545b3973d0ea05384dfaea3ebe5cf32fff5014a9cb4e91576f8ff66bbb`.
+quick_check ok, zero FK violations, all five raw counts match formal. The
+actual export wrapper output has the same hash. Original staging DB, backups,
+credentials and evidence remain present.
+
+### Completed human and live multi-notification acceptance
+
+S confirmed subscription to `s-reminder-prod`, then confirmed the phone was
+locked and authorized sending. A temporary fixture was created through the
+formal owner API in a hidden test table (table 6, item 56, occurrence 98).
+The actual production scheduler service sent its notification using formal DB
+and the production credential. S explicitly answered **“锁屏已收到”**.
+No direct curl send, staging topic, public fallback or Mac scheduler was used.
+
+On continuation, a read-only checkpoint confirmed existing multi fixtures 57
+and 58, occurrences 99 and 100, all node marks NULL, and zero corresponding
+messages in the exact production-topic ntfy cache query. The lock-screen
+fixture had one published message. No fixtures were recreated or marks reset.
+
+The live runner used deployed `run_schedule_once`, formal DB and authenticated
+production ntfy transport. Its repository view exposed only the explicitly
+validated fixture before occurrence materialization; writes were limited to
+its occurrence. The per-process injected clock did not change the server clock
+or existing reminders, and controlled passes suppressed global scheduler-date
+metadata writes. The production timer was temporarily stopped and its service
+confirmed inactive; a single transient systemd acceptance process loaded the
+same production credential and exact fixture manifest via `LoadCredential`.
+There was no second enabled scheduler. Runtime source/service config was not
+changed for the injection.
+
+| Existing fixture | Same occurrence | Anchor | Nodes | First sends | Repeated sends |
+| --- | ---: | --- | --- | ---: | ---: |
+| 57, deadline-first | 99 | deadline 2026-10-24; action 2026-10-17 | -7 / -3 / -1 / deadline | 4 | 0 |
+| 58, no deadline | 100 | action 2026-10-24 | -7 / -3 / -1 / action | 4 | 0 |
+
+Controlled business dates were 2026-10-17 / 21 / 23 / 24. Every node's first
+pass returned 1 and its immediate duplicate pass returned 0; each expected
+mark persisted once and the duplicate pass left it unchanged. Unscoped table
+digests matched before/after each pair. Independent ntfy cache verification
+found exactly the expected eight distinct published fixture messages, with no
+duplicates. Both original occurrence IDs remained stable. This validates live
+Cloud sending/dedupe; only the lock-screen receipt is a human assertion.
+
+Two focused local acceptance-runner tests passed with fictional databases,
+temporary HOME and captured transport: all eight scoped nodes/dedupe, plus
+rejection of an unmarked private reminder. This supplements the runtime/API
+checks above; no 8A/8B migration or broad audit was rerun.
+
+### Cleanup, final backup and Mac boundary
+
+All three fixture reminders were deleted through the owner API; the temporary
+table was moved to trash and permanently removed through that same API.
+Items 56/57/58, occurrences 98/99/100 and table 6 have zero remaining rows.
+Final raw counts are again 2 labels / 5 tables / 51 reminders / 66 occurrences /
+87 AI operation rows, with the two business settings preserved.
+
+Against the SQLite-safe pre-live-test backup, original reminders, occurrences,
+tables and AI operation rows are byte-for-byte equal at the SQL value level.
+Label identities, names, deletion/ordering/permission semantics and associations
+are unchanged. One metadata-only difference is explicitly retained:
+`reminder_labels.id=1.updated_at` was refreshed by the existing owner
+`create_table` -> `default_label` UPSERT when creating the temporary test table.
+No direct SQL was used to backdate it. Cleanup checks document this exception
+rather than claiming all original rows are completely identical.
+
+Production timer was restored; a normal production pass completed successfully,
+and the production backup was refreshed after cleanup. Final backup:
+`/srv/snotes/backups/reminder-production/reminder-20261003T062110207622Z.db`
+(also `reminder-latest.db`), SHA-256
+`9407f9b5cd4acf1210a8fe0c5eb52271fd84440a76a7058f1a6299d2a799cfc4`.
+quick_check ok, zero FK violations, source/backup counts coherent. The earlier
+hash above refers to the initial activation backup before live acceptance.
+
+Final Mac boundary inspection found **11 local formal `--mcp-stdio` processes
+had reappeared** since the previous gate (same parent process). Their startup
+was not performed by the 8C deployment. They were terminated with SIGTERM under
+the continuing maintenance freeze authorization; no MCP configuration or
+authority was changed. The helper remained unregistered and its plist retained.
+App plist, executable, embedded helper and helper plist hashes all match 8B.
+A narrowly scoped read-only comparison of the original Mac Reminder tables to
+the archived 8B source found no added/deleted rows and exact Reminder,
+occurrence, AI operation and eligible-setting values. Only default label 1 and
+table 1 `updated_at` differed, consistent with the old initialization path;
+no cause beyond this observed restart/metadata pattern is claimed. A subsequent
+check also found the old formal GUI open. Its normal quit returned user-cancel
+(-128), so it was not force-killed; S explicitly confirmed saving and closing
+it. The final process check then found no App/MCP/helper processes, and a fresh
+read-only comparison confirmed the same metadata-only differences with all
+Reminder business values preserved. No migration,
+schedule replay, backdating or cross-authority merge was performed. Thus the
+final freeze is verified, but uninterrupted freeze across the whole interval
+is **not** claimed. Source App/MCP cutover remains Step 8D.
+
+Private evidence under
+`/root/greencloud-backups/step08c-runtime-20261003T022700Z` includes
+`formal-before-live-tests.db`, `live-fixtures.json`, `multi-manifest.json`,
+`multi-live-evidence.json` and `cleanup-evidence.json`. These assets are not
+committed. Original staging data, backups and credentials remain retained.
+
+```text
+STEP08A_REHEARSAL=PASS
+STEP08B_MAINTENANCE_WINDOW=PASS
+D2_TOPIC_NAME_RESOLVED=YES
+PRODUCTION_NTFY_TOPIC=s-reminder-prod
+PRODUCTION_NTFY_PRIVATE_ACL=PASS
+PUBLIC_NTFY_FALLBACK=NO
+PRODUCTION_DB_PATH=/srv/snotes/data/reminder-production.db
+PRODUCTION_API_USES_FORMAL_DB=PASS
+STAGING_SCHEDULER_ENABLED=NO
+PRODUCTION_SCHEDULER_ENABLED=YES
+SINGLE_ACTIVE_REMINDER_SCHEDULER=PASS
+PRODUCTION_BACKUP_USES_FORMAL_DB=PASS
+PRODUCTION_BACKUP_SMOKE=PASS
+STEP08C_PRODUCTION_RUNTIME_READY=YES
+IPHONE_SUBSCRIBE_REQUIRED=NO
+IPHONE_PRODUCTION_TOPIC_SUBSCRIBED=PASS
+IPHONE_LOCKSCREEN_NOTIFICATION=PASS
+MULTI_NOTIFICATION_CLOUD_LIVE=PASS
+MULTI_NOTIFICATION_DUPLICATE_SEND=NO
+FORMAL_APP_CHANGED=NO
+MAC_REMINDER_AUTHORITY_CUTOVER=NO
+LOCAL_MCP_CUTOVER=NO
+HELPER_PERMANENTLY_RETIRED=NO
+STEP08C=PASS
+READY_FOR_STEP08D=YES
+STEP08D_STARTED=NO
+```
+
+---
+
 ## 8B Maintenance-Window Migration
 
 **STEP08B_MAINTENANCE_WINDOW=PASS. READY_FOR_STEP08C=YES.
