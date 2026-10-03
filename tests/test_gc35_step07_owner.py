@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
-from src.snotes.storage.schema import REMINDER_SCHEMA_VERSION
+from src.snotes.domain.reminder_remote_contract import REMINDER_WIRE_SCHEMA_VERSION
 from src.snotes.ui.reminder_owner import OwnerSnapshotCache, owner_credential
 from src.snotes.ui.reminder_legacy_check import legacy_scheduler_detected
 from src.snotes.step07_candidate import configure_candidate
@@ -23,7 +23,7 @@ class OwnerIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'gui-only' / 'snapshot.json'
             cache = OwnerSnapshotCache(path)
-            view = dict(schema_version=int(REMINDER_SCHEMA_VERSION), snapshot_time='2026-09-30T00:00:00Z',
+            view = dict(schema_version=REMINDER_WIRE_SCHEMA_VERSION, snapshot_time='2026-09-30T00:00:00Z',
                         server_time='2026-09-30T00:00:00Z', labels=[], tables=[], items=[],
                         settings={}, badge_count=0, token='fictional-owner-secret')
             cache.save(view)
@@ -31,9 +31,9 @@ class OwnerIsolationTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             saved = cache.load()
             self.assertEqual(saved['snapshot_time'], view['snapshot_time'])
-            cache.save({**view, 'schema_version': int(REMINDER_SCHEMA_VERSION) + 1})
+            cache.save({**view, 'schema_version': REMINDER_WIRE_SCHEMA_VERSION + 1})
             self.assertEqual(cache.load(), saved)
-            path.write_text(json.dumps({**view, 'schema_version': int(REMINDER_SCHEMA_VERSION) + 1}))
+            path.write_text(json.dumps({**view, 'schema_version': REMINDER_WIRE_SCHEMA_VERSION + 1}))
             self.assertIsNone(cache.load())
             path.write_text('{broken')
             self.assertIsNone(cache.load())

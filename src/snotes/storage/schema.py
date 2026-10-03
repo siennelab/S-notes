@@ -15,7 +15,7 @@ INITIAL_MAIN_CATEGORIES = ("项目", "设备", "账号", "待办", "临时", "�
 CATEGORY_SCHEMA_VERSION_KEY = "category_schema_version"
 CATEGORY_SCHEMA_VERSION = "2"
 REMINDER_SCHEMA_VERSION_KEY = "reminder_schema_version"
-REMINDER_SCHEMA_VERSION = "4"
+REMINDER_SCHEMA_VERSION = "5"
 
 SCHEMA_STATEMENTS = (
     """
@@ -392,6 +392,9 @@ def _ensure_reminder_columns(connection) -> None:
         "multi_notify": "ALTER TABLE reminders ADD COLUMN multi_notify INTEGER NOT NULL DEFAULT 0",
         # NULL retains the original schedule algorithm, including its initial anchor.
         "recurrence_mode": "ALTER TABLE reminders ADD COLUMN recurrence_mode TEXT",
+        # Preserve legacy item history only; table trash remains authoritative.
+        "deleted_at": "ALTER TABLE reminders ADD COLUMN deleted_at TEXT",
+        "trash_group_id": "ALTER TABLE reminders ADD COLUMN trash_group_id TEXT",
     }
     for column, statement in additions.items():
         if column not in reminder_columns:
