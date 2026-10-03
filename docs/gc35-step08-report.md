@@ -1,5 +1,197 @@
 # GreenCloud 3.5-B / Step 8
 
+## 8B Maintenance-Window Migration
+
+**STEP08B_MAINTENANCE_WINDOW=PASS. READY_FOR_STEP08C=YES.
+STEP08C_STARTED=NO. Maintenance freeze remains in effect.**
+
+Construction branch: `codex/gc35-step08-reminder-cutover`. Parent / Step 8A
+closeout: `4d27217ed0629d39c98ddd87ea1a6093a22caa77`. This report and the three
+path-parameterization support files form a separate Step 8B commit, without
+amending 8A, merging main or pushing.
+
+### Maintenance execution and formal reconciliation
+
+S explicitly authorized entry into the maintenance window in this chat.
+The formal App received a normal quit request; the helper was temporarily
+booted out. Five residual formal `--mcp-stdio` processes could still write local
+Reminder state and were terminated with SIGTERM. Final process inspection
+confirmed no formal App/MCP/helper processes. No MCP configuration was changed.
+Helper plist remains present, with no permanent disable or retirement.
+
+Fresh snapshot created **2026-10-02 19:03:42 PDT** (`2026-10-03T02:03:42Z`):
+`/private/tmp/snotes-step08b-_alud9j_/maintenance-source-snapshot.db`.
+The established Mac source was opened `mode=ro`, `query_only=ON` through the
+approved SQLite backup helper; snapshot mode 0400, quick_check ok, zero FK
+violations. Its hash remained unchanged through reconciliation. The original
+Mac database remains at its original path.
+
+The canonical v5 bootstrap and unchanged approved migration contract produced
+a fresh Reminder-only export from this snapshot. The full Mac snapshot stayed
+local: no Notes or shared operation data was transferred. On GreenCloud, a
+private one-time source bundle in
+`/srv/snotes/step08b-migration-20261003T020342Z` ran under existing `snotes`
+UID 2006 with the existing Python runtime. It freshly bootstrapped
+`/srv/snotes/data/reminder-production.db` and migrated that export with the same
+explicit contract. The target and sidecars were checked absent before creation;
+there was no pre-existing formal DB to back up or overwrite. Neither staging
+nor an old 8A candidate supplied the target. Live deployed runtime was not changed.
+
+Formal DB is `snotes:snotes`, mode 0600, storage schema v5, WAL. Existing
+connection contract sets busy_timeout=5000 (also checked during creation).
+quick_check is ok and foreign_key_check returns zero rows.
+
+The actual Cloud formal DB was backed up read-only and downloaded as
+`/private/tmp/snotes-step08b-_alud9j_/formal-readback.db`; transfer SHA-256 matched
+`11f9f9545b3973d0ea05384dfaea3ebe5cf32fff5014a9cb4e91576f8ff66bbb`.
+The unchanged 8A reconciler compared this readback directly to the original
+frozen Mac snapshot, not just to the intermediate export.
+
+| Category | Frozen source | Cloud formal | Diff |
+| --- | ---: | ---: | ---: |
+| reminder_labels | 2 | 2 | 0 |
+| reminder_tables | 5 | 5 | 0 |
+| reminders | 51 | 51 | 0 |
+| reminder_occurrences | 66 | 66 | 0 |
+| ai_reminder_operations | 87 | 87 | 0 |
+| eligible business settings | 2 | 2 | 0 |
+| multi-notification persistence rows | 117 | 117 | 0 |
+| effective label/AI mappings | 51 | 51 | 0 |
+
+This includes identity sets, canonical fields, FK relationships, table-owned
+labels, effective AI visibility, exact deleted_at/trash_group_id, occurrence
+history, notification marks/dedupe and canonical operation contents. Approved
+default-only legacy operation fields were checked before omission. Unknown
+business fields remain fail-closed. Transport settings, old topic, scheduler
+stamp and shared ai_operations are absent from the migrated data.
+
+Schedule parity on business date `2026-10-03` (Asia/Shanghai): 40 active items,
+48 probe dates, 1,020 notification identities on each side; projection,
+notification identity/dedupe and due-time differences all zero. Writable
+schedule probes used disposable clones; no notification transport was created
+and no ntfy notification was sent.
+
+### Durable static backup and rollback boundary
+
+Created **2026-10-02 19:07:40 PDT** (`2026-10-03T02:07:40Z`) using SQLite backup
+from the frozen snapshot, after formal zero-diff reconciliation:
+
+`/Users/s/Library/Application Support/S-notes/backups/greencloud-step08b-20261003T020342Z/mac-pre-cloud-authority.db`
+
+SHA-256: `f8db9edc03254b8367e3d345e34744b7aacd339a381defbcb61bfffb5532696f`.
+This is also the frozen source snapshot hash. quick_check ok, FK violations 0,
+mode 0400, private parent mode 0700. Source identity:
+`/Users/s/Library/Application Support/S-notes/s_notes.db`, device 16777231,
+inode 7826560. `backup-metadata.json` records exact time, identity and checks;
+private reconciliation and migration metadata are archived alongside it.
+**KEEP / ARCHIVE — pre-Cloud-authority Mac Reminder static backup.**
+
+The original Mac DB and unchanged App/helper/plist remain the rollback assets.
+Cloud pre-8B formal state was absent: a rollback would remove/quarantine only
+this newly created formal DB and its sidecars, then restore the existing helper
+via its retained plist and reopen the unchanged App. No rollback was needed or
+executed. Do not resume local writers while awaiting 8C instructions.
+
+Final checks confirmed four formal App/helper/plist hashes unchanged. Five
+staging systemd unit hashes match before/after; staging API remains running,
+scheduler and backup timers remain active/waiting, deployed DATABASE_PATH still
+points to staging. No service references/opens the formal path. 8B never wrote
+staging; its normal running scheduler can still change its own data, so this
+does not assert a byte-frozen staging database. Production transport, scheduler,
+runtime activation and Mac authority cutover remain untouched.
+
+```text
+STEP08A_REHEARSAL=PASS
+STAGING_DB_PATH=/srv/snotes/data/reminder.db
+FORMAL_DB_PATH=/srv/snotes/data/reminder-production.db
+STAGING_FORMAL_DB_SEPARATION=PASS
+STEP08B_MAINTENANCE_WINDOW=PASS
+MAC_REMINDER_WRITES_FROZEN=PASS
+FINAL_SOURCE_SNAPSHOT_READONLY=PASS
+CLOUD_FORMAL_DB_MIGRATION=PASS
+LABELS_DIFF=0
+TABLES_DIFF=0
+REMINDERS_DIFF=0
+OCCURRENCES_DIFF=0
+MULTI_NOTIFICATION_DIFF=0
+AI_REMINDER_OPERATIONS_DIFF=0
+BUSINESS_SETTINGS_DIFF=0
+SCHEDULE_DIFF=0
+TRANSPORT_SETTINGS_MIGRATED=NO
+SHARED_AI_OPERATIONS_MIGRATED=NO
+CLOUD_FORMAL_QUICK_CHECK=PASS
+CLOUD_FORMAL_FOREIGN_KEY_CHECK=PASS
+MAC_STATIC_REMINDER_BACKUP=PASS
+MAC_STATIC_REMINDER_BACKUP_SHA256=f8db9edc03254b8367e3d345e34744b7aacd339a381defbcb61bfffb5532696f
+MAC_OLD_REMINDER_DB_DELETED=NO
+STAGING_DB_CHANGED_BY_8B=NO
+FORMAL_APP_CHANGED=NO
+PRODUCTION_SCHEDULER_ENABLED=NO
+PRODUCTION_NTFY_ENABLED=NO
+REMINDER_AUTHORITY_CUTOVER=NO
+HELPER_PERMANENTLY_RETIRED=NO
+READY_FOR_STEP08C=YES
+STEP08C_STARTED=NO
+```
+
+### Preflight specification supplement — historical gate record
+
+Step 8A remains formally **PASS**, closed by
+`4d27217ed0629d39c98ddd87ea1a6093a22caa77`; it has not been repeated or audited.
+
+S/G resolved the FINAL specification gap with these fixed deployment identities:
+
+| Role | Database |
+| --- | --- |
+| Step 6 historical live staging | `/srv/snotes/data/reminder.db` |
+| Step 8 formal production | `/srv/snotes/data/reminder-production.db` |
+
+原 11-step FINAL 定义了 staging/formal 两个角色，但只为 Step 6 DB 给出了物理路径；独立 formal path 于 Step 8B preflight 补定，不改变 Reminder 架构，只补齐部署身份。
+
+Read-only preflight confirmed the formal target is absent (including symlinks),
+and `/srv/snotes/data` remains `snotes:snotes`, mode 0700. The staging database
+remains `snotes:snotes`, mode 0600. Deployed runtime still fixes `DATABASE_PATH`
+to the staging file; staging API is active/running and scheduler/backup timers
+are active/waiting. No matching formal-path reference was found in systemd unit
+directories or running process command lines. No service or timer was changed.
+
+The Mac formal resolver remains
+`/Users/s/Library/Application Support/S-notes/s_notes.db`. Formal App provenance
+is `46a02082f698f1989defa3f80530edf03120a6d1`, whose Reminder composition uses
+the local repository. Helper is registered under `com.snotes.reminder-helper`,
+with the existing embedded executable, no data-root override and last exit 0.
+`com.snotes.gale-production-pull` was only checked for existence/registration.
+
+Migration will use the already approved Step 8A snapshot, canonical v5 bootstrap,
+explicit migration and reconciliation functions against a fresh frozen source.
+No old rehearsal candidate or staging clone will become the formal database.
+Canonical connections retain busy_timeout=5000; formal creation must verify WAL,
+owner `snotes` and mode 0600 before completion.
+
+The runtime's existing Python DB-path parameters are exposed through a minimal
+CLI option locally; staging defaults remain unchanged. Production activation,
+transport configuration and service deployment remain Step 8C work.
+
+Preparation verification: 13 runtime tests PASS under temporary HOME, including
+four focused CLI/default/production-seed-guard/export-argument checks. No real
+database or transport was used by these checks. `git diff --check` PASS.
+
+```text
+STAGING_DB_PATH=/srv/snotes/data/reminder.db
+FORMAL_DB_PATH=/srv/snotes/data/reminder-production.db
+STAGING_FORMAL_DB_SEPARATION=PASS
+STEP08B_PREFLIGHT=PASS
+READY_TO_ENTER_MAINTENANCE_WINDOW=YES
+STEP08B_STARTED=NO
+STEP08C_STARTED=NO
+```
+
+At this earlier gate, **maintenance-window entry required S's explicit confirmation.** No App
+shutdown, helper bootout, source snapshot, formal DB creation or migration has
+occurred. The completed execution above supersedes this pending-gate state.
+
+---
+
 ## Current 8A status — full real rehearsal PASS; stop before 8B
 
 **STEP08A_REHEARSAL=PASS. READY_FOR_STEP08B=YES. STEP08B_STARTED=NO.**

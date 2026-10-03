@@ -10,7 +10,8 @@ Reminder database and does not change Reminder authority.
 | service identity | existing `snotes` UID/GID 2006 |
 | Python | `/srv/snotes/runtime/.venv/bin/python` |
 | isolated source | `/srv/snotes/reminder-runtime` |
-| database | `/srv/snotes/data/reminder.db`, `snotes:snotes`, 0600 |
+| staging database | `/srv/snotes/data/reminder.db`, `snotes:snotes`, 0600 |
+| formal database (prepared in Step 8B) | `/srv/snotes/data/reminder-production.db`, `snotes:snotes`, 0600 |
 | API | `127.0.0.1:8766` |
 | public site | `reminder.ke-den.de` |
 | scheduler | every five minutes, persistent |
@@ -92,6 +93,14 @@ The service units run as `snotes` with a 0077 umask and a read-only system view;
 only the Reminder data or backup directories needed by each command are
 writable. `/srv/snotes/data` is 0700, so `claude` and `openclaw` cannot traverse
 to `reminder.db`.
+
+The installed Step 6 services and timers continue to use the default staging
+database at `/srv/snotes/data/reminder.db`. Step 8B migration separately creates
+the formal database at `/srv/snotes/data/reminder-production.db`; do not use
+`init-staging` for that path. The runtime accepts `--database PATH` so the formal
+path can be configured later, but no active unit uses it during Step 8B.
+Production API, scheduler, backup, and transport activation remain part of
+Step 8C.
 
 ## Rollback
 

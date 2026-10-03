@@ -1,7 +1,7 @@
-"""GreenCloud Reminder staging runtime.
+"""GreenCloud Reminder runtime.
 
-This entry point owns only the Step 6 staging database and runtime operations.
-Its command line deliberately exposes no path overrides.
+The Step 6 staging database remains the command-line default.  Later cutover
+steps can select the separately prepared formal database explicitly.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from src.snotes.transport.reminder_ntfy import NtfyReminderTransport
 
 
 DATABASE_PATH = Path("/srv/snotes/data/reminder.db")
+FORMAL_DATABASE_PATH = Path("/srv/snotes/data/reminder-production.db")
 BACKUP_DIRECTORY = Path("/srv/snotes/backups/reminder")
 LATEST_BACKUP_NAME = "reminder-latest.db"
 BACKUP_RETENTION = 14
@@ -93,6 +94,8 @@ def initialize_staging(
 ) -> Path:
     """Create a new, fictional-only staging DB; never open an existing one."""
     path = Path(database_path)
+    if path.resolve(strict=False) == FORMAL_DATABASE_PATH.resolve(strict=False):
+        raise RuntimeError("reminder_staging_production_database_forbidden")
     if path.exists() or path.is_symlink():
         raise RuntimeError("reminder_staging_database_already_exists")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -419,20 +422,33 @@ def _parser() -> argparse.ArgumentParser:
         "command",
         choices=("init-staging", "serve", "schedule", "backup", "export-backup"),
     )
+    parser.add_argument(
+        "--database",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Reminder database path for init-staging, serve, schedule, or backup "
+            f"(default: {DATABASE_PATH})"
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    command = _parser().parse_args(argv).command
+    arguments = _parser().parse_args(argv)
+    command = arguments.command
+    database_path = arguments.database or DATABASE_PATH
     try:
+        if command == "export-backup" and arguments.database is not None:
+            raise ValueError("reminder_export_database_argument_not_applicable")
         if command == "init-staging":
-            print(initialize_staging())
+            print(initialize_staging(database_path))
         elif command == "serve":
-            serve_reminder_api()
+            serve_reminder_api(database_path)
         elif command == "schedule":
-            print(run_schedule_once())
+            print(run_schedule_once(database_path))
         elif command == "backup":
-            print(create_backup())
+            print(create_backup(database_path))
         elif command == "export-backup":
             export_latest_backup()
         return 0

@@ -244,6 +244,55 @@ class CloudReminderRuntimeTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             reminder_cloud._parser().parse_args(["export-backup", "/etc/passwd"])
 
+    def test_cli_database_path_dispatches_to_existing_runtime_functions(self) -> None:
+        selected = self.root / "selected.db"
+        cases = (
+            ("init-staging", "initialize_staging", selected),
+            ("serve", "serve_reminder_api", None),
+            ("schedule", "run_schedule_once", 0),
+            ("backup", "create_backup", self.root / "backup.db"),
+        )
+        for command, function_name, result in cases:
+            with self.subTest(command=command), patch.object(
+                reminder_cloud,
+                function_name,
+                return_value=result,
+            ) as function, patch("builtins.print"):
+                self.assertEqual(
+                    reminder_cloud.main([command, "--database", str(selected)]),
+                    0,
+                )
+                function.assert_called_once_with(selected)
+
+    def test_cli_default_remains_staging_database(self) -> None:
+        with patch.object(reminder_cloud, "serve_reminder_api") as serve:
+            self.assertEqual(reminder_cloud.main(["serve"]), 0)
+        serve.assert_called_once_with(reminder_cloud.DATABASE_PATH)
+
+    def test_cli_rejects_database_argument_for_fixed_backup_export(self) -> None:
+        with patch.object(reminder_cloud, "export_latest_backup") as export, patch(
+            "builtins.print"
+        ) as output:
+            self.assertEqual(
+                reminder_cloud.main(
+                    ["export-backup", "--database", str(self.root / "irrelevant.db")]
+                ),
+                2,
+            )
+        export.assert_not_called()
+        self.assertIn("not_applicable", str(output.call_args.args[0]))
+
+    def test_init_staging_refuses_formal_database_target(self) -> None:
+        formal = self.root / "reminder-production.db"
+        with patch.object(reminder_cloud, "FORMAL_DATABASE_PATH", formal), patch.object(
+            reminder_cloud,
+            "initialize_database",
+        ) as initialize:
+            with self.assertRaisesRegex(RuntimeError, "production_database_forbidden"):
+                reminder_cloud.initialize_staging(formal)
+        initialize.assert_not_called()
+        self.assertFalse(formal.exists())
+
     def test_export_rejects_latest_symlink_even_to_generated_backup(self) -> None:
         self._initialize()
         generated = reminder_cloud.create_backup(self.database, self.backups)
