@@ -950,3 +950,165 @@ STEP08A_REHEARSAL=FAIL
 READY_FOR_STEP08B=NO
 STEP08B_STARTED=NO
 ```
+
+---
+
+## 8D Mac Remote Authority Cutover — PASS; stop before 8E
+
+**STEP08D=PASS. READY_FOR_STEP08E=YES. STEP08E_STARTED=NO.** This section
+supersedes the earlier pre-8D status only. Steps 8A/8B/8C were not repeated.
+Branch: `codex/gc35-step08-reminder-cutover`. Pre-commit HEAD:
+`c4d08b774be22015c4c580800558153f939c18e6`. Step 7 closeout
+`b219115cfe82f63a3458d1799014c6edab21632f` is an ancestor; no merge/cherry-pick.
+This closeout is a separate Step 8D commit, with no amend, main merge or push.
+
+### Construction freeze and formal configuration
+
+Actual Codex configuration: `/Users/s/.codex/config.toml`, entry
+`mcp_servers.snotes-yan`, command
+`/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh`.
+The packaged Yan launcher delegates to `run_snotes_mcp_stdio.sh`, which execs
+`../../MacOS/S-notes --mcp-stdio`. This matched the old children of Codex
+app-server PID 12163. Only this entry received temporary `enabled=false`;
+children were stopped and the old parent exited. New parent 28186 passed two
+short checks, separated by ordinary repository operations, with no App, MCP
+stdio or Reminder helper process. The helper plist remained present.
+
+After the formal remote bundle was ready, the inserted `enabled=false` was
+removed, restoring the original enabled-key absence; all other configuration
+was retained. Codex children 92546/92547/92548 started at 00:40:53 host time,
+after the final build completed at 00:40:03. They therefore loaded the final
+bundle; no further parent termination was needed. The actual registered Codex
+MCP successfully read fixture 56, returned `not_found` for hidden fixture 57,
+and updated fixture 58. An independent owner snapshot verified that exact
+Codex mutation on Cloud.
+
+Formal `scripts/build_macos_app.sh` now fixes `remote`,
+`https://reminder.ke-den.de`, and the existing helper-exclusion gate to `1`.
+An inherited retirement value of `0` cannot repackage the legacy helper in a
+formal build. Historical candidate profiles retain their existing behavior.
+GUI and MCP both use the packaged Info.plist through the existing explicit
+resolver. Missing/invalid/conflicting configuration still fails closed.
+No local writable fallback, offline write queue, wire/API change, Notes change,
+or AI visibility/allowlist expansion was introduced.
+
+GUI owner access remains the existing Keychain provider on a GUI worker.
+MCP uses the existing actor credential provider; no owner credential was
+supplied to yan, claude-code or clawbot. No credentials were committed,
+printed in acceptance output, or put in plist configuration.
+
+### Formal App and GUI evidence
+
+Final installed launch path:
+`/Users/s/Documents/项目/S-notes/dist/S-notes.app`.
+Final build log: `/private/tmp/snotes-step08d-build-final.log`.
+Build succeeded; deep/strict ad-hoc codesign verification passed, including an
+independent final artifact check. Bundle Info.plist declares remote, the formal
+endpoint, `SNotesReminderHelperRetired=true` and `SNotesStep07Candidate=false`.
+No Reminder helper executable/install payload exists anywhere in the bundle.
+The retirement marker here controls packaging; it does not permanently retire
+the retained LaunchAgent. The Gale helper remains packaged and its LaunchAgent
+was not changed.
+
+Bundle provenance identifies baseline `c4d08b7...`, `SNotesSourceDirty=YES`:
+it was built from the Step 8D source changes before this closeout commit.
+The formal window title now says `S-notes · GreenCloud`; the candidate title
+is preserved. The retained-helper warning no longer claims this is Step 7.
+
+The official GUI loaded Cloud's 48 existing items; S confirmed the list was
+visible. Owner API fixture create/update/pause/resume/complete succeeded;
+its updated title was observed in the formal GUI. A process-local unavailable
+localhost proxy then made only the App's endpoint unreachable. The GUI showed
+`离线 · 只读`, compatible snapshot time, and the cached fixture. All Reminder
+write buttons were disabled. Normal restart restored `已连接` and the New
+button. Cloud API/scheduler/ntfy were never stopped for this gate. The final
+rebuilt App launched normally and refreshed to the cleaned snapshot:
+1 visible label / 1 visible table / 48 items, with no fixture IDs remaining.
+
+### MCP adapter correction and live acceptance
+
+The first real MCP list exposed a local output-validation mismatch: the
+unchanged Cloud wire omits `table_title`, while existing `ReminderRecord`
+requires it. Only `RemoteMcpReminderAdapter` was corrected. It obtains table
+title through the same actor's Cloud `get_reminder_table` command for item
+list/get. Failed or hidden table reads return no partial item content.
+Cloud wire, API, MCP schema and permissions are unchanged.
+
+Targeted tests used temporary HOME and fictional databases: authority 6 PASS;
+GUI/MCP/HTTP and write-outcome checks 25 PASS. After the discovered adapter
+correction, the MCP module's 6 checks passed (including two new regressions
+using the real Cloud dispatcher/schema and failed title lookup). HTTP tests
+needed loopback-listening permission; the sandbox-only attempt failed before
+binding and the permitted run passed. No broad Step 7 suite or 8A/8B/8C gate
+was rerun. Shell syntax, source syntax and `git diff --check` passed.
+
+The final packaged Yan stdio launcher passed list/get and schema validation,
+create/update/pause/resume/complete of its temporary actor fixture, hidden
+item/table `not_found`, and rejection of unavailable delete/visibility tools.
+Independent owner reads verified the actor lifecycle mutations on Cloud.
+The additional registered-Codex update was also verified via owner snapshot.
+Editing the completed fixture retained the existing active-lifecycle/completed
+no-current-occurrence display semantics; the acceptance assertion was adjusted
+without changing product behavior.
+
+### Cleanup and authority proof
+
+Reused one manifest; no second fixture set was created. Temporary tables 6/7,
+items 56/57/58 and their occurrences were deleted through owner commands,
+including scoped table purge. Read-only Cloud checks found zero remaining
+fixture rows. Compared with the 8C final backup
+`reminder-20261003T062110207622Z.db`, original 51 reminders, 66 occurrences,
+5 tables and the two eligible business settings are unchanged. Labels remain
+2; only default label `updated_at` changed from existing table creation.
+Original 87 AI operation records are unchanged; six legitimate fixture actor
+audit records remain (93 total), preserving normal audit history. No direct
+SQL deletion or timestamp backdating occurred. Cloud API ExecStart was checked
+read-only and still targets `/srv/snotes/data/reminder-production.db`.
+
+The requested Mac Reminder-only `mode=ro`/`query_only` comparison found:
+51 reminders, 66 occurrences, 87 AI Reminder operations and 2 eligible settings
+exactly equal to the pre-smoke baseline, including their value digests.
+Label/table IDs and business values remain equal to the archived 8B source;
+only default id=1 `updated_at` differs due to the known initialization UPSERTs.
+This exception is metadata only, not a local Reminder business mutation.
+The whole Notes database was not hashed or required to remain unchanged.
+
+Private recovery/evidence directory:
+`/var/folders/fz/w1cps5hj1p1_y7zl13wzs7940000gn/T/snotes-step08d-freeze-nplngzuo`.
+It holds the pre-cutover formal dist, restricted config backup, fixture manifest,
+and local before/final summaries; none are committed. The helper plist SHA-256
+remains `ad0c3f8582d8eff9aebb448049c320bc65c8b5c2aee8eeee1f51464c6ad4acf3`.
+Final launchctl check found no registered Reminder helper and process inspection
+found no helper process. No plist deletion, launchctl disable, reboot/login
+persistence gate, or permanent retirement was performed.
+
+```text
+STEP08A_REHEARSAL=PASS
+STEP08B_MAINTENANCE_WINDOW=PASS
+STEP08C=PASS
+STEP07_ANCESTRY_PRESENT=PASS
+FORMAL_REMINDER_AUTHORITY=remote
+FORMAL_REMINDER_ENDPOINT=https://reminder.ke-den.de
+FORMAL_APP_REMOTE_SNAPSHOT=PASS
+FORMAL_APP_REMOTE_MUTATION=PASS
+FORMAL_APP_OFFLINE_FAIL_CLOSED=PASS
+LOCAL_WRITABLE_FALLBACK=NO
+OFFLINE_WRITE_QUEUE=NO
+CODEX_SNOTES_MCP_ENTRY_REENABLED=YES
+LOCAL_MCP_USES_CLOUD_API=PASS
+LOCAL_MCP_DIRECT_REMINDER_DB_WRITE=NO
+MCP_TABLE_TITLE_ADAPTER=PASS
+AI_CREDENTIAL_BOUNDARY=PASS
+FORMAL_APP_BUILD=PASS
+FORMAL_APP_CODESIGN=PASS
+FORMAL_APP_INSTALLED=PASS
+FORMAL_APP_PACKAGES_REMINDER_HELPER=NO
+MAC_LOCAL_REMINDER_BUSINESS_WRITE_AFTER_CUTOVER=NO
+CLOUD_ONLY_REMINDER_MUTATION=PASS
+LEGACY_HELPER_RUNNING=NO
+LEGACY_HELPER_PLIST_PRESENT=YES
+HELPER_PERMANENTLY_RETIRED=NO
+STEP08D=PASS
+READY_FOR_STEP08E=YES
+STEP08E_STARTED=NO
+```

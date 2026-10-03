@@ -32,7 +32,7 @@ def start_legacy_check(window) -> None:
 
     def show_warning(detected):
         if detected:
-            label = QLabel(LEGACY_WARNING + ' · Step 7 保留现有 helper')
+            label = QLabel(LEGACY_WARNING + ' · 保留现有 helper 配置')
             label.setStyleSheet('color: #b45309; font-weight: bold; padding: 6px;')
             window.statusBar().addPermanentWidget(label, 1)
             window.legacy_reminder_warning = label

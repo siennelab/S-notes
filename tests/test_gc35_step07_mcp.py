@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -29,6 +30,68 @@ class _RecordingCommandClient:
 
 
 class Step07RemoteMcpReminderTests(unittest.TestCase):
+    def test_real_cloud_item_payloads_fit_existing_mcp_schema(self) -> None:
+        from src.snotes.application.reminder_service import ReminderService
+        from src.snotes.domain.reminders import ReminderDraft
+        from src.snotes.storage.repositories.reminders import SQLiteReminderRepository
+        from src.snotes.storage.schema import initialize_database
+        from src.snotes.transport.reminder_http import (
+            ACTOR_ROLE, ReminderCredential, ReminderHttpApplication,
+        )
+        from src.snotes.transport.mcp.schemas import (
+            GetReminderItemResponse, ListReminderItemsResponse,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="snotes-step08d-mcp-") as root:
+            service = ReminderService(SQLiteReminderRepository(
+                initialize_database(Path(root) / "fictional-cloud.db")
+            ))
+            item = service.create_reminder(ReminderDraft(
+                "FICTIONAL item", "active", {"type": "one_time", "date": "2099-01-01"}
+            ))
+            table = service.get_reminder(item.id).table
+            api = ReminderHttpApplication(service, {
+                "fictional": ReminderCredential("yan", ACTOR_ROLE),
+            })
+
+            class Client:
+                def command(self, name, payload):
+                    response = api.handle(
+                        "POST", "/v1/reminder/commands/" + name,
+                        headers={"Authorization": "Bearer fictional"},
+                        body=json.dumps(payload).encode(),
+                    )
+                    self_test.assertEqual(response.status, 200)
+                    return response.body
+
+            self_test = self
+            adapter = RemoteMcpReminderAdapter(Client())
+            listed = ListReminderItemsResponse.model_validate(adapter.list_reminder_items(table.id))
+            fetched = GetReminderItemResponse.model_validate(adapter.get_reminder_item(item.id))
+            self.assertEqual(listed.results[0].table_title, table.title)
+            self.assertEqual(fetched.item.table_title, table.title)
+            service.set_table_ai_visible(table.id, False)
+            hidden = GetReminderItemResponse.model_validate(adapter.get_reminder_item(item.id))
+            self.assertEqual(hidden.status, "not_found")
+            self.assertIsNone(hidden.item)
+
+    def test_table_lookup_failure_never_returns_partial_item_data(self) -> None:
+        client = Mock()
+        adapter = RemoteMcpReminderAdapter(client)
+        item = {"item_id": 1, "table_id": 2, "title": "FICTIONAL"}
+        client.command.side_effect = [
+            {"status": "ok", "results": [item]}, {"status": "not_found"},
+        ]
+        listed = adapter.list_reminder_items(2)
+        self.assertEqual(listed["status"], "failed")
+        self.assertEqual(listed["results"], [])
+        client.command.side_effect = [
+            {"status": "ok", "item": item}, {"status": "not_found"},
+        ]
+        fetched = adapter.get_reminder_item(1)
+        self.assertEqual(fetched["status"], "not_found")
+        self.assertNotIn("item", fetched)
+
     def test_actor_credential_uses_host_home_outside_candidate_home(self) -> None:
         with patch.dict(
             os.environ,

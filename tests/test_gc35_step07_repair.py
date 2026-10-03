@@ -420,8 +420,32 @@ class ReminderAuthorityTests(unittest.TestCase):
     def test_build_profiles_declare_authority_explicitly(self) -> None:
         script = (ROOT / "scripts/build_macos_app.sh").read_text()
         spec = (ROOT / "packaging/S-notes.spec").read_text()
-        self.assertIn('REMINDER_AUTHORITY="local"', script)
-        self.assertIn('REMINDER_AUTHORITY="remote"', script)
+        formal, candidates = script.split('if [[ "${1:-}" == "--candidate" ]]', 1)
+        d1_candidate, step07_candidate = candidates.split(
+            'elif [[ "${1:-}" == "--step07-candidate" ]]', 1
+        )
+        self.assertIn('REMINDER_AUTHORITY="remote"', formal)
+        self.assertIn('REMOTE_REMINDER_ENDPOINT="https://reminder.ke-den.de"', formal)
+        self.assertIn('RETIRE_REMINDER_HELPER="1"', formal)
+        self.assertNotIn("S_NOTES_RETIRE_REMINDER_HELPER", formal)
+        self.assertIn('REMINDER_AUTHORITY="local"', d1_candidate)
+        self.assertIn('REMOTE_REMINDER_ENDPOINT=""', d1_candidate)
+        self.assertIn(
+            'RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"',
+            d1_candidate,
+        )
+        self.assertIn('REMINDER_AUTHORITY="remote"', step07_candidate)
+        self.assertIn(
+            'REMOTE_REMINDER_ENDPOINT="https://reminder.ke-den.de"', step07_candidate
+        )
+        self.assertIn(
+            'RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"',
+            step07_candidate,
+        )
+        self.assertGreaterEqual(
+            script.count('if [[ "$RETIRE_REMINDER_HELPER" != "1" ]]; then'), 4
+        )
+        self.assertIn('S_NOTES_RETIRE_REMINDER_HELPER="$RETIRE_REMINDER_HELPER"', script)
         self.assertIn("SNotesReminderHelperRetired", spec)
         self.assertIn("SNotesReminderAuthority", spec)
         for path in ("src/snotes/bootstrap.py", "src/snotes/ui/reminder_center.py"):

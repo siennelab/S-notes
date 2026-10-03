@@ -202,14 +202,37 @@ class RemoteMcpReminderAdapter:
             },
             failure,
         )
+        if result.get("status") == "ok" and result.get("results"):
+            table = self.get_reminder_table(table_id)
+            if table.get("status") != "ok" or not isinstance(table.get("table"), dict):
+                return {**failure, "reason": table.get("reason", "Cloud Reminder 表不可用。")}
+            result = {
+                **result,
+                "results": [
+                    {**item, "table_title": table["table"]["title"]}
+                    for item in result["results"]
+                ],
+            }
         return _paginate(result, page=page, page_size=page_size)
 
     def get_reminder_item(self, item_id: int) -> dict:
-        return self._read(
+        result = self._read(
             "get_reminder_item",
             {"item_id": item_id},
             {"status": "failed", "item_id": item_id},
         )
+        if result.get("status") == "ok" and isinstance(result.get("item"), dict):
+            # The Cloud wire omits table_title; the existing local MCP schema
+            # requires it. Resolve it with this same actor, never the local DB.
+            table = self.get_reminder_table(result["item"]["table_id"])
+            if table.get("status") != "ok" or not isinstance(table.get("table"), dict):
+                return {
+                    "status": "not_found" if table.get("status") == "not_found" else "failed",
+                    "item_id": item_id,
+                    "reason": table.get("reason", "Cloud Reminder 表不可用。"),
+                }
+            result = {**result, "item": {**result["item"], "table_title": table["table"]["title"]}}
+        return result
 
     def create_reminder_item(
         self,

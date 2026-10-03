@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -141,7 +142,11 @@ def build_application(
     )
     if remote_controller is not None:
         from src.snotes.ui.reminder_legacy_check import start_legacy_check
-        window.setWindowTitle("S-notes Step 7 · GreenCloud staging")
+        window.setWindowTitle(
+            "S-notes Step 7 · GreenCloud staging"
+            if os.environ.get("S_NOTES_STEP07_CANDIDATE") == "1"
+            else "S-notes · GreenCloud"
+        )
         start_legacy_check(window)
     application.aboutToQuit.connect(window.body_edit.page.deleteLater)
     return application, window

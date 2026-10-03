@@ -14,13 +14,17 @@ DIST_DIR="$ROOT_DIR/dist"
 STEP07_CANDIDATE="0"
 BUNDLE_IDENTIFIER="de.ke-den.snotes"
 # Each profile declares its Reminder authority explicitly; the App reads it
-# from Info.plist at runtime and fails closed without it. The formal profile is
-# still the legacy local authority until Step 8.
-REMINDER_AUTHORITY="local"
-REMOTE_REMINDER_ENDPOINT=""
+# from Info.plist at runtime and fails closed without it. The formal Step 8
+# profile is remote-only and always retires the packaged Reminder helper.
+REMINDER_AUTHORITY="remote"
+REMOTE_REMINDER_ENDPOINT="https://reminder.ke-den.de"
+RETIRE_REMINDER_HELPER="1"
 if [[ "${1:-}" == "--candidate" ]]; then
     BUILD_DIR="$ROOT_DIR/build-d1-candidate"
     DIST_DIR="$ROOT_DIR/dist-d1-candidate"
+    REMINDER_AUTHORITY="local"
+    REMOTE_REMINDER_ENDPOINT=""
+    RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"
 elif [[ "${1:-}" == "--step07-candidate" ]]; then
     BUILD_DIR="$ROOT_DIR/build-step07-candidate"
     DIST_DIR="$ROOT_DIR/dist-step07-candidate"
@@ -28,11 +32,11 @@ elif [[ "${1:-}" == "--step07-candidate" ]]; then
     BUNDLE_IDENTIFIER="de.ke-den.snotes.step07candidate"
     REMINDER_AUTHORITY="remote"
     REMOTE_REMINDER_ENDPOINT="https://reminder.ke-den.de"
+    RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"
 elif [[ $# -gt 0 ]]; then
     echo "Usage: $0 [--candidate|--step07-candidate]" >&2
     exit 2
 fi
-RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"
 if [[ "$RETIRE_REMINDER_HELPER" != "0" && "$RETIRE_REMINDER_HELPER" != "1" ]]; then
     echo "S_NOTES_RETIRE_REMINDER_HELPER must be 0 or 1." >&2
     exit 2
