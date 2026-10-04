@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import sys
 import threading
+import traceback
 from types import SimpleNamespace
 import uuid
 
@@ -57,6 +58,26 @@ def main() -> int:
         poll.stop()
         deadline.stop()
         assert predicate(), "fixture background task did not finish"
+
+    def finish() -> None:
+        (home / "app-smoke-result.json").write_text(json.dumps(outcome, sort_keys=True))
+        if window.ai_center_dialog is not None:
+            window.ai_center_dialog.close()
+        window.close()
+        if outcome["status"] != "passed":
+            def exit_failed_fixture() -> None:
+                dialog = window.ai_center_dialog
+                if dialog is not None and isValid(dialog) and dialog._gale_threads:
+                    QTimer.singleShot(50, exit_failed_fixture)
+                    return
+                app.exit(2)
+            QTimer.singleShot(50, exit_failed_fixture)
+
+    def fail(error: Exception) -> None:
+        outcome.update(error_type=type(error).__name__, error=str(error))
+        traceback.print_exception(error)
+        print("STEP11_FORMAL_APP_AUTOMATED_SMOKE=FAIL:" + type(error).__name__, flush=True)
+        finish()
 
     def execute() -> None:
         try:
@@ -130,6 +151,9 @@ def main() -> int:
             assert note.revision > prepended_revision
             assert "metadata-fixture" in window.tag_service.get_note_tags(note.id)
             assert "fictional" not in window.tag_service.get_note_tags(note.id)
+            outcome.update(create_once=True, append=True, edit=True, zero_diff=True,
+                           prepend=True, metadata=True, metadata_body_unchanged=True,
+                           source_actor_ui=True, node_on_path=False, real_user_database_opened=False)
             dialog = window.ai_center_dialog
             control = dialog.gale
             started = threading.Event()
@@ -143,32 +167,43 @@ def main() -> int:
                 completed.set()
                 return SimpleNamespace(failed_count=0)
 
+            def verify_deleted_and_finish() -> None:
+                try:
+                    assert completed.is_set(), "followup must complete before deletion"
+                    assert not isValid(dialog), "dialog must be naturally deleted"
+                    assert isValid(window) and window.isVisible(), "main window must remain visible"
+                    outcome.update(status="passed", close_phase="passed",
+                                   ai_center_close_during_followup=True, main_window_stays_open=True)
+                    print("STEP11_FORMAL_APP_AUTOMATED_SMOKE=PASS", flush=True)
+                    finish()
+                except Exception as error:
+                    fail(error)
+
+            def close_deadline() -> None:
+                if outcome["status"] != "passed" and "error_type" not in outcome:
+                    fail(AssertionError("fixture dialog did not close after followup"))
+
+            # Return to the ordinary App event loop before checking DeferredDelete.
+            dialog.destroyed.connect(lambda: QTimer.singleShot(0, verify_deleted_and_finish))
             control.flush_greencloud_decisions = slow_fixture_followup
             try:
+                outcome["close_phase"] = "starting_followup"
                 dialog.receipt_view.terminalDecisionSaved.emit()
                 wait_for(started.is_set)
+                outcome["close_phase"] = "closing_dialog"
                 dialog.close_button.click()
-                assert isValid(dialog) and not dialog.isVisible()
-                assert isValid(window) and window.isVisible()
+                assert isValid(dialog) and not dialog.isVisible(), "dialog must hide without deletion"
+                assert isValid(window) and window.isVisible(), "main window must remain visible"
+                outcome["close_phase"] = "waiting_for_deferred_delete"
                 QTimer.singleShot(50, release.set)
-                wait_for(lambda: completed.is_set() and not isValid(dialog))
-                assert isValid(window) and window.isVisible()
-            finally:
+                QTimer.singleShot(5_000, close_deadline)
+            except Exception:
                 release.set()
+                raise
+            finally:
                 control.flush_greencloud_decisions = original_followup
-            outcome.update(status="passed", create_once=True, append=True, edit=True, zero_diff=True,
-                           prepend=True, metadata=True, metadata_body_unchanged=True,
-                           ai_center_close_during_followup=True, main_window_stays_open=True,
-                           source_actor_ui=True, node_on_path=False, real_user_database_opened=False)
-            print("STEP11_FORMAL_APP_AUTOMATED_SMOKE=PASS", flush=True)
         except Exception as error:
-            outcome["error_type"] = type(error).__name__
-            print("STEP11_FORMAL_APP_AUTOMATED_SMOKE=FAIL:" + type(error).__name__, flush=True)
-        finally:
-            (home / "app-smoke-result.json").write_text(json.dumps(outcome, sort_keys=True))
-            if window.ai_center_dialog is not None:
-                window.ai_center_dialog.close()
-            window.close()
+            fail(error)
 
     QTimer.singleShot(300, execute)
     app.exec()
