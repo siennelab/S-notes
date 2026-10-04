@@ -7,9 +7,12 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import threading
+from types import SimpleNamespace
 import uuid
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEventLoop, QTimer
+from shiboken6 import isValid
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
 from src.snotes.application.local_mcp_write_service import note_version_token
@@ -38,6 +41,22 @@ def main() -> int:
     outcome = {"status": "failed"}
     window.setWindowTitle("S-notes · Step 11 automated fixture")
     window.show()
+
+    def wait_for(predicate) -> None:
+        if predicate():
+            return
+        loop = QEventLoop()
+        poll = QTimer()
+        poll.timeout.connect(lambda: loop.quit() if predicate() else None)
+        deadline = QTimer()
+        deadline.setSingleShot(True)
+        deadline.timeout.connect(loop.quit)
+        poll.start(10)
+        deadline.start(5_000)
+        loop.exec()
+        poll.stop()
+        deadline.stop()
+        assert predicate(), "fixture background task did not finish"
 
     def execute() -> None:
         try:
@@ -111,8 +130,35 @@ def main() -> int:
             assert note.revision > prepended_revision
             assert "metadata-fixture" in window.tag_service.get_note_tags(note.id)
             assert "fictional" not in window.tag_service.get_note_tags(note.id)
+            dialog = window.ai_center_dialog
+            control = dialog.gale
+            started = threading.Event()
+            release = threading.Event()
+            completed = threading.Event()
+            original_followup = control.flush_greencloud_decisions
+
+            def slow_fixture_followup():
+                started.set()
+                assert release.wait(5), "fixture followup was not released"
+                completed.set()
+                return SimpleNamespace(failed_count=0)
+
+            control.flush_greencloud_decisions = slow_fixture_followup
+            try:
+                dialog.receipt_view.terminalDecisionSaved.emit()
+                wait_for(started.is_set)
+                dialog.close_button.click()
+                assert isValid(dialog) and not dialog.isVisible()
+                assert isValid(window) and window.isVisible()
+                QTimer.singleShot(50, release.set)
+                wait_for(lambda: completed.is_set() and not isValid(dialog))
+                assert isValid(window) and window.isVisible()
+            finally:
+                release.set()
+                control.flush_greencloud_decisions = original_followup
             outcome.update(status="passed", create_once=True, append=True, edit=True, zero_diff=True,
                            prepend=True, metadata=True, metadata_body_unchanged=True,
+                           ai_center_close_during_followup=True, main_window_stays_open=True,
                            source_actor_ui=True, node_on_path=False, real_user_database_opened=False)
             print("STEP11_FORMAL_APP_AUTOMATED_SMOKE=PASS", flush=True)
         except Exception as error:

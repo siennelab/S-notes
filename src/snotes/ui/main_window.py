@@ -1130,7 +1130,9 @@ class MainWindow(QMainWindow):
                 return
             dialog = self.ai_center_dialog
             if dialog is not None and (
-                dialog._greencloud_followup_running or dialog._greencloud_followup_queued
+                dialog._gale_threads
+                or dialog._greencloud_followup_running
+                or dialog._greencloud_followup_queued
             ):
                 event.ignore()
                 QTimer.singleShot(50, self.close)

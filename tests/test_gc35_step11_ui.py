@@ -13,9 +13,10 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
+from shiboken6 import isValid
 from PySide6.QtCore import QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
 from src.snotes.application.ai_audit_service import AiAuditService
@@ -390,6 +391,48 @@ class GC35Step11UiTests(unittest.TestCase):
             lambda: gale.followup_calls == 3 and not dialog._gale_threads
         )
         self.assertEqual(dialog.gale_status.text(), "决定已保存，云端同步待重试")
+
+    def test_close_hides_until_running_followup_finishes_without_closing_host(self) -> None:
+        gale = FakeGaleControl()
+        gale.followup_release.clear()
+        host = QWidget()
+        host.setObjectName("fictionalMainWindow")
+        host.show()
+        self.addCleanup(host.close)
+        dialog = AiCenterDialog(
+            self.receipts,
+            self.metadata,
+            parent=host,
+            gale=gale,
+        )
+
+        def cleanup() -> None:
+            gale.followup_release.set()
+            if isValid(dialog):
+                self._close_dialog(dialog)
+
+        self.addCleanup(cleanup)
+        destroyed = []
+        dialog.destroyed.connect(lambda: destroyed.append(True))
+        dialog.show()
+        dialog.receipt_view.terminalDecisionSaved.emit()
+        self._wait_for(gale.followup_started.is_set)
+        self.assertTrue(dialog._gale_threads)
+
+        dialog.close()
+        self.app.processEvents()
+
+        self.assertTrue(host.isVisible())
+        self.assertTrue(isValid(dialog))
+        self.assertFalse(dialog.isVisible())
+        self.assertTrue(dialog._close_pending)
+        self.assertTrue(dialog._gale_threads[0].isRunning())
+
+        gale.followup_release.set()
+        self._wait_for(lambda: bool(destroyed), "AI Center deferred close did not finish")
+        self.assertFalse(isValid(dialog))
+        self.assertTrue(host.isVisible())
+        self.assertEqual(gale.followup_calls, 1)
 
 
 if __name__ == "__main__":

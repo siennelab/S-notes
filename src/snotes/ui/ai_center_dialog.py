@@ -9,7 +9,15 @@ from difflib import unified_diff
 from shiboken6 import isValid
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCloseEvent, QFontDatabase, QKeyEvent, QMouseEvent, QPalette
+from PySide6.QtGui import (
+    QColor,
+    QCloseEvent,
+    QFontDatabase,
+    QKeyEvent,
+    QMouseEvent,
+    QPalette,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -1119,6 +1127,7 @@ class AiCenterDialog(QWidget):
         self._gale_workers: list[GaleWorker] = []
         self._greencloud_followup_running = False
         self._greencloud_followup_queued = False
+        self._close_pending = False
         title = QLabel("AI中心")
         title.setObjectName("receiptInboxTitle")
         layout.addWidget(title)
@@ -1302,6 +1311,8 @@ class AiCenterDialog(QWidget):
                 self._gale_workers.remove(worker)
             if not self._gale_threads and self._greencloud_followup_queued:
                 QTimer.singleShot(0, self._drain_greencloud_followup_queue)
+            elif not self._gale_threads and self._close_pending:
+                QTimer.singleShot(0, self._finish_deferred_close)
 
         thread.finished.connect(release)
         self._gale_threads.append(thread)
@@ -1329,6 +1340,17 @@ class AiCenterDialog(QWidget):
             return
         self._greencloud_followup_queued = False
         self._start_greencloud_followup()
+
+    def _finish_deferred_close(self) -> None:
+        if not self._close_pending:
+            return
+        if self._gale_threads or self._greencloud_followup_running:
+            return
+        if self._greencloud_followup_queued:
+            self._drain_greencloud_followup_queue()
+            return
+        self._close_pending = False
+        self.close()
 
     def _start_greencloud_followup(self) -> None:
         if self.gale is None:
@@ -1359,6 +1381,8 @@ class AiCenterDialog(QWidget):
                 self.gale_status.setText("决定已保存，云端同步待重试")
             else:
                 self.gale_status.setText("云端回执与镜像已同步")
+            if self._close_pending:
+                QTimer.singleShot(0, self._finish_deferred_close)
             return
         self.gale_status.setText(
             "操作完成" if error is None else f"操作失败：{error}"
@@ -1635,6 +1659,20 @@ class AiCenterDialog(QWidget):
         self.reminder_log_empty.setVisible(self.reminder_log_table.rowCount() == 0)
         self.reminder_log_table.setVisible(self.reminder_log_table.rowCount() > 0)
 
+    def showEvent(self, event: QShowEvent) -> None:
+        self._close_pending = False
+        super().showEvent(event)
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        if (
+            self._gale_threads
+            or self._greencloud_followup_running
+            or self._greencloud_followup_queued
+        ):
+            self._close_pending = True
+            self.hide()
+            event.ignore()
+            return
+        self._close_pending = False
         self.finished.emit(0)
         super().closeEvent(event)
