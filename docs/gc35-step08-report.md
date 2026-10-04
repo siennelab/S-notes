@@ -1626,3 +1626,26 @@ permissions or Cloud production runtime. There was no third Post-Vibe audit,
 no 32/32 rerun, and no Step 9 work. The independent cleanup commit is followed
 by the requested fast-forward-only main merge, formal rebuild from clean main,
 minimal App smoke and main-only push.
+
+## 2026-10-03 — Post-close Reminder maintenance
+
+- **P2-2 no-occurrence display semantics = CLOSED.** Maintenance commit
+  `529c0b8fd543ba631fa0b299d61a6d22588f3035` preserves existing `active` / `启用`
+  semantics when an active Reminder has no current occurrence; genuine whole
+  Reminder completion still displays `completed`.
+- **P2-3 dead local path cleanup = NONE_FOUND / CLOSED.** Remaining local
+  branches retain explicit local-mode test/compatibility or Cloud owner uses.
+- **P2-4 sidebar max-width = DEFERRED.**
+- **Production runtime rollout = PASS.** Only `reminder_service.py` and
+  `domain/reminders.py` were updated in `/srv/snotes/reminder-runtime`, using
+  the existing Step 8 atomic file installer after baseline checks and a
+  two-source-file backup. Only the API was restarted; the oneshot scheduler
+  loads current source on its next natural timer run.
+
+Deployed-source fictional temporary-DB checks passed **4/4**. Localhost and
+public HTTPS owner snapshots both returned **200**; ordinary Reminder list/read
+passed. Production API and scheduler timer remain active, with no enabled or
+active staging scheduler. Authority and permission were not changed; no real
+Reminder data was modified by this ticket. No migration, schema/unit/config or
+credential change, manual scheduler run, ntfy notification, Step 8 acceptance
+rerun, Post-Vibe audit or Step 9 work was performed.
