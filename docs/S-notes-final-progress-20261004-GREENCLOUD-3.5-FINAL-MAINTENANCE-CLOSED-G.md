@@ -4245,29 +4245,245 @@ GreenCloud hostname resolution warning  = DEFERRED_SYSTEM_HYGIENE
 
 > G，继续 S-notes。当前唯一正式基线已经更新到 `main == origin/main == HEAD == 172a46125015dafa672be39357cffe94276dd177`，worktree clean，`PUSH=PASS`；正式 `dist/S-notes.app` 也来自同一 HEAD，build / codesign / smoke PASS。GreenCloud 3.5-A/B/C/D 与 11 步路线全部 COMPLETE；四个本地 Agent MCP 接线 CLOSED；post-close cleanup / maintenance ledger 也已 CLOSED，commit `7c77a943864265f0fa170a6f128f33b3f80c7618` 已 ff-only 合入并 push，5 个 Step10/11 rollback/fixture leftovers 已删除，deployment record 已销账。随后 Cloud `prepend_note + update_note_metadata` 独立功能票也已 CLOSED：复用 outbox v3 / expected_version / idempotency / AI Center / receipt / mirror refresh，没有 schema migration；metadata allowlist 仅 `title / directory_id / add_tags / remove_tags`，visibility / actor targets / delete 继续禁止。真人 Gate 使用虚构 Note #348：PREPEND accepted，METADATA accepted，metadata 后正文保持不变；验收中发现“关闭 AI Center 导致 S-notes 整体退出”，已修为先 hide、同步结束后再释放，40 项相关回归与正式 App close smoke PASS；S 真人再次关闭 AI Center 后主窗口正常存活。#348 已移入应用回收站；经 S 明确授权后刷新既有 claude-code mirror，Cloud 已读不到 #348；accepted 历史回执保留、无 pending 测试 residue。最终功能 branch `codex/gc35-cloud-prepend-metadata` 已 ff-only 合入 main 并 push，最终 commit=`172a46125015dafa672be39357cffe94276dd177`。当前没有新的强制 GreenCloud 3.5 主线；`ai_call_logs` retention、Reminder owner slimming、sidebar 17px、actor mapping duplication、hostname warning 等只在真实触发时处理，`raw_candidate_markdown` 只是 DELETE_CANDIDATE，不单独开票；Delete Note 仍不做。不要从旧 §74–§77 把 cleanup / prepend / metadata NEXT 捞回来重新施工。
 
+---
 
-# 85. Final maintenance closeout｜2026-10-04 CLOSED
+# 85. Final Small Maintenance Closeout｜CLOSED
 
-本节为获 S 明确授权后的最终 maintenance 补记；此前 §83–§84 的 `172a461` Git/App 基线保留为本次 retention 施工前历史状态。最新实现与本节记录以包含本节的正式 closeout commit 为准。三项以外不施工。
+**补记日期：2026-10-04**  
+**状态：最新最终进度书已纳入 Git；GreenCloud hostname resolution warning 已修复；`ai_call_logs` retention 已正式实施并验证。此前 §78.4 / §83 中这两项 deferred maintenance 从本节开始更新为 CLOSED。**
 
-- **最新最终进度书入 Git：CLOSED。** 下载正文原样纳入 `docs/`，§78–§84 与最终状态均通过核验；独立 commit=`7527df1c1827e2b81d9d3ac9830df39af797eb50`，已 push。此次仅追加 §85，原下载正文不改。
-- **ai_call_logs retention：CLOSED。** S 确认 `count_based / KEEP_ROWS=10000 / TRIGGER_ROWS=12000`。`<=12000` 不处理；`>12000` 单事务、单条 DELETE 裁回按既有 `called_at DESC, id DESC` 排序的最新 10000 条。复用 `SQLiteAiAuditRepository.prune_call_logs()` 与 `initialize_database()` 的低频启动维护入口，不在每条写入时 DELETE；无 migration 或新增 daemon / scheduler / service。正式首次操作已报告 24389 条与预计删除 14389 条，私有 SQLite 一致性备份 PASS；实际 `24389 → 10000`、删除 `14389`，完整最新保留集合与业务表写入边界验证 PASS。proposal / receipt、幂等、operation status、pending / processed 和正式 Notes 均不受影响。
-- **GreenCloud hostname warning：CLOSED。** hostname 与 `/etc/hostname` 原本均为 `optimal-living`，仅 `/etc/hosts` 仍用 `debian`。备份后将本机行改为 `127.0.1.1 optimal-living debian`；hostname、getent 与无副作用 sudo probe PASS，warning 消失。
+本轮不重开 GreenCloud 3.5 主线，也不修改既有 Notes / Reminder authority。
 
-相关临时 HOME / DB 测试 18 项 PASS，包括阈值边界、全部最新 ID、业务表完整行保存、分页、幂等与回执回归；源码与实际成品按现有构建流程封口。详细实际操作与验证证据见 `docs/gc35-post-close-maintenance-ledger.md` 的 Final maintenance closeout。
+## 85.1 最新最终进度书入 Git｜CLOSED
 
-```ini
-DOC_PROGRESS_FILE=RECORDED
+此前补记到 §78–§84 的最终进度书已正式纳入：
+
+```text
+/Users/s/Documents/项目/S-notes/docs/
+S-notes-final-progress-20261004-GREENCLOUD-3.5-POST-CLOSE-EXTENSIONS-CLOSED-G.md
+```
+
+首次 docs commit：
+
+```text
+7527df1c1827e2b81d9d3ac9830df39af797eb50
+```
+
+该 commit 只负责把当时最新进度书纳入 Git，不改变正式 App / runtime。
+
+## 85.2 GreenCloud hostname resolution warning｜CLOSED
+
+旧 warning：
+
+```text
+sudo: unable to resolve host optimal-living ...
+```
+
+最终根因：
+
+```text
+hostname = optimal-living
+/etc/hosts 仍保留旧 hostname = debian
+```
+
+最小修复：
+
+```text
+127.0.1.1 optimal-living debian
+```
+
+修复前已保留原 `/etc/hosts` 备份；修复后：
+
+```text
+hostname resolution = PASS
+getent hosts optimal-living = PASS
+sudo probe = PASS
 HOSTNAME_WARNING=CLOSED
+```
+
+本轮没有修改公网 DNS、Caddy、SSH 配置、network stack 或 S-notes service，也没有重启整台 VPS。
+
+## 85.3 `ai_call_logs` retention｜CLOSED
+
+旧状态：
+
+```text
+SAFE_TO_APPLY_RETENTION=YES
+RETENTION_IMPLEMENTED=NO
+```
+
+本轮只读确认时：
+
+```text
+AI_CALL_LOG_ROWS=24385
+AI_CALL_LOG_OLDEST=2026-08-06T08:40:24+08:00
+AI_CALL_LOG_NEWEST=2026-10-04T21:30:18+08:00
+TABLE_SIZE≈2.54 MiB
+DATABASE_SHARE≈58.1%
+```
+
+正式 owner：
+
+```text
+AiAuditService
+→ SQLiteAiAuditRepository
+```
+
+AI Center 继续只分页读取，不承担 retention owner。
+
+S 最终拍板采用 count-based retention：
+
+```text
 RETENTION_MODE=count_based
 KEEP_ROWS=10000
 TRIGGER_ROWS=12000
-AI_CALL_LOG_ROWS_BEFORE=24389
-AI_CALL_LOG_DELETED=14389
-AI_CALL_LOG_ROWS_AFTER=10000
-RETENTION_IMPLEMENTED=YES
-RETENTION_WAITING_FOR_S_DECISION=NO
-MAINTENANCE_CLOSEOUT=CLOSED
 ```
 
-Reminder owner slimming、sidebar 17px、actor mapping duplication、raw_candidate_markdown、target_actor、Ke local MCP、delete_note 与 visibility / actor targets 保持既有状态，不因本轮 maintenance 重开。
+固定语义：
+
+```text
+ai_call_logs <= 12000
+→ 不处理
+
+ai_call_logs > 12000
+→ 一次删除最旧记录
+→ 裁回最新 10000 条
+```
+
+最终实现挂在现有：
+
+```text
+initialize_database
+```
+
+启动维护路径内；没有新增 daemon、scheduler、service 或单独日志治理框架，也没有把清理塞进每次 `record()` 写入。
+
+首次正式裁剪：
+
+```text
+BEFORE=24389
+DELETED=14389
+AFTER=10000
+```
+
+随后正常 smoke 新增 5 条：
+
+```text
+FINAL_ROWS=10005
+OLDEST=2026-09-15T03:15:56+08:00
+NEWEST=2026-10-04T21:51:36+08:00
+```
+
+本轮验证：
+
+```text
+TARGETED_TESTS=18_PASS
+FORMAL_APP_BUILD=PASS
+CODESIGN=PASS
+ISOLATED_SMOKE=PASS
+BUSINESS_TABLES_UNCHANGED=YES
+RECOVERY_BACKUP=KEPT
+RETENTION_IMPLEMENTED=YES
+```
+
+旧 `ai_call_logs` 仍然只作为 AI 调用历史；本 retention 不改变：
+
+```text
+proposal / receipt lifecycle
+request_id idempotency
+get_operation_status
+pending / processed
+formal Notes
+```
+
+# 86. 当前唯一正式状态｜2026-10-04 FINAL
+
+从本节开始，§83 中的：
+
+```text
+MAIN=172a461...
+ai_call_logs retention = DEFERRED
+GreenCloud hostname resolution warning = DEFERRED_SYSTEM_HYGIENE
+```
+
+只代表 maintenance 开工前状态，不得继续作为当前口径。
+
+当前正式代码 / runtime 基线：
+
+```text
+MAIN=3f1da0baa9b1fe2b0f87057d2671ef259dd6b7a6
+ORIGIN_MAIN=3f1da0baa9b1fe2b0f87057d2671ef259dd6b7a6
+WORKTREE=CLEAN
+PUSH=PASS
+```
+
+注意：
+
+```text
+7527df1c1827e2b81d9d3ac9830df39af797eb50
+```
+
+是“此前版本进度书首次入 Git”的 docs commit；
+
+```text
+3f1da0baa9b1fe2b0f87057d2671ef259dd6b7a6
+```
+
+是本轮 hostname / retention 收尾完成后的正式代码 / runtime 基线。
+
+本文件此次再次补记 §85–§87 后，还需要一个新的 **docs-only commit + push**。该 docs commit 只负责同步接班文档，不要求重新 build / codesign / smoke，也不改变 `3f1da0...` 作为本轮已验收代码 / runtime source 的事实。
+
+当前总账：
+
+```text
+GREENCloud_3_5_A=CLOSED
+GREENCloud_3_5_B=CLOSED
+GREENCloud_3_5_C=CLOSED
+GREENCloud_3_5_D=CLOSED
+11_STEP_ROADMAP=COMPLETE
+GREENCLOUD_3.5=COMPLETE
+
+GREENCloud_3_5_POST_CLOSE_CLEANUP=CLOSED
+CLOUD_PREPEND=CLOSED
+CLOUD_UPDATE_NOTE_METADATA=CLOSED
+AI_CENTER_CLOSE_CRASH_FIX=PASS
+
+AI_CALL_LOG_RETENTION=CLOSED
+RETENTION_MODE=count_based
+KEEP_ROWS=10000
+TRIGGER_ROWS=12000
+
+GREENCLOUD_HOSTNAME_WARNING=CLOSED
+
+NOTES_AUTHORITY=Mac
+REMINDER_AUTHORITY=GreenCloud
+LOCAL_WRITABLE_FALLBACK=NO
+LEGACY_REMINDER_HELPER=RETIRED
+
+CODEX_LOCAL_MCP=PASS
+CLAUDE_CODE_LOCAL_MCP=PASS
+ANTIGRAVITY_LOCAL_MCP=PASS
+CLAWDE_OPENCLAW_LOCAL_MCP=PASS
+KE_LOCAL_SNOTES_MCP=DEFERRED
+
+DELETE_NOTE=NO
+AI_VISIBILITY_WRITE=NO
+ACTOR_TARGETS_WRITE=NO
+```
+
+当前仍活着的 maintenance 只保留：
+
+```text
+Reminder owner slimming                 = DEFERRED / ONLY_WHEN_TRIGGERED
+Reminder sidebar max-width ~17px        = DEFERRED / UI_POLISH_ONLY
+actor mapping duplication               = DEFERRED / ONLY_WHEN_TOUCHED
+raw_candidate_markdown                  = DELETE_CANDIDATE / DO_NOT_OPEN_ALONE
+Cloud read open-time target_actor       = NO_CONSTRUCTION_REQUIRED
+```
+
+`ai_call_logs retention` 与 GreenCloud hostname warning 已从 deferred maintenance 总账删除，不得再从旧 §75 / §78.4 / §83 捞回待办。
+
+# 87. 新窗口接班短句｜最终版
+
+> G，继续 S-notes。GreenCloud 3.5-A/B/C/D、11 步路线、四个本地 Agent MCP、post-close cleanup、Cloud `prepend_note + update_note_metadata` 均已正式 CLOSED；Cloud 功能真人 Gate 中发现的 AI Center close crash 也已修复并进入正式版本。随后最终 small maintenance 也已收口：此前最新版进度书已以 docs commit `7527df1c1827e2b81d9d3ac9830df39af797eb50` 纳入 Git；GreenCloud `sudo: unable to resolve host optimal-living` 根因是 `/etc/hosts` 仍保留旧 `debian` hostname，现已对齐为 `127.0.1.1 optimal-living debian`，解析与 sudo probe PASS；`ai_call_logs` retention 已正式采用 count-based policy：`TRIGGER_ROWS=12000`，超过后一次裁回 `KEEP_ROWS=10000`，实现挂在现有 `initialize_database` 启动维护路径，不新增 scheduler/service。首次正式裁剪 `24389 → 10000`，删除 14389 条，随后 smoke 后最终 10005 条；18 项相关测试、正式 App build、codesign、隔离 smoke PASS，业务表未变，恢复备份保留。当前已验收代码 / runtime 基线为 `main == origin/main == 3f1da0baa9b1fe2b0f87057d2671ef259dd6b7a6`，worktree clean，`PUSH=PASS`。本进度书此次补记 §85–§87 后只需再做一次 docs-only commit + push，不需要 rebuild App。当前没有新的强制 GreenCloud 3.5 主线；仍保留的 maintenance 只有 Reminder owner slimming（真实触发时）、sidebar 约 17px UI polish、actor mapping duplication（相关 owner 真被修改时）、`raw_candidate_markdown` DELETE_CANDIDATE / DO_NOT_OPEN_ALONE，以及 Cloud read open-time `target_actor`=`NO_CONSTRUCTION_REQUIRED`。Ke local MCP 继续 DEFERRED；Delete Note、AI visibility write、actor targets write 继续 NO。不要从旧章节重新捞回已经 CLOSED 的 cleanup、prepend/metadata、hostname 或 retention。
+
