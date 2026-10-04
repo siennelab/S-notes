@@ -122,3 +122,34 @@ class RemoteGuiTests(unittest.TestCase):
         self.controller.refresh();self.wait(lambda:self.controller.state=='auth')
         self.assertEqual([name for name,_ in self.client.calls[calls:]],['GET'])
         self.assertTrue(self.controller.read_only)
+    def test_no_occurrence_active_projection_stays_writable(self):
+        self.online()
+        result=self.service.ai_complete_item(
+            actor_target_id='fictional-actor',
+            request_id='fictional-current-completion',
+            item_id=self.item.id,
+        )
+        self.assertEqual(result['status'],'updated')
+        self.controller.refresh();self.online()
+
+        item=self.controller.get_reminder(self.item.id)
+        self.assertIsNotNone(item)
+        self.assertEqual(item.reminder.lifecycle,'active')
+        self.assertIsNone(item.occurrence)
+        self.assertEqual(item.status,'active')
+        self.assertEqual(item.status_label,'启用')
+        self.assertEqual(self.center.table.item(0,1).text(),'启用')
+        self.center.table.setCurrentCell(0,0);self.app.processEvents()
+        self.assertTrue(self.center.pause_button.isEnabled())
+        self.assertTrue(self.center.complete_button.isEnabled())
+
+        self.assertTrue(self.controller.submit('pause_reminder',{'item_id':self.item.id}))
+        self.online()
+        self.assertEqual(self.controller.get_reminder(self.item.id).reminder.lifecycle,'paused')
+        self.assertTrue(self.controller.submit('resume_reminder',{'item_id':self.item.id}))
+        self.online()
+        self.assertTrue(self.controller.submit('complete_reminder',{'item_id':self.item.id}))
+        self.online()
+        completed=self.controller.get_reminder(self.item.id)
+        self.assertEqual(completed.reminder.lifecycle,'completed')
+        self.assertEqual(completed.status,'completed')

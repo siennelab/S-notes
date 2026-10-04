@@ -22,6 +22,7 @@ NOTIFICATION_ACTION = "action"
 NOTIFICATION_DEADLINE = "deadline"
 
 REMINDER_STATUS_LABELS = {
+    REMINDER_ACTIVE: "启用",
     "upcoming": "未到期",
     "due": "待处理",
     "overdue": "已逾期",

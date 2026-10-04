@@ -997,6 +997,7 @@ class ReminderService:
             "due": 1,
             "upcoming": 2,
             "occurrence_completed": 2,
+            REMINDER_ACTIVE: 2,
             "paused": 3,
             "completed": 4,
         }.get(item.status, 5)
@@ -1019,7 +1020,9 @@ class ReminderService:
 
         active = self._active_occurrence(reminder, today)
         if active is None:
-            return ReminderListItem(reminder, table, label, None, "completed", None, None)
+            return ReminderListItem(
+                reminder, table, label, None, REMINDER_ACTIVE, None, None
+            )
 
         if active.status == OCCURRENCE_COMPLETED:
             next_occurrence = self._next_occurrence_after_completion(reminder, active)

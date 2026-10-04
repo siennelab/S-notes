@@ -1009,7 +1009,7 @@ def _no_occurrence_ids(path: Path, as_of: date) -> list[int]:
 
 
 def no_occurrence_business_path_reachable() -> bool:
-    """Exercise the normal one-time completion path against fictional data."""
+    """Prove lifecycle/occurrence reachability, independent of display status."""
     with tempfile.TemporaryDirectory(prefix="snotes-step08a-no-occurrence-") as temporary:
         path = Path(temporary) / "fictional.db"
         connections = initialize_database(path)
@@ -1036,7 +1036,6 @@ def no_occurrence_business_path_reachable() -> bool:
             and before.occurrence is not None
             and after is not None
             and after.reminder.lifecycle == REMINDER_ACTIVE
-            and after.status == "completed"
             and after.occurrence is None
             and len(history) == 1
             and history[0].status == "completed"
