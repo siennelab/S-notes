@@ -42,12 +42,12 @@
 
 | 项目 | 状态 | 现行结论 |
 | --- | --- | --- |
-| `ai_call_logs` retention | DEFERRED | `SAFE_TO_APPLY_RETENTION=YES`；`RETENTION_IMPLEMENTED=NO`；不是 blocker，本轮不实施。 |
+| `ai_call_logs` retention | CLOSED | S 已确认 count-based：`KEEP_ROWS=10000`、`TRIGGER_ROWS=12000`；`RETENTION_IMPLEMENTED=YES`；仅在既有启动维护入口检查，单事务裁剪，详见下方最终 closeout。 |
 | Reminder owner slimming | DEFERRED | 不因文件大主动拆。 |
 | Reminder sidebar max-width 约 17px | DEFERRED | UI polish only。 |
 | actor mapping duplication | DEFERRED | 未来真正修改相关 owner 时顺手补一致性测试；不专门建设全局配置系统。 |
 | Cloud read open-time `target_actor` recheck | NO_CONSTRUCTION_REQUIRED | 本轮未改变现实读取、身份或镜像边界，保持既定结论。 |
-| GreenCloud `sudo: unable to resolve host optimal-living ...` | DEFERRED | SYSTEM_HYGIENE，本轮不修 hostname/hosts。 |
+| GreenCloud `sudo: unable to resolve host optimal-living ...` | CLOSED | hostname 与 `/etc/hostname` 已是 `optimal-living`；仅将 `/etc/hosts` 的本机行对齐，保留 `debian` 别名；解析与无副作用 sudo probe PASS。 |
 
 ## Closure evidence
 
@@ -56,3 +56,31 @@
 没有直接打开真实数据库、制造 proposal/Reminder、修改真实内容、清空应用回收站或更改 authority。仅检查本轮列出的路径与相关入口；未运行全量测试。仓库改动仅本账，远端改动仅指定残留与实际 INSTALL/deployment record。`NEW_OUT_OF_SCOPE_FINDINGS=NONE`。
 
 `CLEANUP_LEDGER=CLOSED`。`NEXT=Cloud prepend + update_note_metadata`，下一张票再施工；delete 仍不做。
+
+## Final maintenance closeout｜2026-10-04 CLOSED
+
+本次仅关闭三项；上方 cleanup 阶段的 `NEXT` 是历史记录，Cloud prepend / metadata 已在 `172a461` 封口，不重开。
+
+1. 下载的最新版 `S-notes-final-progress-20261004-GREENCLOUD-3.5-POST-CLOSE-EXTENSIONS-CLOSED-G.md` 已原样纳入 `docs/`，§78–§84 与最终状态核验 PASS；独立 docs commit=`7527df1c1827e2b81d9d3ac9830df39af797eb50`，已 push。本轮获 S 授权后，在该进度书追加 §85 记录 retention 完成，保留原下载正文。
+2. `ai_call_logs` 采用 S 确认的 count-based policy：`<=12000` 不执行 DELETE；`>12000` 一次保留最新 `10000`。排序完全复用现有 `called_at DESC, id DESC`。SQL 归 `SQLiteAiAuditRepository.prune_call_logs()`，由已有 `initialize_database()` 启动维护调用；GUI、MCP 和 Gale 的正常初始化均覆盖，不在 `record()` 每次插入时执行 DELETE。计数判断及单条有界 DELETE 在同一 `BEGIN IMMEDIATE` 事务内完成，无 schema/index migration、新 daemon、scheduler、service 或治理框架。
+3. GreenCloud hostname 根因是 `/etc/hosts` 仍为 `127.0.1.1 debian`，而 hostname 与 `/etc/hostname` 已为 `optimal-living`。只改为 `127.0.1.1 optimal-living debian`；原 hosts 已在 VPS `/var/backups/` 留可恢复备份。`hostname`、`getent hosts optimal-living`、`sudo -n true` 均 PASS，sudo 无 resolve warning。
+
+首次正式裁剪前已报告最新行数 `24389`、预计删除 `14389`，并在正式数据目录的 `backups/` 保存权限为 `0600` 的 SQLite 一致性备份；备份 quick_check 与日志行数核验 PASS。正式操作直接调用 repository，不运行 schema 初始化或迁移；事务中只允许写 `ai_call_logs`，仅删除 `14389` 行，剩余 `10000`，完整保留集合等于裁剪前按既有排序选出的最新 10000 个 ID。Notes、receipt inbox 与 operation 表计数不变，写操作 allowlist 与 total_changes 检查通过。删除不影响 proposal / receipt lifecycle、request_id idempotency、operation status 或 pending / processed。
+
+临时 HOME / DB 上的相关测试共 18 项 PASS：新 retention 4 项、审计分页 5 项、operation result/idempotency contract 5 项、pending/processed 2 项、实际 canonical create 与 receipt acceptance idempotency 2 项。覆盖 11999 / 12000 无 DELETE、12001 / 15002 裁回 10000、乱序时间与同秒 ID tie、全部保留 ID、业务表整行快照不变、启动入口以及连续写入不执行 DELETE。两个 Qt 用例在受限环境 native abort 后，已在正常 macOS 权限及严格临时 HOME / DB 下通过；未改 Qt 或既有业务代码。
+
+```ini
+DOC_PROGRESS_FILE=RECORDED
+HOSTNAME_WARNING=CLOSED
+RETENTION_MODE=count_based
+KEEP_ROWS=10000
+TRIGGER_ROWS=12000
+AI_CALL_LOG_ROWS_BEFORE=24389
+AI_CALL_LOG_ROWS_AFTER=10000
+AI_CALL_LOG_DELETED=14389
+RETENTION_IMPLEMENTED=YES
+RETENTION_WAITING_FOR_S_DECISION=NO
+MAINTENANCE_CLOSEOUT=CLOSED
+```
+
+原 §83–§84 的 Git/App 基线是本次 retention 施工前状态；本轮实现与最终记录以包含此 closeout 的正式 Git commit 为准，最终 main/origin-main 与成品验证见本轮交付。正式数据备份不进入 Git。其余 deferred maintenance 保持原状态，本轮不新增第四件事。

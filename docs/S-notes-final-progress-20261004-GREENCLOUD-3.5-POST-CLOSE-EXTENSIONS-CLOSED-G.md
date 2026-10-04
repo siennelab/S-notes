@@ -4245,3 +4245,29 @@ GreenCloud hostname resolution warning  = DEFERRED_SYSTEM_HYGIENE
 
 > G，继续 S-notes。当前唯一正式基线已经更新到 `main == origin/main == HEAD == 172a46125015dafa672be39357cffe94276dd177`，worktree clean，`PUSH=PASS`；正式 `dist/S-notes.app` 也来自同一 HEAD，build / codesign / smoke PASS。GreenCloud 3.5-A/B/C/D 与 11 步路线全部 COMPLETE；四个本地 Agent MCP 接线 CLOSED；post-close cleanup / maintenance ledger 也已 CLOSED，commit `7c77a943864265f0fa170a6f128f33b3f80c7618` 已 ff-only 合入并 push，5 个 Step10/11 rollback/fixture leftovers 已删除，deployment record 已销账。随后 Cloud `prepend_note + update_note_metadata` 独立功能票也已 CLOSED：复用 outbox v3 / expected_version / idempotency / AI Center / receipt / mirror refresh，没有 schema migration；metadata allowlist 仅 `title / directory_id / add_tags / remove_tags`，visibility / actor targets / delete 继续禁止。真人 Gate 使用虚构 Note #348：PREPEND accepted，METADATA accepted，metadata 后正文保持不变；验收中发现“关闭 AI Center 导致 S-notes 整体退出”，已修为先 hide、同步结束后再释放，40 项相关回归与正式 App close smoke PASS；S 真人再次关闭 AI Center 后主窗口正常存活。#348 已移入应用回收站；经 S 明确授权后刷新既有 claude-code mirror，Cloud 已读不到 #348；accepted 历史回执保留、无 pending 测试 residue。最终功能 branch `codex/gc35-cloud-prepend-metadata` 已 ff-only 合入 main 并 push，最终 commit=`172a46125015dafa672be39357cffe94276dd177`。当前没有新的强制 GreenCloud 3.5 主线；`ai_call_logs` retention、Reminder owner slimming、sidebar 17px、actor mapping duplication、hostname warning 等只在真实触发时处理，`raw_candidate_markdown` 只是 DELETE_CANDIDATE，不单独开票；Delete Note 仍不做。不要从旧 §74–§77 把 cleanup / prepend / metadata NEXT 捞回来重新施工。
 
+
+# 85. Final maintenance closeout｜2026-10-04 CLOSED
+
+本节为获 S 明确授权后的最终 maintenance 补记；此前 §83–§84 的 `172a461` Git/App 基线保留为本次 retention 施工前历史状态。最新实现与本节记录以包含本节的正式 closeout commit 为准。三项以外不施工。
+
+- **最新最终进度书入 Git：CLOSED。** 下载正文原样纳入 `docs/`，§78–§84 与最终状态均通过核验；独立 commit=`7527df1c1827e2b81d9d3ac9830df39af797eb50`，已 push。此次仅追加 §85，原下载正文不改。
+- **ai_call_logs retention：CLOSED。** S 确认 `count_based / KEEP_ROWS=10000 / TRIGGER_ROWS=12000`。`<=12000` 不处理；`>12000` 单事务、单条 DELETE 裁回按既有 `called_at DESC, id DESC` 排序的最新 10000 条。复用 `SQLiteAiAuditRepository.prune_call_logs()` 与 `initialize_database()` 的低频启动维护入口，不在每条写入时 DELETE；无 migration 或新增 daemon / scheduler / service。正式首次操作已报告 24389 条与预计删除 14389 条，私有 SQLite 一致性备份 PASS；实际 `24389 → 10000`、删除 `14389`，完整最新保留集合与业务表写入边界验证 PASS。proposal / receipt、幂等、operation status、pending / processed 和正式 Notes 均不受影响。
+- **GreenCloud hostname warning：CLOSED。** hostname 与 `/etc/hostname` 原本均为 `optimal-living`，仅 `/etc/hosts` 仍用 `debian`。备份后将本机行改为 `127.0.1.1 optimal-living debian`；hostname、getent 与无副作用 sudo probe PASS，warning 消失。
+
+相关临时 HOME / DB 测试 18 项 PASS，包括阈值边界、全部最新 ID、业务表完整行保存、分页、幂等与回执回归；源码与实际成品按现有构建流程封口。详细实际操作与验证证据见 `docs/gc35-post-close-maintenance-ledger.md` 的 Final maintenance closeout。
+
+```ini
+DOC_PROGRESS_FILE=RECORDED
+HOSTNAME_WARNING=CLOSED
+RETENTION_MODE=count_based
+KEEP_ROWS=10000
+TRIGGER_ROWS=12000
+AI_CALL_LOG_ROWS_BEFORE=24389
+AI_CALL_LOG_DELETED=14389
+AI_CALL_LOG_ROWS_AFTER=10000
+RETENTION_IMPLEMENTED=YES
+RETENTION_WAITING_FOR_S_DECISION=NO
+MAINTENANCE_CLOSEOUT=CLOSED
+```
+
+Reminder owner slimming、sidebar 17px、actor mapping duplication、raw_candidate_markdown、target_actor、Ke local MCP、delete_note 与 visibility / actor targets 保持既有状态，不因本轮 maintenance 重开。

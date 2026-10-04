@@ -9,6 +9,10 @@ from src.snotes.domain.ai_audit import AiAuditEvent, AiCallLog
 from src.snotes.storage.connection import SQLiteConnectionFactory
 
 
+AI_CALL_LOG_RETENTION_THRESHOLD = 12_000
+AI_CALL_LOG_RETENTION_LIMIT = 10_000
+
+
 class SQLiteAiAuditRepository(AiAuditRepository):
     def __init__(self, connections: SQLiteConnectionFactory) -> None:
         self.connections = connections
@@ -38,6 +42,28 @@ class SQLiteAiAuditRepository(AiAuditRepository):
                     int(event.entered_confirmation),
                 ),
             )
+
+    def prune_call_logs(self) -> int:
+        """Trim old call logs after the startup maintenance threshold is crossed."""
+        with self.connections.write() as connection:
+            count = int(
+                connection.execute("SELECT COUNT(*) FROM ai_call_logs").fetchone()[0]
+            )
+            if count <= AI_CALL_LOG_RETENTION_THRESHOLD:
+                return 0
+            cursor = connection.execute(
+                """
+                DELETE FROM ai_call_logs
+                WHERE id NOT IN (
+                    SELECT id
+                    FROM ai_call_logs
+                    ORDER BY called_at DESC, id DESC
+                    LIMIT ?
+                )
+                """,
+                (AI_CALL_LOG_RETENTION_LIMIT,),
+            )
+            return int(cursor.rowcount)
 
     def list(self, operation_type: str | None = None) -> list[AiCallLog]:
         clause = "" if operation_type is None else "WHERE operation_type = ?"

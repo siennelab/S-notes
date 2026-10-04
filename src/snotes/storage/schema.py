@@ -7,6 +7,7 @@ from contextlib import closing
 
 from src.snotes.domain.reminders import DEFAULT_REMINDER_LABEL_NAME
 from src.snotes.storage.connection import SQLiteConnectionFactory, require_markdown_database
+from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
 import sqlite3
 from src.snotes.storage.support import timestamp_seconds
 
@@ -356,6 +357,7 @@ def initialize_database(database_path: Path) -> SQLiteConnectionFactory:
                     for sort_order, name in enumerate(INITIAL_MAIN_CATEGORIES)
                 ],
             )
+    SQLiteAiAuditRepository(connections).prune_call_logs()
     return connections
 
 
