@@ -14,6 +14,7 @@ from src.snotes.domain.ai_receipts import (
     AiReceiptDiscardPersistence,
     AiReceiptInboxItem,
     GaleReceiptImport,
+    GreenCloudReceiptImport,
 )
 from src.snotes.domain.gale import (
     GaleActivationResult,
@@ -22,6 +23,7 @@ from src.snotes.domain.gale import (
     GaleMirrorVerification,
     GaleSubmission,
 )
+from src.snotes.domain.greencloud import GreenCloudSubmission, GreenCloudTerminalReceipt
 from src.snotes.domain.ai_audit import AiAuditEvent, AiCallLog
 from src.snotes.domain.ai_safe_export import AiSafeExportPlan, AiSafeExportResult
 from src.snotes.domain.models import (
@@ -112,6 +114,41 @@ class AiReceiptInboxRepository(Protocol):
     def import_gale_pending(
         self, submission: GaleReceiptImport
     ) -> tuple[AiReceiptInboxItem, bool]: ...
+
+    def import_greencloud_pending(
+        self, submission: GreenCloudReceiptImport
+    ) -> tuple[AiReceiptInboxItem, bool]: ...
+
+    def reject_pending_decision(
+        self,
+        receipt_id: int,
+        *,
+        result_status: str,
+        reason: str,
+    ) -> AiReceiptInboxItem: ...
+
+    def reject_pending_by_actor(
+        self,
+        *,
+        source: str,
+        actor_target_id: str,
+    ) -> tuple[int, ...]: ...
+
+    def pending_greencloud_terminal_receipts(
+        self,
+    ) -> tuple[GreenCloudTerminalReceipt, ...]: ...
+
+    def mark_greencloud_receipt_sent(
+        self,
+        receipt_id: int,
+        fingerprint: str,
+    ) -> bool: ...
+
+    def mark_greencloud_mirror_published(
+        self,
+        receipt_id: int,
+        fingerprint: str,
+    ) -> bool: ...
 
 
 class NotesRepository(Protocol):
@@ -532,6 +569,20 @@ class GaleOutboxTransport(Protocol):
     def acknowledge(self, submission_uuid: str, local_receipt_id: str) -> None: ...
 
     def status(self) -> dict[str, int]: ...
+
+
+class GreenCloudOutboxTransport(Protocol):
+    def export_unacknowledged(self) -> Sequence[GreenCloudSubmission]: ...
+
+    def acknowledge(self, submission_uuid: str, local_receipt_id: str) -> None: ...
+
+    def write_terminal_receipt(
+        self,
+        source_actor: str,
+        request_id: str,
+        terminal_state: str,
+        receipt_payload: Mapping[str, object] | None = None,
+    ) -> None: ...
 
 
 class GaleRuntimeSettings(Protocol):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from src.snotes.domain.models import NoteLocation
 
@@ -95,3 +96,34 @@ class GaleReceiptImport:
     tags: tuple[str, ...]
     ai_visibility: str = "hidden"
     ai_targets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class GreenCloudReceiptImport:
+    submission_uuid: str
+    source_actor: str
+    cloud_request_id: str
+    local_request_id: str
+    local_idempotency_key: str
+    operation_type: str
+    title: str
+    body: str
+    location: NoteLocation
+    tags: tuple[str, ...]
+    ai_visibility: str
+    ai_targets: tuple[str, ...]
+    target_note_id: int | None
+    expected_updated_at: str | None
+    operation_payload: dict[str, Any]
+    cloud_expected_version: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class BulkRejectResult:
+    source: str
+    actor_target_id: str
+    receipt_ids: tuple[int, ...]
+
+    @property
+    def rejected_count(self) -> int:
+        return len(self.receipt_ids)

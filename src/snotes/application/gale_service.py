@@ -7,6 +7,7 @@ import time
 import hashlib
 import json
 from dataclasses import asdict
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from src.snotes.application.local_mcp_write_service import note_version_token
 from src.snotes.application.ports import (
     GaleMirrorWriter,
     GaleOutboxTransport,
+    GreenCloudOutboxTransport,
     GalePublishTransport,
     GaleRuntimeSettings,
     NotesRepository,
@@ -36,6 +38,12 @@ from src.snotes.domain.gale import (
     GaleMirrorResult,
     GalePublishResult,
     GalePullResult,
+)
+from src.snotes.domain.greencloud import (
+    GREEN_CLOUD_ACTORS,
+    GreenCloudError,
+    GreenCloudPullResult,
+    MultiSourcePullResult,
 )
 from src.snotes.domain.models import NoteLocation
 from src.snotes.domain.tags import parse_tags
@@ -473,6 +481,71 @@ class GalePullService:
         return result
 
 
+class GreenCloudPullService:
+    """Import GreenCloud proposals locally before acknowledging their outbox."""
+
+    def __init__(
+        self,
+        transport: GreenCloudOutboxTransport,
+        receipts: AiReceiptInboxService,
+        audit: AiAuditService,
+    ) -> None:
+        self._transport = transport
+        self._receipts = receipts
+        self._audit = audit
+
+    def pull_once(self) -> GreenCloudPullResult:
+        audit_request_id = uuid.uuid4().hex
+        submissions = tuple(self._transport.export_unacknowledged())
+        imported = acknowledged = duplicates = 0
+        try:
+            for submission in submissions:
+                if (
+                    submission.source_actor not in GREEN_CLOUD_ACTORS
+                    or submission.delivery_state != "delivered"
+                ):
+                    raise GreenCloudError("remote_submission_invalid")
+                receipt, created = self._receipts.import_greencloud_pending(
+                    submission
+                )
+                imported += int(created)
+                duplicates += int(not created)
+                try:
+                    self._transport.acknowledge(
+                        submission.submission_uuid, str(receipt.id)
+                    )
+                except Exception as error:
+                    raise GreenCloudError("ack_failed") from error
+                acknowledged += 1
+        except Exception as error:
+            reason = (
+                error.code
+                if isinstance(error, GreenCloudError)
+                else "local_import_failed"
+            )
+            self._audit.record_event(
+                "common",
+                "greencloud_pull",
+                request_id=audit_request_id,
+                result_count=imported,
+                status="failed",
+                failure_reason=reason,
+            )
+            raise
+        result = GreenCloudPullResult(
+            len(submissions), imported, acknowledged, duplicates
+        )
+        self._audit.record_event(
+            "common",
+            "greencloud_pull",
+            request_id=audit_request_id,
+            result_count=imported,
+            status="success",
+            is_duplicate=bool(duplicates),
+        )
+        return result
+
+
 def _location(value: str) -> NoteLocation:
     parts = [part.strip() for part in value.split("/") if part.strip()]
     if len(parts) > 3:
@@ -510,22 +583,64 @@ class GaleControlService:
         pull: GalePullService,
         settings: GaleRuntimeSettings,
         *,
+        greencloud_pull: GreenCloudPullService | None = None,
+        greencloud_followup: Callable[[], object] | None = None,
         clock=time.time,
     ) -> None:
         self._publish = publish
         self._pull = pull
         self._settings = settings
+        self._greencloud_pull = greencloud_pull
+        self._greencloud_followup = greencloud_followup
         self._clock = clock
 
     def manual_update(self) -> GalePublishResult:
         return self._publish.publish_manual()
 
-    def check_submissions_now(self) -> GalePullResult:
-        result = self._pull.pull_once()
+    def check_submissions_now(
+        self,
+    ) -> GalePullResult | MultiSourcePullResult:
+        if self._greencloud_pull is None:
+            result = self._pull.pull_once()
+            self._settings.set_text(
+                self.LAST_PULL_AT_KEY, _utc_timestamp(self._clock())
+            )
+            return result
+
+        gale_result = greencloud_result = None
+        failures: list[str] = []
+        first_pull_error: Exception | None = None
+        try:
+            gale_result = self._pull.pull_once()
+        except Exception as error:
+            first_pull_error = error
+            failures.append("gale")
+        try:
+            greencloud_result = self._greencloud_pull.pull_once()
+        except Exception as error:
+            if first_pull_error is None:
+                first_pull_error = error
+            failures.append("greencloud")
+        try:
+            self.flush_greencloud_decisions()
+        except Exception:
+            failures.append("greencloud_followup")
+        if gale_result is None and greencloud_result is None:
+            assert first_pull_error is not None
+            raise first_pull_error
         self._settings.set_text(
             self.LAST_PULL_AT_KEY, _utc_timestamp(self._clock())
         )
-        return result
+        return MultiSourcePullResult(
+            gale=gale_result,
+            greencloud=greencloud_result,
+            failures=tuple(failures),
+        )
+
+    def flush_greencloud_decisions(self) -> object | None:
+        if self._greencloud_followup is None:
+            return None
+        return self._greencloud_followup()
 
     def last_successful_publish_at(self) -> str:
         return self._settings.get_text(self.LAST_PUBLISH_AT_KEY)
@@ -545,10 +660,20 @@ class GaleControlService:
     def set_auto_pull_enabled(self, enabled: bool) -> None:
         self._settings.set_bool(self.AUTO_PULL_KEY, bool(enabled))
 
-    def scheduled_once(self) -> tuple[GalePullResult | None, GalePublishResult | None]:
+    def scheduled_once(
+        self,
+    ) -> tuple[
+        GalePullResult | MultiSourcePullResult | None,
+        GalePublishResult | None,
+    ]:
         pull_result = (
             self.check_submissions_now() if self.auto_pull_enabled() else None
         )
+        if not self.auto_pull_enabled():
+            try:
+                self.flush_greencloud_decisions()
+            except Exception:
+                pass
         publish_result = (
             self._publish.publish_automatic()
             if self.auto_publish_enabled()

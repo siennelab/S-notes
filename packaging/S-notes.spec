@@ -67,6 +67,24 @@ analysis = Analysis(
     optimize=0,
 )
 
+# The existing wheel has an auxiliary Versions/Resources directory. The Qt
+# hook selects it as a version even though the framework binary is in A.
+# Keep the environment intact and collect those helper/resources into the
+# actual version so strict bundle signing sees one complete framework.
+webengine_prefix = "PySide6/Qt/lib/QtWebEngineCore.framework/Versions/"
+if not any(
+    dest == webengine_prefix + "A/QtWebEngineCore"
+    for dest, _source, _kind in analysis.binaries
+):
+    raise SystemExit("Expected QtWebEngineCore framework version A was not collected.")
+for toc in (analysis.binaries, analysis.datas):
+    toc[:] = [
+        (dest.replace(webengine_prefix + "Resources/", webengine_prefix + "A/", 1), source, kind)
+        if dest.startswith(webengine_prefix + "Resources/")
+        else (dest, source, kind)
+        for dest, source, kind in toc
+    ]
+
 python_archive = PYZ(analysis.pure)
 
 executable = EXE(

@@ -105,6 +105,43 @@ AUDIT_FAILURE_REASON_LABELS = {
     "package_write_failed": "资料包写入失败",
 }
 
+RECEIPT_SOURCE_LABELS = {
+    "Gale": "Oracle Gale",
+    "Oracle Gale": "Oracle Gale",
+    "GreenCloud": "GreenCloud",
+}
+
+RECEIPT_OPERATION_LABELS = {
+    "create": "新建笔记",
+    "append": "追加内容",
+    "edit": "精确修改正文",
+    "prepend": "前置追加",
+    "metadata": "修改资料",
+}
+
+
+def _receipt_source_label(source: str) -> str:
+    return RECEIPT_SOURCE_LABELS.get(source, source or "未知")
+
+
+def _receipt_operation_label(receipt: AiReceiptInboxItem) -> str:
+    operation = str(receipt.operation_type or "").strip()
+    if operation:
+        return RECEIPT_OPERATION_LABELS.get(operation, operation)
+    return str(receipt.action or "未知")
+
+
+def _receipt_actor_label(receipt: AiReceiptInboxItem) -> str:
+    if receipt.actor_target_id:
+        return receipt.actor_target_id
+    return "gale" if receipt.source in {"Gale", "Oracle Gale"} else "—"
+
+
+def _receipt_status_label(receipt: AiReceiptInboxItem) -> str:
+    if receipt.source == "GreenCloud" and receipt.status == "discarded":
+        return "已拒绝"
+    return receipt.status_label
+
 
 def _audit_display_text(
     value: object,
@@ -127,6 +164,7 @@ class ReceiptCard(QFrame):
     acceptRequested = Signal(int)
     discardRequested = Signal(int)
     deleteRequested = Signal(int)
+    bulkRejectRequested = Signal(str, str)
 
     def __init__(
         self,
@@ -157,12 +195,16 @@ class ReceiptCard(QFrame):
         self.title_label.setObjectName("receiptCardTitle")
         heading.addWidget(self.title_label)
         summary = (
-            f"来源：{receipt.source or '未知'} · 状态：{receipt.status_label} · "
+            f"来源：{_receipt_source_label(receipt.source)} · "
+            f"Actor：{_receipt_actor_label(receipt)} · "
+            f"操作：{_receipt_operation_label(receipt)} · "
+            f"状态：{_receipt_status_label(receipt)} · "
             f"{receipt.created_at.replace('T', ' ')[:19]}"
         )
         self.summary_label = QLabel(summary)
         self.summary_label.setObjectName("receiptCardSummary")
         self.summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.summary_label.setWordWrap(True)
         heading.addWidget(self.summary_label)
         top.addLayout(heading, stretch=1)
 
@@ -171,7 +213,10 @@ class ReceiptCard(QFrame):
         self.accept_button.clicked.connect(
             lambda: self.acceptRequested.emit(self.receipt_id)
         )
-        self.discard_button = QPushButton("丢弃", self)
+        self.discard_button = QPushButton(
+            "拒绝" if receipt.source == "GreenCloud" else "丢弃",
+            self,
+        )
         self.discard_button.setObjectName("receiptRejectButton")
         self.discard_button.clicked.connect(
             lambda: self.discardRequested.emit(self.receipt_id)
@@ -182,11 +227,27 @@ class ReceiptCard(QFrame):
         self.delete_button.clicked.connect(
             lambda: self.deleteRequested.emit(self.receipt_id)
         )
+        self.bulk_reject_button = QPushButton("批量拒绝同源 Actor", self)
+        self.bulk_reject_button.setObjectName("receiptBulkRejectButton")
+        self.bulk_reject_button.setToolTip(
+            "只拒绝同一来源、同一 Actor 的待确认提案"
+        )
+        self.bulk_reject_button.clicked.connect(
+            lambda: self.bulkRejectRequested.emit(
+                self.receipt.source, self.receipt.actor_target_id or ""
+            )
+        )
         self.accept_button.setVisible(receipt.pending)
         self.discard_button.setVisible(receipt.pending)
         self.delete_button.setVisible(receipt.processed)
+        self.bulk_reject_button.setVisible(
+            receipt.pending
+            and receipt.source == "GreenCloud"
+            and receipt.actor_target_id in {"claude-code", "clawbot"}
+        )
         top.addWidget(self.accept_button)
         top.addWidget(self.discard_button)
+        top.addWidget(self.bulk_reject_button)
         top.addWidget(self.delete_button)
         layout.addLayout(top)
         self.processing_status = QLabel(self)
@@ -210,7 +271,10 @@ class ReceiptCard(QFrame):
         if receipt.processed and receipt.request_id:
             if self._outcome.is_conflict:
                 self.summary_label.setText(
-                    f"来源：{receipt.source or '未知'} · 状态：版本冲突 · 未写入 · "
+                    f"来源：{_receipt_source_label(receipt.source)} · "
+                    f"Actor：{_receipt_actor_label(receipt)} · "
+                    f"操作：{_receipt_operation_label(receipt)} · "
+                    "状态：版本冲突 · 未写入 · "
                     f"{receipt.created_at.replace('T', ' ')[:19]}"
                 )
             reason = self._outcome.reason
@@ -270,6 +334,7 @@ class ReceiptCard(QFrame):
             )
         )
         self.discard_button.setEnabled(not processing)
+        self.bulk_reject_button.setEnabled(not processing)
         if processing:
             self.processing_status.setText("请求已收到，正在处理…")
             self.processing_status.show()
@@ -624,6 +689,7 @@ class ReceiptCard(QFrame):
 class ReceiptInboxView(QWidget):
     receiptAccepted = Signal(int)
     pendingCountChanged = Signal(int)
+    terminalDecisionSaved = Signal()
 
     def __init__(
         self,
@@ -639,6 +705,7 @@ class ReceiptInboxView(QWidget):
         self.cards: dict[int, ReceiptCard] = {}
         self.scroll: QScrollArea | None = None
         self._delete_message_box: QMessageBox | None = None
+        self._bulk_reject_message_box: QMessageBox | None = None
         self._accepting_receipt_id: int | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -733,6 +800,7 @@ class ReceiptInboxView(QWidget):
             card.toggleRequested.connect(self.toggle_card)
             card.acceptRequested.connect(self.accept_receipt)
             card.discardRequested.connect(self.discard_receipt)
+            card.bulkRejectRequested.connect(self.confirm_bulk_reject)
             card.deleteRequested.connect(self.confirm_delete_receipt)
             card.set_expanded(receipt.id == self.expanded_receipt_id)
             cards[receipt.id] = card
@@ -832,6 +900,11 @@ class ReceiptInboxView(QWidget):
                 )
                 self._activate_host_window()
                 return
+            ReceiptInboxView._emit_greencloud_terminal_if_saved(
+                self,
+                card.receipt.source,
+                getattr(result, "receipt", None),
+            )
             if not result.outcome.accepted:
                 conflict = result.outcome.is_conflict
                 reason = result.outcome.reason or "这条 AI 修改未被接受。"
@@ -866,15 +939,72 @@ class ReceiptInboxView(QWidget):
             self._accepting_receipt_id = None
 
     def discard_receipt(self, receipt_id: int) -> None:
+        card = self.cards.get(receipt_id)
         try:
-            self.service.discard_receipt(receipt_id)
+            result = self.service.discard_receipt(receipt_id)
         except Exception as error:
             QMessageBox.warning(self.window(), "丢弃失败", str(error))
             self._activate_host_window()
             return
+        ReceiptInboxView._emit_greencloud_terminal_if_saved(
+            self,
+            card.receipt.source if card is not None else "",
+            getattr(result, "receipt", None),
+        )
         self.expanded_receipt_id = None
         self.refresh_receipts()
         self._activate_host_window()
+
+    def confirm_bulk_reject(self, source: str, actor_target_id: str) -> None:
+        if self._bulk_reject_message_box is not None:
+            self._bulk_reject_message_box.raise_()
+            self._bulk_reject_message_box.activateWindow()
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("批量拒绝 AI 提案")
+        box.setText(
+            f"确定拒绝来源「{_receipt_source_label(source)}」中 "
+            f"Actor「{actor_target_id}」的全部待确认提案吗？"
+        )
+        reject_button = box.addButton("全部拒绝", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(reject_button)
+        box.setWindowModality(Qt.WindowModal)
+        self._bulk_reject_message_box = box
+
+        def finish(_result: int) -> None:
+            should_reject = box.clickedButton() is reject_button
+            self._bulk_reject_message_box = None
+            box.deleteLater()
+            if should_reject:
+                self.reject_pending_by_actor(source, actor_target_id)
+
+        box.finished.connect(finish)
+        box.open()
+
+    def reject_pending_by_actor(self, source: str, actor_target_id: str) -> None:
+        try:
+            result = self.service.reject_pending_by_actor(
+                source=source,
+                actor_target_id=actor_target_id,
+            )
+        except Exception as error:
+            QMessageBox.warning(self.window(), "批量拒绝失败", str(error))
+            self._activate_host_window()
+            return
+        self.expanded_receipt_id = None
+        self.refresh_receipts()
+        if int(getattr(result, "rejected_count", 0)) > 0 and source == "GreenCloud":
+            self.terminalDecisionSaved.emit()
+        self._activate_host_window()
+
+    def _emit_greencloud_terminal_if_saved(
+        self,
+        source: str,
+        receipt: AiReceiptInboxItem | None,
+    ) -> None:
+        if source == "GreenCloud" and receipt is not None and receipt.processed:
+            self.terminalDecisionSaved.emit()
 
     def confirm_delete_receipt(self, receipt_id: int) -> None:
         if self._delete_message_box is not None:
@@ -917,23 +1047,34 @@ class ReceiptInboxView(QWidget):
 
 class _GaleWorker(QObject):
     finished = Signal(object, object, bool)
+    actionFinished = Signal(object, object, bool, str)
 
-    def __init__(self, action, *, refresh_receipts: bool) -> None:
+    def __init__(
+        self,
+        action,
+        *,
+        refresh_receipts: bool,
+        action_kind: str = "controls",
+    ) -> None:
         super().__init__()
         self.action = action
         self.refresh_receipts = refresh_receipts
+        self.action_kind = action_kind
 
     @Slot()
     def run(self) -> None:
         try:
             result = self.action()
         except Exception as error:
-            self.finished.emit(
-                None,
-                str(getattr(error, "code", "unexpected_failure")),
-                self.refresh_receipts,
+            reason = str(getattr(error, "code", "unexpected_failure"))
+            self.actionFinished.emit(
+                None, reason, self.refresh_receipts, self.action_kind
             )
+            self.finished.emit(None, reason, self.refresh_receipts)
             return
+        self.actionFinished.emit(
+            result, None, self.refresh_receipts, self.action_kind
+        )
         self.finished.emit(result, None, self.refresh_receipts)
 
 
@@ -972,6 +1113,8 @@ class AiCenterDialog(QWidget):
         self.gale = gale
         self._gale_threads: list[QThread] = []
         self._gale_workers: list[_GaleWorker] = []
+        self._greencloud_followup_running = False
+        self._greencloud_followup_queued = False
         title = QLabel("AI中心")
         title.setObjectName("receiptInboxTitle")
         layout.addWidget(title)
@@ -980,6 +1123,9 @@ class AiCenterDialog(QWidget):
         self.receipt_view = ReceiptInboxView(service, metadata, self)
         self.receipt_view.receiptAccepted.connect(self.receiptAccepted)
         self.receipt_view.pendingCountChanged.connect(self.pendingCountChanged)
+        self.receipt_view.terminalDecisionSaved.connect(
+            self._queue_greencloud_followup
+        )
         self.tabs.addTab(self.receipt_view, "待确认 / 已处理")
         self.log_page = self._build_log_page()
         self.tabs.addTab(self.log_page, "笔记调用记录")
@@ -1071,10 +1217,7 @@ class AiCenterDialog(QWidget):
                 )
             )
             self.gale_pull_button.clicked.connect(
-                lambda: self._start_gale_action(
-                    self.gale.check_submissions_now, "正在检查 Gale 投稿…",
-                    refresh_receipts=True,
-                )
+                self.start_submission_pull
             )
             self.gale_auto_publish.toggled.connect(
                 self.gale.set_auto_publish_enabled
@@ -1083,6 +1226,17 @@ class AiCenterDialog(QWidget):
                 self.gale.set_auto_pull_enabled
             )
         return page
+
+    def start_submission_pull(self) -> bool:
+        """Start the existing multi-source pull without blocking the Qt thread."""
+        if self.gale is None:
+            return False
+        self._start_gale_action(
+            self.gale.check_submissions_now,
+            "正在检查 Gale 投稿…",
+            refresh_receipts=True,
+        )
+        return True
 
     def refresh_gale_runtime_status(self) -> None:
         if self.gale is None or self.gale_page is None:
@@ -1110,15 +1264,29 @@ class AiCenterDialog(QWidget):
         self.gale_status.setText(pending_text)
         self.gale_publish_button.setEnabled(False)
         self.gale_pull_button.setEnabled(False)
+        self._launch_gale_worker(
+            action,
+            refresh_receipts=refresh_receipts,
+            action_kind="controls",
+        )
+
+    def _launch_gale_worker(
+        self,
+        action,
+        *,
+        refresh_receipts: bool,
+        action_kind: str,
+    ) -> None:
         thread = QThread(self)
         worker = _GaleWorker(
             action,
             refresh_receipts=refresh_receipts,
+            action_kind=action_kind,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
 
-        worker.finished.connect(self._gale_action_finished)
+        worker.actionFinished.connect(self._gale_action_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -1128,19 +1296,66 @@ class AiCenterDialog(QWidget):
                 self._gale_threads.remove(thread)
             if worker in self._gale_workers:
                 self._gale_workers.remove(worker)
+            if not self._gale_threads and self._greencloud_followup_queued:
+                QTimer.singleShot(0, self._drain_greencloud_followup_queue)
 
         thread.finished.connect(release)
         self._gale_threads.append(thread)
         self._gale_workers.append(worker)
         thread.start()
 
-    @Slot(object, object, bool)
+    @Slot()
+    def _queue_greencloud_followup(self) -> None:
+        if self.gale is None or not callable(
+            getattr(self.gale, "flush_greencloud_decisions", None)
+        ):
+            return
+        if self._gale_threads or self._greencloud_followup_running:
+            self._greencloud_followup_queued = True
+            self.gale_status.setText("决定已保存，等待云端同步…")
+            return
+        self._start_greencloud_followup()
+
+    def _drain_greencloud_followup_queue(self) -> None:
+        if (
+            not self._greencloud_followup_queued
+            or self._gale_threads
+            or self._greencloud_followup_running
+        ):
+            return
+        self._greencloud_followup_queued = False
+        self._start_greencloud_followup()
+
+    def _start_greencloud_followup(self) -> None:
+        if self.gale is None:
+            return
+        action = getattr(self.gale, "flush_greencloud_decisions", None)
+        if not callable(action):
+            return
+        self._greencloud_followup_running = True
+        self.gale_status.setText("决定已保存，正在同步云端回执与镜像…")
+        self._launch_gale_worker(
+            action,
+            refresh_receipts=False,
+            action_kind="greencloud_followup",
+        )
+
+    @Slot(object, object, bool, str)
     def _gale_action_finished(
         self,
         _result,
         error,
         refresh_receipts: bool,
+        action_kind: str,
     ) -> None:
+        if action_kind == "greencloud_followup":
+            self._greencloud_followup_running = False
+            failed_count = int(getattr(_result, "failed_count", 0) or 0)
+            if error is not None or failed_count > 0:
+                self.gale_status.setText("决定已保存，云端同步待重试")
+            else:
+                self.gale_status.setText("云端回执与镜像已同步")
+            return
         self.gale_status.setText(
             "操作完成" if error is None else f"操作失败：{error}"
         )

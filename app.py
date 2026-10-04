@@ -5,6 +5,10 @@ import sys
 
 
 def run() -> int:
+    if "--step11-smoke" in sys.argv:
+        from src.snotes.ui.submission_smoke import main
+
+        return main()
     if "--mcp-stdio" in sys.argv:
         from src.snotes.transport.mcp.server import main
 

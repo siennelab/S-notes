@@ -6,7 +6,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QThread, QTimer, Slot
 from PySide6.QtWidgets import QApplication, QInputDialog, QMainWindow, QMessageBox
 
 from src.snotes.application.ai_access_metadata_service import (
@@ -27,7 +27,7 @@ from src.snotes.domain.models import Note, NoteLocation
 from src.snotes.domain.reminders import ReminderQuery
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.directory_dialog import DirectoryUiWorkflow
-from src.snotes.ui.ai_center_dialog import AiCenterDialog
+from src.snotes.ui.ai_center_dialog import AiCenterDialog, _GaleWorker
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
 from src.snotes.ui.location_controls import (
     location_from_path,
@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         gale_control_service: GaleControlService | None = None,
         reminder_service: ReminderService | None = None,
         remote_reminder_controller: object | None = None,
+        automatic_submission_pull: bool = False,
     ) -> None:
         super().__init__()
         self.note_service = note_service
@@ -83,6 +84,10 @@ class MainWindow(QMainWindow):
         self.ai_safe_export_service = ai_safe_export_service
         self.ai_audit_service = ai_audit_service
         self.gale_control_service = gale_control_service
+        self._automatic_submission_pull = automatic_submission_pull
+        self._submission_pull_started = False
+        self._submission_pull_thread = None
+        self._submission_pull_worker = None
         self.remote_reminder_controller = remote_reminder_controller
         self.reminder_service = remote_reminder_controller or reminder_service
         self.ai_center_dialog: AiCenterDialog | None = None
@@ -1062,6 +1067,38 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if self.receipt_inbox_service is not None:
             self.receipt_refresh_timer.start()
+        if self._automatic_submission_pull and not self._submission_pull_started:
+            self._submission_pull_started = True
+            QTimer.singleShot(0, self._pull_submissions_on_open)
+
+    def _pull_submissions_on_open(self) -> None:
+        control = self.gale_control_service
+        if control is None or not control.auto_pull_enabled() or self._close_pending:
+            return
+        thread = QThread(self)
+        worker = _GaleWorker(control.check_submissions_now, refresh_receipts=True)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._submissions_pulled)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._submission_pull_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._submission_pull_thread = thread
+        self._submission_pull_worker = worker
+        thread.start()
+
+    @Slot(object, object, bool)
+    def _submissions_pulled(self, _result, error, _refresh) -> None:
+        if error is None:
+            self.refresh_external_receipts()
+
+    @Slot()
+    def _submission_pull_finished(self) -> None:
+        self._submission_pull_thread = None
+        self._submission_pull_worker = None
+        if self._close_pending:
+            QTimer.singleShot(0, self.close)
 
     def _editor_close_ready(self) -> None:
         if self._pending_switch is not None:
@@ -1088,6 +1125,16 @@ class MainWindow(QMainWindow):
                     self.body_edit.prepareClose()
             return
         if self.force_save_current_note():
+            if self._submission_pull_thread is not None:
+                event.ignore()
+                return
+            dialog = self.ai_center_dialog
+            if dialog is not None and (
+                dialog._greencloud_followup_running or dialog._greencloud_followup_queued
+            ):
+                event.ignore()
+                QTimer.singleShot(50, self.close)
+                return
             controller = self.remote_reminder_controller
             if controller is not None and getattr(controller, "_threads", None):
                 event.ignore()

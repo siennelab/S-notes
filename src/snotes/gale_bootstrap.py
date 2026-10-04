@@ -14,15 +14,19 @@ from src.snotes.application.gale_service import (
     GaleMirrorService,
     GalePublishService,
     GalePullService,
+    GreenCloudPullService,
 )
+from src.snotes.application.greencloud_receipt_service import GreenCloudReceiptService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
-from src.snotes.application.ports import GaleOutboxTransport, GalePublishTransport
+from src.snotes.application.ports import GaleOutboxTransport, GalePublishTransport, GreenCloudOutboxTransport
+from src.services.actor_mirror_publish_service import ActorMirrorPublisher, SshActorMirrorTransport
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.markdown import markdown_to_plain_text
 from src.snotes.storage.gale_mirror import SQLiteGaleMirrorWriter
 from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
 from src.snotes.storage.repositories.ai_receipts import SQLiteAiReceiptInboxRepository
+from src.snotes.storage.repositories.ai_mcp_operations import SQLiteAiMcpOperationRepository
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
 from src.snotes.storage.repositories.tags import SQLiteTagsRepository
@@ -33,6 +37,7 @@ from src.snotes.transport.gale.remote import (
     SystemOraclePublishTransport,
 )
 from src.snotes.transport.gale.settings import JsonGaleRuntimeSettings
+from src.snotes.transport.greencloud.outbox import SystemGreenCloudOutboxTransport
 
 
 DATA_ROOT_ENV = "S_NOTES_DATA_ROOT"
@@ -44,6 +49,8 @@ def build_gale_control_service(
     publish_transport: GalePublishTransport | None = None,
     outbox_transport: GaleOutboxTransport | None = None,
     outbox_mode: str = "production",
+    greencloud_transport: GreenCloudOutboxTransport | None = None,
+    actor_publisher: ActorMirrorPublisher | None = None,
 ) -> GaleControlService:
     root = resolve_gale_data_root(data_root)
     connections = initialize_database(root / "s_notes.db")
@@ -57,6 +64,7 @@ def build_gale_control_service(
         notes=NoteService(notes),
         tags=TagService(tags),
         ai_metadata=metadata,
+        mcp_operations=SQLiteAiMcpOperationRepository(connections, tags),
     )
     return compose_gale_control(
         root,
@@ -69,6 +77,8 @@ def build_gale_control_service(
         publish_transport=publish_transport,
         outbox_transport=outbox_transport,
         outbox_mode=outbox_mode,
+        greencloud_transport=greencloud_transport,
+        actor_publisher=actor_publisher,
     )
 
 
@@ -84,6 +94,8 @@ def compose_gale_control(
     publish_transport: GalePublishTransport | None = None,
     outbox_transport: GaleOutboxTransport | None = None,
     outbox_mode: str = "production",
+    greencloud_transport: GreenCloudOutboxTransport | None = None,
+    actor_publisher: ActorMirrorPublisher | None = None,
 ) -> GaleControlService:
     settings = JsonGaleRuntimeSettings(root / "config" / "gale_runtime.json")
     mirror = GaleMirrorService(
@@ -115,7 +127,32 @@ def compose_gale_control(
         audit,
         expected_source_actor=expected_source_actor,
     )
-    return GaleControlService(publish, pull, settings)
+    # Isolated/staging and injected Gale tests retain their existing single
+    # source behavior. Production reuses the already installed mirror SSH key.
+    formal_root = Path.home() / "Library" / "Application Support" / "S-notes"
+    use_greencloud = greencloud_transport is not None or (
+        outbox_mode == "production"
+        and outbox_transport is None
+        and root.resolve() == formal_root.resolve()
+        and DATA_ROOT_ENV not in os.environ
+    )
+    if not use_greencloud:
+        return GaleControlService(publish, pull, settings)
+    cloud_transport = greencloud_transport or SystemGreenCloudOutboxTransport()
+    publisher = actor_publisher or ActorMirrorPublisher(
+        source_database=root / "s_notes.db",
+        redaction_rules=root / "config" / "local_redaction_rules.json",
+        mirror_directory=root / "exports" / "greencloud-mirrors",
+        state_path=root / "config" / "actor_mirror_publish_state.json",
+        lock_path=root / "config" / "actor_mirror_publish.lock",
+        transport=SshActorMirrorTransport(),
+    )
+    followup = GreenCloudReceiptService(receipts, cloud_transport, publisher)
+    return GaleControlService(
+        publish, pull, settings,
+        greencloud_pull=GreenCloudPullService(cloud_transport, receipts, audit),
+        greencloud_followup=followup.flush,
+    )
 
 
 def resolve_gale_data_root(data_root: Path | None) -> Path:

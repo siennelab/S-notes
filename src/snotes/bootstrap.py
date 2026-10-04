@@ -139,6 +139,9 @@ def build_application(
         gale_control_service=gale_control_service,
         reminder_service=reminder_service,
         remote_reminder_controller=remote_controller,
+        automatic_submission_pull=(
+            data_root is None and DATA_ROOT_ENV not in os.environ
+        ),
     )
     if remote_controller is not None:
         from src.snotes.ui.reminder_legacy_check import start_legacy_check

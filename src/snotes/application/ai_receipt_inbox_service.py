@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from enum import Enum
 
@@ -42,7 +43,16 @@ from src.snotes.domain.ai_receipts import (
     RECEIPT_STATUS_DISCARDED,
     AiReceiptAcceptCommand,
     AiReceiptInboxItem,
+    BulkRejectResult,
     GaleReceiptImport,
+    GreenCloudReceiptImport,
+)
+from src.snotes.domain.greencloud import (
+    GREEN_CLOUD_ACTORS,
+    GREEN_CLOUD_OPERATIONS,
+    GREEN_CLOUD_SOURCE,
+    GreenCloudSubmission,
+    GreenCloudTerminalReceipt,
 )
 from src.snotes.domain.models import Directory, Note, NoteLocation
 
@@ -53,6 +63,7 @@ class ReceiptDeleteReason(str, Enum):
     NOT_PROCESSED = "not_processed"
     ACCEPTED_LINKED_NOTE = "accepted_linked_note"
     CONCURRENT_CHANGE = "concurrent_change"
+    REMOTE_SYNC_PENDING = "remote_sync_pending"
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +275,143 @@ class AiReceiptInboxService:
         """Idempotently create a pending receipt; never a formal note."""
         return self._receipts.import_gale_pending(submission)
 
+    def import_greencloud_pending(
+        self,
+        submission: GreenCloudSubmission,
+    ) -> tuple[AiReceiptInboxItem, bool]:
+        """Adapt a validated Cloud envelope into the formal local lifecycle."""
+
+        if (
+            submission.source_actor not in GREEN_CLOUD_ACTORS
+            or submission.operation_type not in GREEN_CLOUD_OPERATIONS
+            or submission.delivery_state != "delivered"
+        ):
+            raise ValueError("GreenCloud 投稿身份或操作无效。")
+        local_request_id = _greencloud_local_request_id(
+            submission.source_actor,
+            submission.request_id,
+        )
+        values = self._greencloud_import_values(submission)
+        return self._receipts.import_greencloud_pending(
+            GreenCloudReceiptImport(
+                submission_uuid=submission.submission_uuid,
+                source_actor=submission.source_actor,
+                cloud_request_id=submission.request_id,
+                local_request_id=local_request_id,
+                local_idempotency_key=local_request_id,
+                operation_type=submission.operation_type,
+                title=values["title"],
+                body=values["body"],
+                location=values["location"],
+                tags=values["tags"],
+                ai_visibility=values["visibility"],
+                ai_targets=values["target_ids"],
+                target_note_id=submission.note_id,
+                expected_updated_at=values["expected_updated_at"],
+                operation_payload=dict(submission.payload),
+                cloud_expected_version=submission.expected_version,
+            )
+        )
+
+    def _greencloud_import_values(self, submission: GreenCloudSubmission) -> dict:
+        payload = submission.payload
+        if submission.operation_type == "create":
+            required = {
+                "title", "content", "directory_id",
+                "main_category", "sub_category", "tags",
+            }
+            if not isinstance(payload, dict) or set(payload) != required:
+                raise ValueError("GreenCloud create 提案内容无效。")
+            title = payload["title"]
+            body = payload["content"]
+            tags = payload["tags"]
+            if (
+                not isinstance(title, str)
+                or not title.strip()
+                or not isinstance(body, str)
+                or not body
+                or not isinstance(tags, list)
+                or any(not isinstance(tag, str) for tag in tags)
+            ):
+                raise ValueError("GreenCloud create 提案内容无效。")
+            directory_id = payload["directory_id"]
+            main = payload["main_category"]
+            sub = payload["sub_category"]
+            if directory_id is not None and type(directory_id) is not int:
+                raise ValueError("GreenCloud create 目录无效。")
+            if main is not None and not isinstance(main, str):
+                raise ValueError("GreenCloud create 分类无效。")
+            if sub is not None and not isinstance(sub, str):
+                raise ValueError("GreenCloud create 分类无效。")
+            if main is None and sub is not None:
+                raise ValueError("GreenCloud create 分类无效。")
+            requested = (
+                NoteLocation(str(main).strip(), str(sub or "无").strip() or "无")
+                if main is not None and str(main).strip()
+                else NoteLocation()
+            )
+            selected = self._authorization.resolve_directory(
+                directory_id=directory_id,
+                location=requested if directory_id is None else None,
+            )
+            location = selected.location if selected is not None else requested
+            return {
+                "title": title.strip(),
+                "body": body,
+                "location": location,
+                "tags": tuple(str(tag).strip() for tag in tags if str(tag).strip()),
+                "visibility": "full",
+                "target_ids": (submission.source_actor,),
+                "expected_updated_at": None,
+            }
+
+        expected_keys = {"content"} if submission.operation_type == "append" else {"edits"}
+        if not isinstance(payload, dict) or set(payload) != expected_keys:
+            raise ValueError("GreenCloud 正文提案内容无效。")
+        if submission.note_id is None or not submission.expected_version:
+            raise ValueError("GreenCloud 正文提案缺少目标或版本。")
+        if submission.operation_type == "append":
+            content = payload["content"]
+            if not isinstance(content, str) or not content:
+                raise ValueError("GreenCloud append 提案内容无效。")
+            body = content
+        else:
+            edits = payload["edits"]
+            if not isinstance(edits, list) or not edits:
+                raise ValueError("GreenCloud edit 提案内容无效。")
+            body = "\n\n".join(
+                f"[{index}] {item.get('old_markdown', '')} → {item.get('new_markdown', '')}"
+                for index, item in enumerate(edits, 1)
+                if isinstance(item, dict)
+            )
+        notes, tags, metadata = self._require_lifecycle_dependencies()
+        note = notes.get_note(submission.note_id)
+        if note is None:
+            return {
+                "title": f"Cloud {submission.operation_type} #{submission.note_id}",
+                "body": body,
+                "location": NoteLocation(),
+                "tags": (),
+                "visibility": "hidden",
+                "target_ids": (submission.source_actor,),
+                "expected_updated_at": f"cloud-version-mismatch:{submission.expected_version}",
+            }
+        access = metadata.get_note_metadata(note.id)
+        expected_updated_at = (
+            note.updated_at
+            if _note_version_token(note.id, note.updated_at) == submission.expected_version
+            else f"cloud-version-mismatch:{submission.expected_version}"
+        )
+        return {
+            "title": note.title,
+            "body": body,
+            "location": note.location,
+            "tags": tuple(tags.get_note_tags(note.id)),
+            "visibility": access.visibility,
+            "target_ids": tuple(access.target_ids),
+            "expected_updated_at": expected_updated_at,
+        }
+
     def mcp_confirmation_required(
         self,
         operation_type: str,
@@ -351,6 +499,47 @@ class AiReceiptInboxService:
 
     def mcp_create_pending(self, **values) -> dict:
         return self._require_mcp_operations().create_pending(**values)
+
+    def pending_greencloud_terminal_receipts(
+        self,
+    ) -> tuple[GreenCloudTerminalReceipt, ...]:
+        return self._receipts.pending_greencloud_terminal_receipts()
+
+    def mark_greencloud_receipt_sent(
+        self,
+        receipt_id: int,
+        fingerprint: str,
+    ) -> bool:
+        return self._receipts.mark_greencloud_receipt_sent(
+            receipt_id,
+            fingerprint,
+        )
+
+    def mark_greencloud_mirror_published(
+        self,
+        receipt_id: int,
+        fingerprint: str,
+    ) -> bool:
+        return self._receipts.mark_greencloud_mirror_published(
+            receipt_id,
+            fingerprint,
+        )
+
+    def reject_pending_by_actor(
+        self,
+        *,
+        source: str,
+        actor_target_id: str,
+    ) -> BulkRejectResult:
+        if source != GREEN_CLOUD_SOURCE:
+            raise ValueError("批量拒绝仅适用于单一 GreenCloud 来源。")
+        if actor_target_id not in GREEN_CLOUD_ACTORS:
+            raise ValueError("GreenCloud actor 无效。")
+        receipt_ids = self._receipts.reject_pending_by_actor(
+            source=source,
+            actor_target_id=actor_target_id,
+        )
+        return BulkRejectResult(source, actor_target_id, receipt_ids)
 
     def receipt_target_state(
         self,
@@ -488,6 +677,11 @@ class AiReceiptInboxService:
                 elif operation_type == "edit":
                     edits = parse_pending_body_payload(raw_payload, operation_type)
                     assert isinstance(edits, list)
+                    if receipt.source == GREEN_CLOUD_SOURCE and any(
+                        current_note.content_markdown.count(edit["old_markdown"]) != 1
+                        for edit in edits
+                    ):
+                        raise StaleNoteProposalError("修改原文已不能在当前正文中唯一匹配。")
                     candidate = build_canonical_edit_candidate(
                         current_note.content_markdown,
                         edits,
@@ -505,6 +699,9 @@ class AiReceiptInboxService:
                     canonical_markdown = candidate.final_markdown
                 if operation_type != "metadata" and not canonical_markdown.strip():
                     raise CanonicalizationError("Empty canonical body")
+            except StaleNoteProposalError as error:
+                outcome_status = OperationStatus.CONFLICT
+                failure_reason = str(error)
             except CanonicalizationError:
                 outcome_status = OperationStatus.REJECTED
                 failure_reason = "无法生成稳定的 Markdown 正文。"
@@ -598,8 +795,19 @@ class AiReceiptInboxService:
         try:
             return self._accept_receipt(receipt_id, fields)
         except (ValueError, CanonicalizationError) as error:
+            receipt = self._receipts.get(receipt_id)
+            if (
+                receipt is not None
+                and receipt.pending
+                and receipt.source == GREEN_CLOUD_SOURCE
+            ):
+                receipt = self._receipts.reject_pending_decision(
+                    receipt_id,
+                    result_status=OperationStatus.REJECTED,
+                    reason=str(error),
+                )
             return AcceptReceiptResult(
-                self._receipts.get(receipt_id), None, False, False,
+                receipt, None, False, False,
                 AcceptanceOutcome(AcceptanceKind.REJECTED, str(error)),
             )
 
@@ -664,12 +872,15 @@ class AiReceiptInboxService:
             fields.target_ids,
         )
 
+        canonical_content = canonicalize_new_note(
+            fields.body,
+            canonicalize=self.canonicalize_markdown,
+        )
+        if receipt.source == GREEN_CLOUD_SOURCE and not canonical_content.strip():
+            raise CanonicalizationError("Empty canonical body")
         command = AiReceiptAcceptCommand(
             title=fields.title.strip() or "未命名 AI 回执",
-            content_markdown=canonicalize_new_note(
-                fields.body,
-                canonicalize=self.canonicalize_markdown,
-            ),
+            content_markdown=canonical_content,
             location=location,
             tags=tags_value,
             visibility=visibility,
@@ -724,6 +935,14 @@ class AiReceiptInboxService:
                 False,
                 ReceiptDeleteReason.NOT_PROCESSED,
                 "待确认回执不能通过已处理删除入口删除。",
+            )
+        if receipt.source == GREEN_CLOUD_SOURCE and any(
+            terminal.receipt_id == receipt.id
+            for terminal in self.pending_greencloud_terminal_receipts()
+        ):
+            return DeleteProcessedReceiptResult(
+                receipt_id, False, ReceiptDeleteReason.REMOTE_SYNC_PENDING,
+                "云端终态回执尚未同步，暂时保留用于重试。",
             )
         if receipt.status == RECEIPT_STATUS_ACCEPTED and receipt.note_id is not None:
             return DeleteProcessedReceiptResult(
@@ -786,3 +1005,13 @@ class AiReceiptInboxService:
                     seen.add(target_id)
                     target_ids.append(target_id)
         return target_ids
+
+
+def _greencloud_local_request_id(source_actor: str, request_id: str) -> str:
+    digest = hashlib.sha256(str(request_id).encode("utf-8")).hexdigest()
+    return f"greencloud:{source_actor}:{digest}"
+
+
+def _note_version_token(note_id: int, updated_at: str) -> str:
+    material = f"{int(note_id)}\0{updated_at}".encode("utf-8")
+    return "snotes-v1-" + hashlib.sha256(material).hexdigest()

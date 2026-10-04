@@ -1,0 +1,1 @@
+"""GreenCloud proposal delivery adapters."""

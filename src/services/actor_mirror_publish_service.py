@@ -188,6 +188,15 @@ class ActorMirrorPublisher:
         self.transport = transport
 
     def publish(self) -> tuple[ActorPublishResult, ...]:
+        return self._publish(SUPPORTED_ACTORS)
+
+    def publish_actor(self, actor: str) -> ActorPublishResult:
+        """Use the existing pipeline for the one actor whose proposal changed."""
+        if actor not in SUPPORTED_ACTORS:
+            raise ActorMirrorPublishError("unknown_actor")
+        return self._publish((actor,))[0]
+
+    def _publish(self, actors: tuple[str, ...]) -> tuple[ActorPublishResult, ...]:
         self._validate_paths()
         self.mirror_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -209,7 +218,7 @@ class ActorMirrorPublisher:
             state = _load_state(self.state_path)
             service = self._compose_service()
             results: list[ActorPublishResult] = []
-            for actor in SUPPORTED_ACTORS:
+            for actor in actors:
                 try:
                     result = self._publish_actor(actor, service, state)
                 except Exception as error:
