@@ -1,0 +1,2 @@
+# Fixed arguments, no caller-controlled database, path, actor or executable.
+snotes-publish ALL=(snotes) NOPASSWD: /usr/local/sbin/snotes-notes-outbox-transport export, /usr/local/sbin/snotes-notes-outbox-transport acknowledge, /usr/local/sbin/snotes-notes-outbox-transport receipt

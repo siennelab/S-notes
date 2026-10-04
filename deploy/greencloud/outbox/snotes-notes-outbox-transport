@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+test "$#" -eq 1
+case "$1" in
+    export|acknowledge|receipt) ;;
+    *) exit 64 ;;
+esac
+cd /srv/snotes/runtime
+exec /usr/bin/env -i PATH=/usr/bin:/bin HOME=/srv/snotes \
+    /srv/snotes/runtime/.venv/bin/python -I -B /srv/snotes/outbox-deploy/transport.py "$1"

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+cd /srv/snotes/runtime
+exec /usr/bin/env -i PATH=/usr/bin:/bin HOME=/srv/snotes \
+    /srv/snotes/runtime/.venv/bin/python -I -B /srv/snotes/outbox-deploy/backup.py

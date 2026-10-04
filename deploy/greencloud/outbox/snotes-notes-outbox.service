@@ -1,0 +1,33 @@
+[Unit]
+Description=S-notes actor-authenticated Notes proposal outbox
+After=network.target
+
+[Service]
+Type=simple
+User=snotes
+Group=snotes
+WorkingDirectory=/srv/snotes/runtime
+Environment=HOME=/srv/snotes
+Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=reminder-api.json:/root/greencloud-secrets/reminder-api.json
+ExecStart=/srv/snotes/runtime/.venv/bin/python -B -m src.cloud_outbox
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/snotes/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET
+
+[Install]
+WantedBy=multi-user.target

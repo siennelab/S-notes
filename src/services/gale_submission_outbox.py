@@ -15,10 +15,25 @@ from typing import Any
 
 
 OUTBOX_SCHEMA_VERSION = 2
+GENERALIZED_OUTBOX_SCHEMA_VERSION = 3
+GALE_EXPORT_SCHEMA_VERSION = OUTBOX_SCHEMA_VERSION
 GALE_STAGING_ACTOR = "gale-staging"
 GALE_PRODUCTION_ACTOR = "gale"
+CLAUDE_CODE_ACTOR = "claude-code"
+CLAWBOT_ACTOR = "clawbot"
+SOURCE_ACTORS = frozenset(
+    {
+        GALE_STAGING_ACTOR,
+        GALE_PRODUCTION_ACTOR,
+        CLAUDE_CODE_ACTOR,
+        CLAWBOT_ACTOR,
+    }
+)
 GALE_SOURCE_ACTORS = frozenset({GALE_STAGING_ACTOR, GALE_PRODUCTION_ACTOR})
-DELIVERY_STATES = frozenset({"queued", "delivered", "acknowledged"})
+TERMINAL_STATES = frozenset({"accepted", "rejected", "conflict"})
+DELIVERY_STATES = frozenset(
+    {"queued", "delivered", "acknowledged", *TERMINAL_STATES}
+)
 MAX_TITLE_LENGTH = 200
 MAX_CONTENT_LENGTH = 50_000
 MAX_DIRECTORY_LENGTH = 200
@@ -26,8 +41,17 @@ MAX_TAG_LENGTH = 50
 MAX_TAG_COUNT = 20
 MAX_AI_TARGET_COUNT = 20
 MAX_IDEMPOTENCY_KEY_LENGTH = 200
+MAX_REQUEST_ID_LENGTH = 128
+MAX_OPERATION_TYPE_LENGTH = 64
+MAX_NOTE_ID_LENGTH = 200
+MAX_EXPECTED_VERSION_LENGTH = 200
+MAX_OPERATION_PAYLOAD_BYTES = 512 * 1024
+MAX_RECEIPT_PAYLOAD_BYTES = 50_000
+DEFAULT_NON_TERMINAL_LIMIT = 50
 MAX_EXPORT_COUNT = 100
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+REQUEST_ID_PATTERN = re.compile(r"^\S+$")
+OPERATION_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class GaleSubmissionOutboxError(RuntimeError):
@@ -56,6 +80,12 @@ class GaleSubmission:
     delivered_at: str | None
     acknowledged_at: str | None
     local_receipt_id: str | None
+    operation_type: str = "create"
+    note_id: str | None = None
+    expected_version: str | None = None
+    operation_payload: dict[str, Any] | None = None
+    terminal_at: str | None = None
+    receipt_payload: dict[str, Any] | None = None
 
     def transport_payload(self) -> dict[str, Any]:
         return {
@@ -89,8 +119,39 @@ class GaleSubmission:
             "local_receipt_id": self.local_receipt_id,
         }
 
+    def operation_transport_payload(self) -> dict[str, Any]:
+        """Return the generalized proposal contract used by Cloud writeback."""
+        return {
+            "submission_uuid": self.submission_uuid,
+            "source_actor": self.source_actor,
+            "request_id": self.idempotency_key,
+            "operation_type": self.operation_type,
+            "note_id": self.note_id,
+            "expected_version": self.expected_version,
+            "payload": dict(self.operation_payload or {}),
+            "created_at": self.created_at,
+            "delivery_state": self.delivery_state,
+            "delivered_at": self.delivered_at,
+        }
 
-SUBMISSIONS_TABLE_SQL = """
+    def operation_status_payload(self, *, duplicate: bool = False) -> dict[str, Any]:
+        """Return status metadata without exposing an operation's private payload."""
+        return {
+            "submission_uuid": self.submission_uuid,
+            "request_id": self.idempotency_key,
+            "operation_type": self.operation_type,
+            "note_id": self.note_id,
+            "delivery_state": self.delivery_state,
+            "duplicate": bool(duplicate),
+            "created_at": self.created_at,
+            "delivered_at": self.delivered_at,
+            "acknowledged_at": self.acknowledged_at,
+            "terminal_at": self.terminal_at,
+            "receipt": dict(self.receipt_payload or {}),
+        }
+
+
+LEGACY_SUBMISSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS submissions (
     submission_uuid TEXT PRIMARY KEY,
     source_actor TEXT NOT NULL
@@ -131,13 +192,92 @@ CREATE TABLE IF NOT EXISTS submissions (
     )
 )
 """
+
+GENERALIZED_SUBMISSIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS submissions (
+    submission_uuid TEXT PRIMARY KEY,
+    source_actor TEXT NOT NULL,
+    external_submission_id TEXT NOT NULL UNIQUE,
+    idempotency_key TEXT NOT NULL,
+    operation_type TEXT NOT NULL,
+    note_id TEXT,
+    expected_version TEXT,
+    operation_payload_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(operation_payload_json)),
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    suggested_directory TEXT NOT NULL DEFAULT ''
+        CHECK (length(suggested_directory) <= 200),
+    suggested_tags_json TEXT NOT NULL DEFAULT '[]',
+    proposal_metadata_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(proposal_metadata_json)),
+    created_at TEXT NOT NULL,
+    delivery_state TEXT NOT NULL DEFAULT 'queued'
+        CHECK (delivery_state IN (
+            'queued', 'delivered', 'acknowledged',
+            'accepted', 'rejected', 'conflict'
+        )),
+    delivered_at TEXT,
+    acknowledged_at TEXT,
+    local_receipt_id TEXT,
+    terminal_at TEXT,
+    receipt_payload_json TEXT,
+    UNIQUE (source_actor, idempotency_key),
+    CHECK (
+        (delivery_state = 'queued'
+            AND delivered_at IS NULL
+            AND acknowledged_at IS NULL
+            AND local_receipt_id IS NULL
+            AND terminal_at IS NULL
+            AND receipt_payload_json IS NULL)
+        OR
+        (delivery_state = 'delivered'
+            AND delivered_at IS NOT NULL
+            AND acknowledged_at IS NULL
+            AND local_receipt_id IS NULL
+            AND terminal_at IS NULL
+            AND receipt_payload_json IS NULL)
+        OR
+        (delivery_state = 'acknowledged'
+            AND delivered_at IS NOT NULL
+            AND acknowledged_at IS NOT NULL
+            AND local_receipt_id IS NOT NULL
+            AND length(local_receipt_id) > 0
+            AND terminal_at IS NULL
+            AND receipt_payload_json IS NULL)
+        OR
+        (delivery_state IN ('accepted', 'rejected', 'conflict')
+            AND delivered_at IS NOT NULL
+            AND acknowledged_at IS NOT NULL
+            AND local_receipt_id IS NOT NULL
+            AND length(local_receipt_id) > 0
+            AND terminal_at IS NOT NULL
+            AND receipt_payload_json IS NOT NULL
+            AND json_valid(receipt_payload_json))
+    )
+)
+"""
 DELIVERY_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_submissions_delivery
 ON submissions(delivery_state, created_at, submission_uuid)
 """
+ACTOR_STATE_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_submissions_actor_state
+ON submissions(source_actor, delivery_state, created_at, submission_uuid)
+"""
 
 
-def initialize_outbox(database_path: Path) -> None:
+def initialize_outbox(
+    database_path: Path,
+    *,
+    generalized: bool = False,
+) -> None:
+    """Initialize an outbox.
+
+    The default remains the frozen Oracle Gale schema.  Generalized proposal
+    storage is deliberately opt-in so deploying this module cannot silently
+    migrate either Oracle database.
+    """
     path = _validated_database_path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.parent.is_symlink():
@@ -147,13 +287,30 @@ def initialize_outbox(database_path: Path) -> None:
     try:
         connection.execute("BEGIN IMMEDIATE")
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version > OUTBOX_SCHEMA_VERSION:
+        maximum_version = GENERALIZED_OUTBOX_SCHEMA_VERSION
+        if schema_version > maximum_version:
             raise GaleSubmissionOutboxError("outbox_schema_too_new")
-        connection.execute(SUBMISSIONS_TABLE_SQL)
+        if generalized:
+            if not _submissions_table_exists(connection):
+                connection.execute(GENERALIZED_SUBMISSIONS_TABLE_SQL)
+            else:
+                if not _is_generalized_schema(connection):
+                    _migrate_legacy_metadata(connection)
+                    _rebuild_generalized_schema(connection)
+            connection.execute(ACTOR_STATE_INDEX_SQL)
+            target_version = GENERALIZED_OUTBOX_SCHEMA_VERSION
+        else:
+            if schema_version == GENERALIZED_OUTBOX_SCHEMA_VERSION:
+                # Generalized outboxes remain usable by legacy Gale helpers,
+                # but default initialization never rewrites them.
+                target_version = GENERALIZED_OUTBOX_SCHEMA_VERSION
+            else:
+                connection.execute(LEGACY_SUBMISSIONS_TABLE_SQL)
+                _migrate_legacy_metadata(connection)
+                target_version = OUTBOX_SCHEMA_VERSION
         connection.execute(DELIVERY_INDEX_SQL)
-        _migrate_schema(connection)
-        if schema_version < OUTBOX_SCHEMA_VERSION:
-            connection.execute(f"PRAGMA user_version = {OUTBOX_SCHEMA_VERSION}")
+        if schema_version < target_version:
+            connection.execute(f"PRAGMA user_version = {target_version}")
         connection.commit()
     except Exception:
         connection.rollback()
@@ -190,7 +347,7 @@ def create_submission(
         sub_category=sub_category,
         tags=tags,
     )
-    normalized_actor = _validated_source_actor(source_actor)
+    normalized_actor = _validated_gale_source_actor(source_actor)
     normalized_key = _optional_text(
         idempotency_key,
         "idempotency_key",
@@ -205,13 +362,24 @@ def create_submission(
     connection = _connect(path)
     try:
         connection.execute("BEGIN IMMEDIATE")
+        generalized = _is_generalized_schema(connection)
+        idempotency_where = (
+            "source_actor = ? AND idempotency_key = ?"
+            if generalized
+            else "idempotency_key = ?"
+        )
+        idempotency_parameters: tuple[object, ...] = (
+            (normalized_actor, stable_key)
+            if generalized
+            else (stable_key,)
+        )
         existing = connection.execute(
-            """
+            f"""
             SELECT *
             FROM submissions
-            WHERE idempotency_key = ?
+            WHERE {idempotency_where}
             """,
-            (stable_key,),
+            idempotency_parameters,
         ).fetchone()
         if existing is not None:
             if str(existing["source_actor"]) != normalized_actor:
@@ -219,45 +387,63 @@ def create_submission(
             connection.commit()
             return _submission_from_row(existing), True
         try:
-            connection.execute(
-                """
-                INSERT INTO submissions (
-                    submission_uuid, source_actor, external_submission_id,
-                    idempotency_key, title, content, suggested_directory,
-                    suggested_tags_json, proposal_metadata_json, created_at,
-                    delivery_state
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
-                """,
-                (
-                    submission_uuid,
-                    normalized_actor,
-                    submission_uuid,
-                    stable_key,
-                    normalized_title,
-                    normalized_content,
-                    normalized_directory,
-                    json.dumps(
-                        normalized_tags,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                    json.dumps(
-                        proposal_metadata,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                    created_at,
+            columns = """
+                submission_uuid, source_actor, external_submission_id,
+                idempotency_key, title, content, suggested_directory,
+                suggested_tags_json, proposal_metadata_json, created_at,
+                delivery_state
+            """
+            placeholders = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued'"
+            values: tuple[object, ...] = (
+                submission_uuid,
+                normalized_actor,
+                submission_uuid,
+                stable_key,
+                normalized_title,
+                normalized_content,
+                normalized_directory,
+                json.dumps(
+                    normalized_tags,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
                 ),
+                json.dumps(
+                    proposal_metadata,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                created_at,
+            )
+            if generalized:
+                columns = f"operation_type, operation_payload_json, {columns}"
+                placeholders = f"?, ?, {placeholders}"
+                values = (
+                    "create",
+                    json.dumps(
+                        {
+                            "title": normalized_title,
+                            "content": normalized_content,
+                            "suggested_directory": normalized_directory,
+                            "suggested_tags": list(normalized_tags),
+                            **proposal_metadata,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    *values,
+                )
+            connection.execute(
+                f"INSERT INTO submissions ({columns}) VALUES ({placeholders})",
+                values,
             )
         except sqlite3.IntegrityError:
             existing = connection.execute(
-                """
+                f"""
                 SELECT *
                 FROM submissions
-                WHERE idempotency_key = ?
+                WHERE {idempotency_where}
                 """,
-                (stable_key,),
+                idempotency_parameters,
             ).fetchone()
             if existing is None:
                 raise
@@ -283,6 +469,240 @@ def create_submission(
     if row is None:
         raise GaleSubmissionOutboxError("submission_create_failed")
     return _submission_from_row(row), False
+
+
+def enqueue_proposal(
+    database_path: Path,
+    *,
+    source_actor: str,
+    request_id: str,
+    operation_type: str,
+    payload: dict[str, Any],
+    note_id: str | int | None = None,
+    expected_version: str | None = None,
+    queue_limit: int = DEFAULT_NON_TERMINAL_LIMIT,
+) -> tuple[GaleSubmission, bool]:
+    """Atomically deduplicate and enqueue a generalized proposal.
+
+    Idempotency is actor-scoped and is checked before the actor's queue cap.
+    Operation allowlists and operation-specific prechecks belong to the caller;
+    deliberately keeping the schema open avoids another table rebuild when new
+    proposal operations are added.
+    """
+    path = _validated_database_path(database_path)
+    normalized_actor = _validated_source_actor(source_actor)
+    normalized_request = _validated_request_id(request_id)
+    normalized_operation = _required_text(
+        operation_type,
+        "operation_type",
+        MAX_OPERATION_TYPE_LENGTH,
+    )
+    if not OPERATION_TYPE_PATTERN.fullmatch(normalized_operation):
+        raise GaleSubmissionOutboxError("operation_type_invalid")
+    normalized_note_id = _normalize_note_id(note_id)
+    normalized_version = _optional_nullable_text(
+        expected_version,
+        "expected_version",
+        MAX_EXPECTED_VERSION_LENGTH,
+    )
+    payload_json, normalized_payload = _normalize_json_object(
+        payload,
+        field="payload",
+        maximum_bytes=MAX_OPERATION_PAYLOAD_BYTES,
+    )
+    if isinstance(queue_limit, bool) or not isinstance(queue_limit, int):
+        raise GaleSubmissionOutboxError("queue_limit_invalid")
+    if not 1 <= queue_limit <= 1_000_000:
+        raise GaleSubmissionOutboxError("queue_limit_invalid")
+
+    submission_uuid = str(uuid.uuid4())
+    created_at = _utc_now()
+    connection = _connect(path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if not _is_generalized_schema(connection):
+            raise GaleSubmissionOutboxError("proposal_schema_required")
+        existing = connection.execute(
+            """
+            SELECT * FROM submissions
+            WHERE source_actor = ? AND idempotency_key = ?
+            """,
+            (normalized_actor, normalized_request),
+        ).fetchone()
+        if existing is not None:
+            connection.commit()
+            return _submission_from_row(existing), True
+        non_terminal_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM submissions
+                WHERE source_actor = ?
+                  AND delivery_state NOT IN ('accepted', 'rejected', 'conflict')
+                """,
+                (normalized_actor,),
+            ).fetchone()[0]
+        )
+        if non_terminal_count >= queue_limit:
+            raise GaleSubmissionOutboxError("queue_full")
+        try:
+            connection.execute(
+                """
+                INSERT INTO submissions (
+                    submission_uuid, source_actor, external_submission_id,
+                    idempotency_key, operation_type, note_id,
+                    expected_version, operation_payload_json, created_at,
+                    delivery_state
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
+                """,
+                (
+                    submission_uuid,
+                    normalized_actor,
+                    submission_uuid,
+                    normalized_request,
+                    normalized_operation,
+                    normalized_note_id,
+                    normalized_version,
+                    payload_json,
+                    created_at,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            existing = connection.execute(
+                """
+                SELECT * FROM submissions
+                WHERE source_actor = ? AND idempotency_key = ?
+                """,
+                (normalized_actor, normalized_request),
+            ).fetchone()
+            if existing is None:
+                raise
+            connection.commit()
+            return _submission_from_row(existing), True
+        row = connection.execute(
+            "SELECT * FROM submissions WHERE submission_uuid = ?",
+            (submission_uuid,),
+        ).fetchone()
+        connection.commit()
+    except sqlite3.OperationalError as error:
+        connection.rollback()
+        if "locked" in str(error).lower():
+            raise GaleSubmissionOutboxError("outbox_busy") from error
+        raise GaleSubmissionOutboxError("outbox_write_failed") from error
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    if row is None:
+        raise GaleSubmissionOutboxError("submission_create_failed")
+    submission = _submission_from_row(row)
+    if submission.operation_payload != normalized_payload:
+        raise GaleSubmissionOutboxError("stored_payload_invalid")
+    return submission, False
+
+
+def get_operation_status(
+    database_path: Path,
+    *,
+    source_actor: str,
+    request_id: str,
+) -> GaleSubmission | None:
+    """Look up a request only within the authenticated actor's namespace."""
+    path = _validated_database_path(database_path)
+    normalized_actor = _validated_source_actor(source_actor)
+    normalized_request = _validated_request_id(request_id)
+    connection = _connect(path)
+    try:
+        if not _is_generalized_schema(connection):
+            raise GaleSubmissionOutboxError("proposal_schema_required")
+        row = connection.execute(
+            """
+            SELECT * FROM submissions
+            WHERE source_actor = ? AND idempotency_key = ?
+            """,
+            (normalized_actor, normalized_request),
+        ).fetchone()
+    finally:
+        connection.close()
+    return _submission_from_row(row) if row is not None else None
+
+
+def record_terminal_receipt(
+    database_path: Path,
+    *,
+    source_actor: str,
+    request_id: str,
+    terminal_state: str,
+    receipt_payload: dict[str, Any] | None = None,
+) -> tuple[GaleSubmission, bool]:
+    """Record an idempotent Mac decision after import acknowledgement."""
+    path = _validated_database_path(database_path)
+    normalized_actor = _validated_source_actor(source_actor)
+    normalized_request = _validated_request_id(request_id)
+    if terminal_state not in TERMINAL_STATES:
+        raise GaleSubmissionOutboxError("terminal_state_invalid")
+    receipt_json, _normalized_receipt = _normalize_json_object(
+        {} if receipt_payload is None else receipt_payload,
+        field="receipt_payload",
+        maximum_bytes=MAX_RECEIPT_PAYLOAD_BYTES,
+    )
+    terminal_at = _utc_now()
+    connection = _connect(path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if not _is_generalized_schema(connection):
+            raise GaleSubmissionOutboxError("proposal_schema_required")
+        row = connection.execute(
+            """
+            SELECT * FROM submissions
+            WHERE source_actor = ? AND idempotency_key = ?
+            """,
+            (normalized_actor, normalized_request),
+        ).fetchone()
+        if row is None:
+            raise GaleSubmissionOutboxError("submission_not_found")
+        if str(row["delivery_state"]) in TERMINAL_STATES:
+            if (
+                str(row["delivery_state"]) != terminal_state
+                or str(row["receipt_payload_json"]) != receipt_json
+            ):
+                raise GaleSubmissionOutboxError("terminal_receipt_conflict")
+            connection.commit()
+            return _submission_from_row(row), True
+        if row["delivery_state"] != "acknowledged":
+            raise GaleSubmissionOutboxError("submission_not_acknowledged")
+        connection.execute(
+            """
+            UPDATE submissions
+            SET delivery_state = ?, terminal_at = ?, receipt_payload_json = ?
+            WHERE submission_uuid = ? AND delivery_state = 'acknowledged'
+            """,
+            (
+                terminal_state,
+                terminal_at,
+                receipt_json,
+                str(row["submission_uuid"]),
+            ),
+        )
+        updated = connection.execute(
+            "SELECT * FROM submissions WHERE submission_uuid = ?",
+            (str(row["submission_uuid"]),),
+        ).fetchone()
+        connection.commit()
+    except sqlite3.OperationalError as error:
+        connection.rollback()
+        if "locked" in str(error).lower():
+            raise GaleSubmissionOutboxError("outbox_busy") from error
+        raise GaleSubmissionOutboxError("outbox_receipt_failed") from error
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    if updated is None:
+        raise GaleSubmissionOutboxError("terminal_receipt_failed")
+    return _submission_from_row(updated), False
 
 
 def export_unacknowledged(
@@ -373,7 +793,9 @@ def acknowledge_submission(
         ).fetchone()
         if row is None:
             raise GaleSubmissionOutboxError("submission_not_found")
-        if row["delivery_state"] == "acknowledged":
+        if row["delivery_state"] == "acknowledged" or str(
+            row["delivery_state"]
+        ) in TERMINAL_STATES:
             if str(row["local_receipt_id"]) != receipt_id:
                 raise GaleSubmissionOutboxError("ack_receipt_conflict")
             connection.commit()
@@ -457,7 +879,7 @@ def _connect(database_path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _migrate_schema(connection: sqlite3.Connection) -> None:
+def _migrate_legacy_metadata(connection: sqlite3.Connection) -> None:
     columns = {
         str(row["name"])
         for row in connection.execute("PRAGMA table_info(submissions)").fetchall()
@@ -470,6 +892,62 @@ def _migrate_schema(connection: sqlite3.Connection) -> None:
                 CHECK (json_valid(proposal_metadata_json))
             """
         )
+
+
+def _is_generalized_schema(connection: sqlite3.Connection) -> bool:
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(submissions)").fetchall()
+    }
+    return {
+        "operation_type",
+        "note_id",
+        "expected_version",
+        "operation_payload_json",
+        "terminal_at",
+        "receipt_payload_json",
+    }.issubset(columns)
+
+
+def _submissions_table_exists(connection: sqlite3.Connection) -> bool:
+    return connection.execute(
+        """
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = 'submissions'
+        """
+    ).fetchone() is not None
+
+
+def _rebuild_generalized_schema(connection: sqlite3.Connection) -> None:
+    """Perform the single v2 -> v3 rebuild, only after explicit opt-in."""
+    connection.execute("ALTER TABLE submissions RENAME TO submissions_legacy")
+    connection.execute(GENERALIZED_SUBMISSIONS_TABLE_SQL)
+    connection.execute(
+        """
+        INSERT INTO submissions (
+            submission_uuid, source_actor, external_submission_id,
+            idempotency_key, operation_type, note_id, expected_version,
+            operation_payload_json, title, content, suggested_directory,
+            suggested_tags_json, proposal_metadata_json, created_at,
+            delivery_state, delivered_at, acknowledged_at, local_receipt_id,
+            terminal_at, receipt_payload_json
+        )
+        SELECT
+            submission_uuid, source_actor, external_submission_id,
+            idempotency_key, 'create', NULL, NULL,
+            json_patch(json_object(
+                'title', title,
+                'content', content,
+                'suggested_directory', suggested_directory,
+                'suggested_tags', json(suggested_tags_json)
+            ), proposal_metadata_json),
+            title, content, suggested_directory, suggested_tags_json,
+            proposal_metadata_json, created_at, delivery_state, delivered_at,
+            acknowledged_at, local_receipt_id, NULL, NULL
+        FROM submissions_legacy
+        """
+    )
+    connection.execute("DROP TABLE submissions_legacy")
 
 
 def _validated_database_path(database_path: Path) -> Path:
@@ -507,6 +985,56 @@ def _optional_text(value: object, field: str, maximum: int) -> str:
     if len(text) > maximum:
         raise GaleSubmissionOutboxError(f"{field}_too_long")
     return text
+
+
+def _optional_nullable_text(
+    value: object,
+    field: str,
+    maximum: int,
+) -> str | None:
+    text = _optional_text(value, field, maximum)
+    return text or None
+
+
+def _normalize_note_id(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise GaleSubmissionOutboxError("note_id_invalid")
+    text = str(value).strip()
+    if not text:
+        raise GaleSubmissionOutboxError("note_id_invalid")
+    if len(text) > MAX_NOTE_ID_LENGTH:
+        raise GaleSubmissionOutboxError("note_id_too_long")
+    if any(ord(character) < 32 for character in text):
+        raise GaleSubmissionOutboxError("note_id_invalid")
+    return text
+
+
+def _normalize_json_object(
+    value: object,
+    *,
+    field: str,
+    maximum_bytes: int,
+) -> tuple[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise GaleSubmissionOutboxError(f"{field}_invalid")
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as error:
+        raise GaleSubmissionOutboxError(f"{field}_invalid") from error
+    if len(encoded.encode("utf-8")) > maximum_bytes:
+        raise GaleSubmissionOutboxError(f"{field}_too_large")
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise GaleSubmissionOutboxError(f"{field}_invalid")
+    return encoded, decoded
 
 
 def _normalize_directory(value: object) -> str:
@@ -620,7 +1148,24 @@ def _validated_uuid(value: object) -> str:
     return str(parsed)
 
 
+def _validated_request_id(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > MAX_REQUEST_ID_LENGTH
+        or REQUEST_ID_PATTERN.fullmatch(value) is None
+    ):
+        raise GaleSubmissionOutboxError("request_id_invalid")
+    return value
+
+
 def _validated_source_actor(value: object) -> str:
+    if not isinstance(value, str) or value not in SOURCE_ACTORS:
+        raise GaleSubmissionOutboxError("source_actor_invalid")
+    return value
+
+
+def _validated_gale_source_actor(value: object) -> str:
     if not isinstance(value, str) or value not in GALE_SOURCE_ACTORS:
         raise GaleSubmissionOutboxError("source_actor_invalid")
     return value
@@ -641,6 +1186,32 @@ def _submission_from_row(row: sqlite3.Row) -> GaleSubmission:
     state = str(row["delivery_state"])
     if state not in DELIVERY_STATES:
         raise GaleSubmissionOutboxError("stored_state_invalid")
+    row_keys = set(row.keys())
+    operation_type = (
+        str(row["operation_type"])
+        if "operation_type" in row_keys
+        else "create"
+    )
+    if not OPERATION_TYPE_PATTERN.fullmatch(operation_type):
+        raise GaleSubmissionOutboxError("stored_operation_type_invalid")
+    operation_payload: dict[str, Any] = {}
+    if "operation_payload_json" in row_keys:
+        try:
+            stored_payload = json.loads(str(row["operation_payload_json"] or "{}"))
+        except json.JSONDecodeError as error:
+            raise GaleSubmissionOutboxError("stored_payload_invalid") from error
+        if not isinstance(stored_payload, dict):
+            raise GaleSubmissionOutboxError("stored_payload_invalid")
+        operation_payload = stored_payload
+    receipt_payload: dict[str, Any] = {}
+    if "receipt_payload_json" in row_keys and row["receipt_payload_json"] is not None:
+        try:
+            stored_receipt = json.loads(str(row["receipt_payload_json"]))
+        except json.JSONDecodeError as error:
+            raise GaleSubmissionOutboxError("stored_receipt_invalid") from error
+        if not isinstance(stored_receipt, dict):
+            raise GaleSubmissionOutboxError("stored_receipt_invalid")
+        receipt_payload = stored_receipt
     return GaleSubmission(
         submission_uuid=_validated_uuid(row["submission_uuid"]),
         source_actor=str(row["source_actor"]),
@@ -670,6 +1241,25 @@ def _submission_from_row(row: sqlite3.Row) -> GaleSubmission:
             if row["local_receipt_id"] is not None
             else None
         ),
+        operation_type=operation_type,
+        note_id=(
+            str(row["note_id"])
+            if "note_id" in row_keys and row["note_id"] is not None
+            else None
+        ),
+        expected_version=(
+            str(row["expected_version"])
+            if "expected_version" in row_keys
+            and row["expected_version"] is not None
+            else None
+        ),
+        operation_payload=operation_payload,
+        terminal_at=(
+            str(row["terminal_at"])
+            if "terminal_at" in row_keys and row["terminal_at"] is not None
+            else None
+        ),
+        receipt_payload=receipt_payload,
     )
 
 
