@@ -124,7 +124,7 @@ class Step10CloudProposalTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_application_queues_three_operations_and_reuses_existing_request_first(self) -> None:
+    def test_application_queues_five_operations_and_reuses_existing_request_first(self) -> None:
         reader = SQLiteCloudMirrorReader(self.mirror_paths[CLAUDE])
         service = CloudProposalService(
             reader, _ActorOutboxGateway(self.outbox, CLAUDE)
@@ -142,6 +142,21 @@ class Step10CloudProposalTests(unittest.TestCase):
             content="redacted-safe append",
             expected_version=REDACTED_VERSION,
         )
+        prepended = service.prepend_note(
+            request_id="app-prepend-redacted",
+            note_id=REDACTED_ID,
+            content="redacted-safe prepend",
+            expected_version=REDACTED_VERSION,
+        )
+        metadata = service.update_note_metadata(
+            request_id="app-metadata",
+            note_id=FULL_ID,
+            expected_version=FULL_VERSION,
+            title="Renamed exactly",
+            directory_id=77,
+            add_tags=["add exact"],
+            remove_tags=["remove exact"],
+        )
         edited = service.edit_note(
             request_id="app-edit",
             note_id=FULL_ID,
@@ -149,12 +164,33 @@ class Step10CloudProposalTests(unittest.TestCase):
             edits=[{"old_markdown": "unique", "new_markdown": "changed"}],
         )
         self.assertEqual(
-            [created["status"], appended["status"], edited["status"]],
-            ["queued", "queued", "queued"],
+            [
+                created["status"], prepended["status"], appended["status"],
+                metadata["status"], edited["status"],
+            ],
+            ["queued", "queued", "queued", "queued", "queued"],
         )
         self.assertEqual(
-            [created["operation_type"], appended["operation_type"], edited["operation_type"]],
-            ["create", "append", "edit"],
+            [
+                created["operation_type"], prepended["operation_type"],
+                appended["operation_type"], metadata["operation_type"],
+                edited["operation_type"],
+            ],
+            ["create", "prepend", "append", "update_note_metadata", "edit"],
+        )
+        stored_metadata = get_operation_status(
+            self.outbox, source_actor=CLAUDE, request_id="app-metadata"
+        )
+        self.assertIsNotNone(stored_metadata)
+        assert stored_metadata is not None
+        self.assertEqual(
+            stored_metadata.operation_payload,
+            {
+                "title": "Renamed exactly",
+                "directory_id": 77,
+                "add_tags": ["add exact"],
+                "remove_tags": ["remove exact"],
+            },
         )
 
         # Idempotency lookup must happen before the mirror is opened and before
@@ -169,6 +205,15 @@ class Step10CloudProposalTests(unittest.TestCase):
         self.assertEqual(duplicate["status"], "queued")
         self.assertTrue(duplicate["duplicate"])
         self.assertEqual(duplicate["note_id"], REDACTED_ID)
+        metadata_duplicate = service.update_note_metadata(
+            request_id="app-metadata",
+            note_id=HIDDEN_ID,
+            expected_version="snotes-v1-" + "f" * 64,
+            title="would otherwise fail",
+        )
+        self.assertEqual(metadata_duplicate["status"], "queued")
+        self.assertTrue(metadata_duplicate["duplicate"])
+        self.assertEqual(metadata_duplicate["note_id"], FULL_ID)
 
     def test_raw_http_cannot_bypass_actor_mirror_or_operation_prechecks(self) -> None:
         create = self._enqueue(
@@ -193,6 +238,22 @@ class Step10CloudProposalTests(unittest.TestCase):
             expected_version=REDACTED_VERSION,
             payload={"content": "redacted append"},
         )
+        prepend_redacted = self._enqueue(
+            CLAUDE,
+            "http-prepend-redacted",
+            "prepend",
+            note_id=REDACTED_ID,
+            expected_version=REDACTED_VERSION,
+            payload={"content": "redacted prepend"},
+        )
+        metadata = self._enqueue(
+            CLAUDE,
+            "http-metadata",
+            "update_note_metadata",
+            note_id=FULL_ID,
+            expected_version=FULL_VERSION,
+            payload={"title": "HTTP title", "add_tags": ["new"]},
+        )
         edit = self._enqueue(
             CLAUDE,
             "http-edit",
@@ -206,9 +267,12 @@ class Step10CloudProposalTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            [create.body["status"], append_full.body["status"],
-             append_redacted.body["status"], edit.body["status"]],
-            ["queued", "queued", "queued", "queued"],
+            [
+                create.body["status"], prepend_redacted.body["status"],
+                append_full.body["status"], append_redacted.body["status"],
+                metadata.body["status"], edit.body["status"],
+            ],
+            ["queued", "queued", "queued", "queued", "queued", "queued"],
         )
 
         stale = self._enqueue(
@@ -258,6 +322,121 @@ class Step10CloudProposalTests(unittest.TestCase):
                     self.outbox, source_actor=actor, request_id=request_id
                 )
             )
+
+    def test_new_operations_reject_stale_extra_and_privilege_fields(self) -> None:
+        stale_prepend = self._enqueue(
+            CLAUDE,
+            "stale-prepend",
+            "prepend",
+            note_id=FULL_ID,
+            expected_version="snotes-v1-" + "0" * 64,
+            payload={"content": "not queued"},
+        )
+        stale_metadata = self._enqueue(
+            CLAUDE,
+            "stale-metadata",
+            "update_note_metadata",
+            note_id=FULL_ID,
+            expected_version="snotes-v1-" + "0" * 64,
+            payload={"title": "not queued"},
+        )
+        self.assertEqual(stale_prepend.body["status"], "conflict")
+        self.assertEqual(stale_metadata.body["status"], "conflict")
+
+        forbidden_payloads = (
+            {"title": "x", "ai_visibility": "full"},
+            {"title": "x", "ai_targets": ["common"]},
+            {"title": "x", "main_category": "private"},
+            {"title": "x", "tags": ["replacement"]},
+        )
+        for index, operation_payload in enumerate(forbidden_payloads):
+            response = self._enqueue(
+                CLAUDE,
+                f"metadata-forbidden-{index}",
+                "update_note_metadata",
+                note_id=FULL_ID,
+                expected_version=FULL_VERSION,
+                payload=operation_payload,
+            )
+            self.assertEqual(response.status, 400)
+            self.assertEqual(response.body, {"error": "payload_invalid"})
+
+        prepend_extra = self._enqueue(
+            CLAUDE,
+            "prepend-extra",
+            "prepend",
+            note_id=FULL_ID,
+            expected_version=FULL_VERSION,
+            payload={"content": "x", "title": "spoof"},
+        )
+        self.assertEqual(prepend_extra.status, 400)
+        self.assertEqual(prepend_extra.body, {"error": "payload_invalid"})
+        delete = self._enqueue(
+            CLAUDE,
+            "delete-still-blocked",
+            "delete",
+            note_id=FULL_ID,
+            expected_version=FULL_VERSION,
+            payload={},
+        )
+        self.assertEqual(delete.status, 403)
+        self.assertEqual(delete.body, {"error": "operation_not_allowed"})
+        for request_id in (
+            "stale-prepend", "stale-metadata", "prepend-extra",
+            "delete-still-blocked",
+            *(f"metadata-forbidden-{index}" for index in range(4)),
+        ):
+            self.assertIsNone(
+                get_operation_status(
+                    self.outbox, source_actor=CLAUDE, request_id=request_id
+                )
+            )
+
+    def test_nullable_metadata_fields_are_preserved_in_the_cloud_payload(self) -> None:
+        metadata_schema = {
+            tool.name: tool for tool in cloud_read_tools(proposal_enabled=True)
+        }["update_note_metadata"].inputSchema
+        expected_types = {
+            "title": {"string", "null"},
+            "directory_id": {"integer", "null"},
+            "add_tags": {"array", "null"},
+            "remove_tags": {"array", "null"},
+        }
+        for field, field_types in expected_types.items():
+            self.assertEqual(
+                set(metadata_schema["properties"][field]["type"]),
+                field_types,
+            )
+        self.assertFalse({"anyOf", "oneOf", "allOf"} & set(metadata_schema))
+
+        response = self._enqueue(
+            CLAUDE,
+            "nullable-metadata",
+            "update_note_metadata",
+            note_id=FULL_ID,
+            expected_version=FULL_VERSION,
+            payload={
+                "title": None,
+                "directory_id": None,
+                "add_tags": None,
+                "remove_tags": None,
+            },
+        )
+        self.assertEqual(response.body["status"], "queued")
+        stored = get_operation_status(
+            self.outbox, source_actor=CLAUDE, request_id="nullable-metadata"
+        )
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(
+            stored.operation_payload,
+            {
+                "title": None,
+                "directory_id": None,
+                "add_tags": None,
+                "remove_tags": None,
+            },
+        )
 
     def test_raw_http_actor_spoofing_and_status_cross_actor_lookup_are_blocked(self) -> None:
         top_level = self._request(
@@ -397,7 +576,7 @@ class Step10CloudProposalTests(unittest.TestCase):
         self.assertEqual(code_literal.body["status"], "queued")
         self.assertEqual(escaped_literal.body["status"], "queued")
 
-    def test_mcp_contract_exposes_only_three_proposals_and_actor_scoped_status(self) -> None:
+    def test_mcp_contract_exposes_five_proposals_and_actor_scoped_status(self) -> None:
         tools = cloud_read_tools(proposal_enabled=True)
         self.assertEqual(
             [tool.name for tool in tools],
@@ -406,23 +585,44 @@ class Step10CloudProposalTests(unittest.TestCase):
                 "get_note",
                 "get_note_markdown",
                 "create_note",
+                "prepend_note",
                 "append_note",
+                "update_note_metadata",
                 "edit_note",
                 "get_operation_status",
             ],
         )
         by_name = {tool.name: tool for tool in tools}
         self.assertEqual(
+            set(by_name["prepend_note"].inputSchema["required"]),
+            {"request_id", "note_id", "content", "expected_version"},
+        )
+        self.assertEqual(
             set(by_name["append_note"].inputSchema["required"]),
             {"request_id", "note_id", "content", "expected_version"},
+        )
+        self.assertEqual(
+            set(by_name["update_note_metadata"].inputSchema["required"]),
+            {"request_id", "note_id", "expected_version"},
+        )
+        self.assertEqual(
+            set(by_name["update_note_metadata"].inputSchema["properties"]),
+            {
+                "request_id", "note_id", "expected_version", "title",
+                "directory_id", "add_tags", "remove_tags",
+            },
         )
         self.assertEqual(
             set(by_name["edit_note"].inputSchema["required"]),
             {"request_id", "note_id", "expected_version", "edits"},
         )
-        for name in ("create_note", "append_note", "edit_note", "get_operation_status"):
+        for name in (
+            "create_note", "prepend_note", "append_note",
+            "update_note_metadata", "edit_note", "get_operation_status",
+        ):
             schema = by_name[name].inputSchema
             self.assertFalse(schema["additionalProperties"])
+            self.assertFalse({"anyOf", "oneOf", "allOf"} & set(schema))
             self.assertFalse(
                 {"actor", "source_actor", "ai_visibility", "ai_targets"}
                 & set(schema["properties"])
@@ -435,22 +635,69 @@ class Step10CloudProposalTests(unittest.TestCase):
             reader, _ActorOutboxGateway(self.outbox, CLAUDE)
         )
         read_service = CloudReadService(reader)
-        for blocked in ("prepend_note", "update_note_metadata", "delete_note"):
-            result = call_cloud_read_tool(
-                read_service,
-                blocked,
-                {"request_id": f"blocked-{blocked}"},
-                proposal_service=proposal_service,
+        prepended = call_cloud_read_tool(
+            read_service,
+            "prepend_note",
+            {
+                "request_id": "mcp-prepend",
+                "note_id": REDACTED_ID,
+                "content": "prepend exact",
+                "expected_version": REDACTED_VERSION,
+            },
+            proposal_service=proposal_service,
+        )
+        metadata = call_cloud_read_tool(
+            read_service,
+            "update_note_metadata",
+            {
+                "request_id": "mcp-metadata",
+                "note_id": FULL_ID,
+                "expected_version": FULL_VERSION,
+                "title": "MCP exact title",
+                "add_tags": ["one"],
+            },
+            proposal_service=proposal_service,
+        )
+        self.assertEqual(prepended["operation_type"], "prepend")
+        self.assertEqual(metadata["operation_type"], "update_note_metadata")
+        spoofed = call_cloud_read_tool(
+            read_service,
+            "update_note_metadata",
+            {
+                "request_id": "mcp-metadata-spoofed",
+                "note_id": FULL_ID,
+                "expected_version": FULL_VERSION,
+                "title": "not queued",
+                "source_actor": CLAWBOT,
+            },
+            proposal_service=proposal_service,
+        )
+        self.assertEqual(spoofed["status"], "rejected")
+        self.assertEqual(spoofed["reason"], "identity_in_body_forbidden")
+        stored_metadata = get_operation_status(
+            self.outbox, source_actor=CLAUDE, request_id="mcp-metadata"
+        )
+        self.assertIsNotNone(stored_metadata)
+        assert stored_metadata is not None
+        self.assertEqual(
+            stored_metadata.operation_payload,
+            {"title": "MCP exact title", "add_tags": ["one"]},
+        )
+        result = call_cloud_read_tool(
+            read_service,
+            "delete_note",
+            {"request_id": "blocked-delete_note"},
+            proposal_service=proposal_service,
+        )
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("operation_not_allowed", result["reason"])
+        self.assertIsNone(
+            get_operation_status(
+                self.outbox,
+                source_actor=CLAUDE,
+                request_id="blocked-delete_note",
             )
-            self.assertEqual(result["status"], "rejected")
-            self.assertIn("operation_not_allowed", result["reason"])
-            self.assertIsNone(
-                get_operation_status(
-                    self.outbox,
-                    source_actor=CLAUDE,
-                    request_id=f"blocked-{blocked}",
-                )
-            )
+        )
 
     def test_terminal_receipt_is_visible_only_to_own_actor(self) -> None:
         queued = self._enqueue(

@@ -17,14 +17,15 @@ from src.services.gale_submission_outbox import (
     enqueue_proposal,
     get_operation_status,
 )
-from src.snotes.storage.cloud_read import SQLiteCloudMirrorReader
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
 DEFAULT_MAX_BODY_BYTES = 640 * 1024
 ALLOWED_ACTORS = frozenset({"claude-code", "clawbot"})
-ALLOWED_OPERATIONS = frozenset({"create", "append", "edit"})
+ALLOWED_OPERATIONS = frozenset(
+    {"create", "prepend", "append", "update_note_metadata", "edit"}
+)
 IDENTITY_FIELDS = frozenset(
     {"actor", "source_actor", "actor_id", "actor_target_id", "identity", "principal", "role"}
 )
@@ -45,7 +46,7 @@ class CloudOutboxHttpApplication:
         database_path: Path,
         credentials: Mapping[str, str],
         *,
-        reader_factory: Callable[[str], object] | None = None,
+        reader_factory: Callable[[str], object],
     ) -> None:
         normalized: dict[str, str] = {}
         for token, actor in credentials.items():
@@ -61,7 +62,7 @@ class CloudOutboxHttpApplication:
             raise ValueError("cloud_outbox_credentials_incomplete")
         self._database_path = Path(database_path)
         self._credentials = normalized
-        self._reader_factory = reader_factory or _production_reader
+        self._reader_factory = reader_factory
         self._request_lock = threading.RLock()
 
     def handle(
@@ -152,14 +153,29 @@ class CloudOutboxHttpApplication:
                     sub_category=operation_payload["sub_category"],
                     tags=operation_payload["tags"],
                 )
-            elif operation_type == "append":
+            elif operation_type in {"prepend", "append"}:
                 if set(operation_payload) != {"content"}:
                     raise ValueError("payload_invalid")
-                result = service.append_note(
+                method = (
+                    service.prepend_note
+                    if operation_type == "prepend"
+                    else service.append_note
+                )
+                result = method(
                     request_id=request_id,
                     note_id=payload["note_id"],
                     content=operation_payload["content"],
                     expected_version=payload["expected_version"],
+                )
+            elif operation_type == "update_note_metadata":
+                allowed = {"title", "directory_id", "add_tags", "remove_tags"}
+                if set(operation_payload) - allowed:
+                    raise ValueError("payload_invalid")
+                result = service.update_note_metadata(
+                    request_id=request_id,
+                    note_id=payload["note_id"],
+                    expected_version=payload["expected_version"],
+                    **operation_payload,
                 )
             else:
                 if set(operation_payload) != {"edits"}:
@@ -311,12 +327,6 @@ def _status_payload(proposal, *, duplicate: bool = False) -> dict:
     if isinstance(note_id, str) and note_id.isdecimal():
         payload["note_id"] = int(note_id)
     return {"status": payload["delivery_state"], **payload}
-
-
-def _production_reader(actor: str) -> SQLiteCloudMirrorReader:
-    if actor not in ALLOWED_ACTORS:
-        raise RuntimeError("unsupported_actor")
-    return SQLiteCloudMirrorReader(Path(f"/srv/snotes/mirror/{actor}/current.db"))
 
 
 def _decode_json_object(

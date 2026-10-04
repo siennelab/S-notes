@@ -521,7 +521,7 @@ class SQLiteAiMcpOperationRepository(AiMcpOperationRepository):
                 connection, note, canonical_markdown=canonical_markdown,
                 timestamp=timestamp, expected_revision=expected_revision,
             )
-        elif operation_type == "metadata":
+        elif operation_type in {"metadata", "update_note_metadata"}:
             result_title = title if title is not None else str(note["title"])
             new_directory_id = (
                 directory_id if directory_id is not None else note["directory_id"]

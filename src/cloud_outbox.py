@@ -10,6 +10,7 @@ import stat
 import sys
 
 from src.services.gale_submission_outbox import initialize_outbox
+from src.snotes.storage.cloud_read import SQLiteCloudMirrorReader
 from src.snotes.transport.cloud_outbox_http import (
     CloudOutboxHttpApplication,
     serve_cloud_outbox,
@@ -19,6 +20,12 @@ from src.snotes.transport.cloud_outbox_http import (
 DATABASE_PATH = Path("/srv/snotes/data/outbox.db")
 API_CREDENTIAL_NAME = "reminder-api.json"
 ACTORS = frozenset({"claude-code", "clawbot"})
+
+
+def production_reader(actor: str) -> SQLiteCloudMirrorReader:
+    if actor not in ACTORS:
+        raise RuntimeError("unsupported_actor")
+    return SQLiteCloudMirrorReader(Path(f"/srv/snotes/mirror/{actor}/current.db"))
 
 
 def load_actor_credentials() -> dict[str, str]:
@@ -73,7 +80,9 @@ def main() -> int:
             raise RuntimeError("arguments_forbidden")
         initialize_service_database()
         application = CloudOutboxHttpApplication(
-            DATABASE_PATH, load_actor_credentials()
+            DATABASE_PATH,
+            load_actor_credentials(),
+            reader_factory=production_reader,
         )
         serve_cloud_outbox(application, host="127.0.0.1", port=8767)
         return 0

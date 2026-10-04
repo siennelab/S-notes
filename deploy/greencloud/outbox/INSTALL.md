@@ -10,11 +10,14 @@ rotated, printed or included in the source package. No public route is added.
 
 `/usr/local/bin/snotes-cloud-read` retains its argument/environment clearing
 and now registers the original three read tools plus `create_note`,
-`append_note`, `edit_note`, `get_operation_status`. Writes are proposals only.
+`prepend_note`, `append_note`, `update_note_metadata`, `edit_note`, and
+`get_operation_status`. Writes are proposals only.
 Mac remains the only Notes authority; Cloud does no final canonicalization.
-Prepend, metadata updates and delete remain unavailable. Actual AI client
-discovery remains deferred until the separate runtime installation. Step 10's
-`/srv/snotes/outbox-deploy/verify_outbox.py` owns this seven-tool contract and
+Metadata uses the existing local contract: only `title`, `directory_id`,
+`add_tags`, and `remove_tags`. Modifications require `expected_version`;
+`expected_updated_at`, client-selected actor, AI visibility, and actor targets
+are unavailable. Delete remains unavailable. Step 10's
+`/srv/snotes/outbox-deploy/verify_outbox.py` owns the current nine-tool contract and
 outbox checks. Step 9's historical isolation verifier is preserved unchanged;
 its original three-tool expectation describes the CLOSED Step 9 baseline.
 
@@ -49,6 +52,12 @@ Each outbox request is bounded JSON on stdin, with a fixed database path:
 These are Cloud-side capabilities for Step 11. Step 10 installs no Mac pull,
 AI Center, accept path or receipt sender. AI credentials cannot call them.
 
+The completed Step 11 Mac lifecycle also handles prepend and metadata proposals
+through the same inbox, human decision, terminal receipt, and actor mirror
+refresh. Metadata acceptance uses the existing local directory/metadata owner
+and leaves Markdown unchanged. No outbox schema or Oracle contract change is
+needed for these operations.
+
 Package with the repository `.venv/bin/python deploy/greencloud/outbox/package.py
 <private-temporary-archive>`, transfer through `ssh optimal` into a private
 temporary directory, extract and run `deploy/greencloud/outbox/install.py`
@@ -62,6 +71,8 @@ Recovery: stop/disable `snotes-notes-outbox.service`, retire newly added
 wrappers/unit/drop-in/sudoers and restore only existing paths from the printed
 backup's `files/` with `metadata.json` ownership/modes. Run `daemon-reload`.
 Preserve outbox DB/backups and all Reminder data/state; do not restore database
-contents or the entire runtime/VPS. Leave recovery files KEEP until Step 10
-acceptance. Remove disposable deployment and fictional test directories after
+contents or the entire runtime/VPS. Leave this deployment's recovery files
+until its human acceptance. For an update to an existing deployment, restore
+only the replaced files from that update's backup; do not retire the established
+service or remove previously existing wrappers. Remove disposable deployment and fictional test directories after
 verification; no fictional proposal is left in the production queue.

@@ -10,7 +10,9 @@ from src.snotes.domain.gale import GalePullResult
 
 GREEN_CLOUD_SOURCE = "GreenCloud"
 GREEN_CLOUD_ACTORS = frozenset({"claude-code", "clawbot"})
-GREEN_CLOUD_OPERATIONS = frozenset({"create", "append", "edit"})
+GREEN_CLOUD_OPERATIONS = frozenset(
+    {"create", "prepend", "append", "update_note_metadata", "edit"}
+)
 GREEN_CLOUD_TERMINAL_STATES = frozenset({"accepted", "rejected", "conflict"})
 
 

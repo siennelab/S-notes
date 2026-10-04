@@ -25,6 +25,8 @@ from src.snotes.application.ai_receipt_inbox_service import (
     AiReceiptInboxService,
 )
 from src.snotes.application.cloud_proposal_service import CloudProposalService
+from src.snotes.application.ai_write_authorization import AiWriteAuthorization
+from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.gale_service import GreenCloudPullService
 from src.snotes.application.greencloud_receipt_service import GreenCloudReceiptService
 from src.snotes.application.note_service import NoteService
@@ -155,6 +157,9 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
                 self.connections, self.tag_repository
             ),
             canonicalizer=CanonicalizerTestDouble(lambda value: value),
+            authorization=AiWriteAuthorization(
+                directories=DirectoryService(self.directory_repository)
+            ),
         )
         blank = self.notes.create_note(NoteLocation("Step 11", "Followup"))
         self.note = self.notes.save_note(
@@ -271,6 +276,122 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
         self.assertEqual(clawbot, before_clawbot)
         status = self._proposal("claude-code").get_operation_status(request_id)
         self.assertEqual(status["delivery_state"], "accepted")
+
+    def test_prepend_then_metadata_refreshes_cloud_read_without_rewriting_body(self) -> None:
+        original = self.notes.get_note(self.note.id)
+        before_other_actor = self._reader("clawbot").get_markdown(self.note.id)
+        first = self._proposal("claude-code").prepend_note(
+            request_id="extension-prepend",
+            note_id=self.note.id,
+            content="Fictional prefix\n\n",
+            expected_version=self._reader("claude-code").get(self.note.id)["version"],
+        )
+        self.assertEqual(first["status"], "queued")
+        self.assertEqual(self._pull_once().imported_count, 1)
+        receipt = self.receipts.list_pending_receipts()[0]
+        self.assertEqual(receipt.operation_type, "prepend")
+        self.assertTrue(self._accept(receipt.id).outcome.accepted)
+        prepended = self.notes.get_note(self.note.id)
+        self.assertTrue(prepended.content_markdown.startswith("Fictional prefix"))
+        self.assertEqual(prepended.content_markdown.count("Fictional prefix"), 1)
+        self.assertIn(original.content_markdown, prepended.content_markdown)
+        self.assertGreater(prepended.revision, original.revision)
+        self.assertEqual(self._flush().mirror_published_count, 1)
+        self.assertEqual(
+            self._proposal("claude-code").get_operation_status("extension-prepend")["status"],
+            "accepted",
+        )
+        mirrored = self._reader("claude-code").get_markdown(self.note.id)
+        self.assertEqual(mirrored["markdown"], prepended.content_markdown)
+        self.assertNotEqual(mirrored["version"], before_other_actor["version"])
+
+        destination = self.directory_repository.create("Extension destination")
+        second = self._proposal("claude-code").update_note_metadata(
+            request_id="extension-metadata",
+            note_id=self.note.id,
+            expected_version=mirrored["version"],
+            title="Fictional metadata title",
+            directory_id=destination.id,
+            add_tags=["extension"],
+            remove_tags=["fictional"],
+        )
+        self.assertEqual(second["status"], "queued")
+        self.assertEqual(self._pull_once().imported_count, 1)
+        receipt = self.receipts.list_pending_receipts()[0]
+        self.assertEqual(receipt.operation_type, "update_note_metadata")
+        self.assertTrue(self._accept(receipt.id).outcome.accepted)
+        updated = self.notes.get_note(self.note.id)
+        self.assertEqual(updated.content_markdown, prepended.content_markdown)
+        self.assertEqual(updated.title, "Fictional metadata title")
+        self.assertEqual(updated.directory_id, destination.id)
+        self.assertIn("extension", self.tags.get_note_tags(self.note.id))
+        self.assertGreater(updated.revision, prepended.revision)
+        self.assertEqual(self._flush().mirror_published_count, 1)
+        status = self._proposal("claude-code").get_operation_status("extension-metadata")
+        self.assertEqual(status["status"], "accepted")
+        self.assertEqual(status["operation_type"], "update_note_metadata")
+        refreshed = self._reader("claude-code").get_markdown(self.note.id)
+        self.assertEqual(refreshed["markdown"], prepended.content_markdown)
+        self.assertNotEqual(refreshed["version"], mirrored["version"])
+        readable = self._reader("claude-code").get(self.note.id)
+        self.assertEqual(readable["title"], updated.title)
+        self.assertIn("extension", readable["tags"])
+        self.assertIn("Extension destination", readable["directory"])
+        self.assertEqual(self._reader("clawbot").get_markdown(self.note.id), before_other_actor)
+
+    def test_new_operations_reject_and_conflict_return_original_status_without_publish(self) -> None:
+        for operation in ("prepend", "update_note_metadata"):
+            with self.subTest(operation=operation):
+                def queue(request_id):
+                    current = self._reader("claude-code").get(self.note.id)
+                    arguments = dict(
+                        request_id=request_id,
+                        note_id=self.note.id,
+                        expected_version=current["version"],
+                    )
+                    if operation == "prepend":
+                        return self._proposal("claude-code").prepend_note(
+                            **arguments, content="Must not prepend\n"
+                        )
+                    return self._proposal("claude-code").update_note_metadata(
+                        **arguments, title="Must not rename", add_tags=["must-not-add"]
+                    )
+
+                rejected_id = "extension-reject-" + operation
+                self.assertEqual(queue(rejected_id)["status"], "queued")
+                self._pull_once()
+                receipt = self.receipts.list_pending_receipts()[0]
+                before_note = self.notes.get_note(self.note.id)
+                self.receipts.discard_receipt(receipt.id)
+                calls_before = len(self.receiver.calls)
+                flushed = self._flush()
+                self.assertEqual((flushed.sent_count, flushed.mirror_published_count), (1, 0))
+                self.assertEqual(self.notes.get_note(self.note.id), before_note)
+                self.assertEqual(len(self.receiver.calls), calls_before)
+                self.assertEqual(self._proposal("claude-code").get_operation_status(rejected_id)["status"], "rejected")
+                self.assertEqual(self._proposal("clawbot").get_operation_status(rejected_id)["status"], "not_found")
+
+                conflict_id = "extension-conflict-" + operation
+                self.assertEqual(queue(conflict_id)["status"], "queued")
+                self._pull_once()
+                receipt = self.receipts.list_pending_receipts()[0]
+                current = self.notes.get_note(self.note.id)
+                self.notes.save_note(
+                    current.id,
+                    title="Concurrent title " + operation,
+                    content_markdown=current.content_markdown,
+                    location=current.location,
+                    expected_revision=current.revision,
+                )
+                before_note = self.notes.get_note(self.note.id)
+                before_tags = self.tags.get_note_tags(self.note.id)
+                self.assertEqual(self._accept(receipt.id).outcome.kind.value, "conflict")
+                flushed = self._flush()
+                self.assertEqual((flushed.sent_count, flushed.mirror_published_count), (1, 0))
+                self.assertEqual(self.notes.get_note(self.note.id), before_note)
+                self.assertEqual(self.tags.get_note_tags(self.note.id), before_tags)
+                self.assertEqual(len(self.receiver.calls), calls_before)
+                self.assertEqual(self._proposal("claude-code").get_operation_status(conflict_id)["status"], "conflict")
 
     def test_rejected_and_conflict_write_terminal_without_publishing(self) -> None:
         self._queue_append("claude-code", "human-rejected", "Rejected tail")

@@ -27,7 +27,7 @@ from src.snotes.domain.models import Note, NoteLocation
 from src.snotes.domain.reminders import ReminderQuery
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.directory_dialog import DirectoryUiWorkflow
-from src.snotes.ui.ai_center_dialog import AiCenterDialog, _GaleWorker
+from src.snotes.ui.ai_center_dialog import AiCenterDialog, GaleWorker
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
 from src.snotes.ui.location_controls import (
     location_from_path,
@@ -1076,7 +1076,7 @@ class MainWindow(QMainWindow):
         if control is None or not control.auto_pull_enabled() or self._close_pending:
             return
         thread = QThread(self)
-        worker = _GaleWorker(control.check_submissions_now, refresh_receipts=True)
+        worker = GaleWorker(control.check_submissions_now, refresh_receipts=True)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._submissions_pulled)

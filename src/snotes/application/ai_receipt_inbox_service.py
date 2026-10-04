@@ -25,7 +25,11 @@ from src.snotes.application.note_canonical_candidate import (
     canonicalize_new_note,
 )
 from src.snotes.application.ai_pending_body import parse_pending_body_payload
-from src.snotes.application.ai_pending_metadata import parse_pending_metadata_payload
+from src.snotes.application.ai_pending_metadata import (
+    parse_cloud_pending_metadata_payload,
+    parse_pending_metadata_payload,
+    prepare_pending_metadata_plan,
+)
 from src.snotes.application.ai_safe_read_service import (
     AiSafeReadSource,
 )
@@ -136,6 +140,7 @@ DEFAULT_CONFIRMATION = {
     CREATE_CONFIRMATION_KEY: False,
     MODIFY_CONFIRMATION_KEY: True,
 }
+METADATA_OPERATION_TYPES = frozenset({"metadata", "update_note_metadata"})
 
 
 class AiReceiptInboxService:
@@ -365,25 +370,36 @@ class AiReceiptInboxService:
                 "expected_updated_at": None,
             }
 
-        expected_keys = {"content"} if submission.operation_type == "append" else {"edits"}
-        if not isinstance(payload, dict) or set(payload) != expected_keys:
-            raise ValueError("GreenCloud 正文提案内容无效。")
-        if submission.note_id is None or not submission.expected_version:
-            raise ValueError("GreenCloud 正文提案缺少目标或版本。")
-        if submission.operation_type == "append":
-            content = payload["content"]
-            if not isinstance(content, str) or not content:
-                raise ValueError("GreenCloud append 提案内容无效。")
-            body = content
+        if submission.operation_type == "update_note_metadata":
+            try:
+                parse_cloud_pending_metadata_payload(json.dumps(payload))
+            except ValueError as error:
+                raise ValueError("GreenCloud 资料提案内容无效。") from error
+            body = ""
         else:
-            edits = payload["edits"]
-            if not isinstance(edits, list) or not edits:
-                raise ValueError("GreenCloud edit 提案内容无效。")
-            body = "\n\n".join(
-                f"[{index}] {item.get('old_markdown', '')} → {item.get('new_markdown', '')}"
-                for index, item in enumerate(edits, 1)
-                if isinstance(item, dict)
+            expected_keys = (
+                {"content"}
+                if submission.operation_type in {"append", "prepend"}
+                else {"edits"}
             )
+            if not isinstance(payload, dict) or set(payload) != expected_keys:
+                raise ValueError("GreenCloud 正文提案内容无效。")
+            if submission.operation_type in {"append", "prepend"}:
+                content = payload["content"]
+                if not isinstance(content, str) or not content:
+                    raise ValueError("GreenCloud 正文追加提案内容无效。")
+                body = content
+            else:
+                edits = payload["edits"]
+                if not isinstance(edits, list) or not edits:
+                    raise ValueError("GreenCloud edit 提案内容无效。")
+                body = "\n\n".join(
+                    f"[{index}] {item.get('old_markdown', '')} → {item.get('new_markdown', '')}"
+                    for index, item in enumerate(edits, 1)
+                    if isinstance(item, dict)
+                )
+        if submission.note_id is None or not submission.expected_version:
+            raise ValueError("GreenCloud 修改提案缺少目标或版本。")
         notes, tags, metadata = self._require_lifecycle_dependencies()
         note = notes.get_note(submission.note_id)
         if note is None:
@@ -468,12 +484,46 @@ class AiReceiptInboxService:
     def pending_metadata_changes(self, receipt_id: int) -> dict[str, object]:
         """Return only validated changes from the stored pending payload."""
         receipt = self._receipts.get(receipt_id)
-        if receipt is None or not receipt.pending or receipt.operation_type != "metadata":
+        if (
+            receipt is None
+            or not receipt.pending
+            or receipt.operation_type not in METADATA_OPERATION_TYPES
+        ):
             raise ValueError("该回执不是待确认的元数据提案。")
         raw = self._require_mcp_operations().pending_operation_payload(receipt_id)
         if raw is None:
             raise ValueError("元数据提案内容不存在。")
-        return parse_pending_metadata_payload(raw)
+        if receipt.operation_type == "metadata":
+            return parse_pending_metadata_payload(raw)
+        public = parse_cloud_pending_metadata_payload(raw)
+        notes, tags, _metadata = self._require_lifecycle_dependencies()
+        if receipt.target_note_id is None:
+            raise ValueError("Cloud 资料提案缺少目标笔记。")
+        note = notes.get_note(receipt.target_note_id)
+        if note is None:
+            raise ValueError("目标笔记不存在。")
+        location = None
+        if public.get("directory_id") is not None:
+            selected = self._authorization.resolve_directory(
+                directory_id=int(public["directory_id"])
+            )
+            if selected is None:
+                raise ValueError("目标目录不可用；只能选择有效的已有目录。")
+            location = selected.location
+        plan = prepare_pending_metadata_plan(
+            current_title=note.title,
+            current_location=note.location,
+            current_tags=tags.get_note_tags(note.id),
+            title=public.get("title"),
+            location=location,
+            add_tags=public.get("add_tags"),
+            remove_tags=public.get("remove_tags"),
+        )
+        return (
+            parse_pending_metadata_payload(json.dumps(plan.payload))
+            if plan.payload
+            else {}
+        )
 
     def pending_metadata_display_changes(self, receipt_id: int) -> dict[str, object]:
         """Describe the stored target; infer tag deltas only at its exact version."""
@@ -656,17 +706,43 @@ class AiReceiptInboxService:
             outcome_status = OperationStatus.REJECTED
             failure_reason = (
                 "元数据提案内容不存在。"
-                if operation_type == "metadata"
+                if operation_type in METADATA_OPERATION_TYPES
                 else "正文提案内容不存在。"
             )
         else:
             try:
-                if operation_type == "metadata":
-                    changes = parse_pending_metadata_payload(raw_payload)
-                    desired_title = changes.get("title")
-                    desired_tags = changes.get("tags")
-                    if "directory" in changes:
-                        location = NoteLocation(*changes["directory"])
+                if operation_type in METADATA_OPERATION_TYPES:
+                    if operation_type == "metadata":
+                        changes = parse_pending_metadata_payload(raw_payload)
+                        desired_title = changes.get("title")
+                        desired_tags = changes.get("tags")
+                        if "directory" in changes:
+                            location = NoteLocation(*changes["directory"])
+                    else:
+                        public = parse_cloud_pending_metadata_payload(raw_payload)
+                        if public.get("directory_id") is not None:
+                            selected_directory = self._authorization.resolve_directory(
+                                directory_id=int(public["directory_id"])
+                            )
+                            if selected_directory is None:
+                                raise ValueError(
+                                    "目标目录不可用；只能选择有效的已有目录。"
+                                )
+                            location = selected_directory.location
+                        plan = prepare_pending_metadata_plan(
+                            current_title=current_note.title,
+                            current_location=current_note.location,
+                            current_tags=_tags.get_note_tags(current_note.id),
+                            title=public.get("title"),
+                            location=location,
+                            add_tags=public.get("add_tags"),
+                            remove_tags=public.get("remove_tags"),
+                        )
+                        if not plan.changed:
+                            raise ValueError("请求没有产生实际变化。")
+                        desired_title = plan.desired_title
+                        desired_tags = plan.desired_tags
+                    if location is not None:
                         selected_directory = self._authorization.resolve_directory(location=location)
                         if selected_directory is None:
                             outcome_status = OperationStatus.REJECTED
@@ -697,7 +773,10 @@ class AiReceiptInboxService:
                         canonicalize=self.canonicalize_markdown,
                     )
                     canonical_markdown = candidate.final_markdown
-                if operation_type != "metadata" and not canonical_markdown.strip():
+                if (
+                    operation_type not in METADATA_OPERATION_TYPES
+                    and not canonical_markdown.strip()
+                ):
                     raise CanonicalizationError("Empty canonical body")
             except StaleNoteProposalError as error:
                 outcome_status = OperationStatus.CONFLICT
@@ -836,7 +915,7 @@ class AiReceiptInboxService:
                 raise ValueError("人工确认入库前，主分类不能为空。")
 
         if receipt.operation_type in {
-            "append", "prepend", "edit", "metadata"
+            "append", "prepend", "edit", "metadata", "update_note_metadata"
         }:
             result = self._accept_pending_modification(receipt, fields)
             outcome = operation_outcome(result)

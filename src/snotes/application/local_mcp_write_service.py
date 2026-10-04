@@ -30,6 +30,10 @@ from src.snotes.application.note_canonical_candidate import (
     build_canonical_note_candidate,
     canonicalize_new_note,
 )
+from src.snotes.application.ai_pending_metadata import (
+    normalize_metadata_tags,
+    prepare_pending_metadata_plan,
+)
 from src.snotes.application.notes_operation_result import (
     notes_operation_result as _result,
 )
@@ -93,7 +97,7 @@ class LocalMcpWriteService:
         if duplicate is not None:
             return duplicate
         clean_title = title.strip() or "未命名 AI 笔记"
-        clean_tags = self._normalize_tags(tags or [])
+        clean_tags = list(normalize_metadata_tags(tags or ()))
         if main_category is None and sub_category is not None:
             return self._terminal(
                 "create",
@@ -407,9 +411,6 @@ class LocalMcpWriteService:
                 )
             payload["content"] = content
         else:
-            desired_title = (
-                title.strip() or "未命名笔记" if title is not None else None
-            )
             selected_directory = self._visible_location(directory_id)
             if directory_id is not None and selected_directory is None:
                 return self._terminal(
@@ -422,31 +423,29 @@ class LocalMcpWriteService:
                 )
             if selected_directory is not None:
                 desired_directory_id, desired_location = selected_directory
-            additions = set(self._normalize_tags(add_tags or []))
-            removals = set(self._normalize_tags(remove_tags or []))
-            if additions & removals:
+            current_tags = [name for _tag_id, name in context.tag_records]
+            try:
+                metadata_plan = prepare_pending_metadata_plan(
+                    current_title=note.title,
+                    current_location=note.location,
+                    current_tags=current_tags,
+                    title=title,
+                    location=desired_location,
+                    add_tags=add_tags,
+                    remove_tags=remove_tags,
+                )
+            except ValueError as error:
                 return self._terminal(
                     operation_type,
                     _result(
                         OperationStatus.REJECTED, request_id, note_id, note.title,
                         HandlingMode.NONE, False,
-                        False, "同一标签不能同时添加和移除。",
+                        False, str(error),
                     ),
                 )
-            current_tags = [name for _tag_id, name in context.tag_records]
-            if additions or removals:
-                desired_tags = [tag for tag in current_tags if tag not in removals]
-                desired_tags.extend(
-                    tag for tag in sorted(additions) if tag not in desired_tags
-                )
-            changed = any(
-                (
-                    desired_title is not None and desired_title != note.title,
-                    desired_location is not None and desired_location != note.location,
-                    desired_tags is not None and set(desired_tags) != set(current_tags),
-                )
-            )
-            if not changed:
+            desired_title = metadata_plan.desired_title
+            desired_tags = metadata_plan.desired_tags
+            if not metadata_plan.changed:
                 return self._terminal(
                     operation_type,
                     _result(
@@ -455,12 +454,7 @@ class LocalMcpWriteService:
                         False, "请求没有产生实际变化。",
                     ),
                 )
-            if desired_title is not None:
-                payload["title"] = desired_title
-            if desired_location is not None:
-                payload["directory"] = list(desired_location.values())
-            if desired_tags is not None:
-                payload["tags"] = desired_tags
+            payload.update(metadata_plan.payload)
 
         canonical_candidate = None
         canonicalization_failed = False
@@ -672,19 +666,6 @@ class LocalMcpWriteService:
     def _actor_display(self) -> str:
         definition = target_definition(self.actor_target_id)
         return definition.display_name if definition is not None else self.actor_target_id
-
-    @staticmethod
-    def _normalize_tags(values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            clean = str(value).strip().lstrip("#").strip()
-            key = clean.casefold()
-            if clean and key not in seen:
-                seen.add(key)
-                normalized.append(clean)
-        return normalized
-
 
 def note_version_token(note_id: int, updated_at: str) -> str:
     material = f"{int(note_id)}\0{updated_at}".encode()

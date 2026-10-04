@@ -15,10 +15,10 @@ from src.snotes.application.cloud_read_service import CloudMirrorReader
 from src.snotes.application.note_canonical_candidate import apply_exact_markdown_edits
 
 
-ALLOWED_OPERATION_TYPES = frozenset({"create", "append", "edit"})
-DISALLOWED_OPERATION_TYPES = frozenset(
-    {"prepend", "metadata", "update_note_metadata", "delete"}
+ALLOWED_OPERATION_TYPES = frozenset(
+    {"create", "prepend", "append", "update_note_metadata", "edit"}
 )
+DISALLOWED_OPERATION_TYPES = frozenset({"metadata", "delete"})
 MAX_REQUEST_ID_LENGTH = 128
 MAX_TITLE_LENGTH = 500
 MAX_CONTENT_LENGTH = 50_000
@@ -32,6 +32,7 @@ _INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`).*?\1(?!`)", re.DOTALL)
 _FENCE_START = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _SIZE_DIRECTIVE = re.compile(r'(?<!\\):size\[(?:\\.|[^\]\\\n])*\]\{([^}\n]*)\}')
 _VALID_SIZE_ATTRIBUTES = re.compile(r'''\s*size\s*=\s*(?:"(?:15|20)"|'(?:15|20)'|(?:15|20))\s*''')
+_MISSING = object()
 
 
 class CloudProposalGateway(Protocol):
@@ -108,6 +109,39 @@ class CloudProposalService:
         content: str,
         expected_version: str,
     ) -> dict:
+        return self._propose_addition(
+            request_id=request_id,
+            operation_type="append",
+            note_id=note_id,
+            content=content,
+            expected_version=expected_version,
+        )
+
+    def prepend_note(
+        self,
+        *,
+        request_id: str,
+        note_id: int,
+        content: str,
+        expected_version: str,
+    ) -> dict:
+        return self._propose_addition(
+            request_id=request_id,
+            operation_type="prepend",
+            note_id=note_id,
+            content=content,
+            expected_version=expected_version,
+        )
+
+    def _propose_addition(
+        self,
+        *,
+        request_id: str,
+        operation_type: str,
+        note_id: int,
+        content: str,
+        expected_version: str,
+    ) -> dict:
         request_id = _request_id(request_id)
         duplicate = self._duplicate(request_id)
         if duplicate is not None:
@@ -126,10 +160,68 @@ class CloudProposalService:
             return _conflict(request_id, note_id, "stale_expected_version")
         return self._enqueue(
             request_id=request_id,
-            operation_type="append",
+            operation_type=operation_type,
             note_id=note_id,
             expected_version=expected_version,
             payload={"content": content},
+        )
+
+    def update_note_metadata(
+        self,
+        *,
+        request_id: str,
+        note_id: int,
+        expected_version: str,
+        title: object = _MISSING,
+        directory_id: object = _MISSING,
+        add_tags: object = _MISSING,
+        remove_tags: object = _MISSING,
+    ) -> dict:
+        request_id = _request_id(request_id)
+        duplicate = self._duplicate(request_id)
+        if duplicate is not None:
+            return duplicate
+        try:
+            note_id = _note_id(note_id)
+            expected_version = _version(expected_version)
+            payload: dict = {}
+            if title is not _MISSING:
+                payload["title"] = (
+                    None
+                    if title is None
+                    else _bounded_text(title, "title", MAX_TITLE_LENGTH)
+                )
+            if directory_id is not _MISSING:
+                payload["directory_id"] = (
+                    None
+                    if directory_id is None
+                    else _note_id(directory_id, "directory_id")
+                )
+            if add_tags is not _MISSING:
+                payload["add_tags"] = (
+                    None
+                    if add_tags is None
+                    else _metadata_tags(add_tags, "add_tags")
+                )
+            if remove_tags is not _MISSING:
+                payload["remove_tags"] = (
+                    None
+                    if remove_tags is None
+                    else _metadata_tags(remove_tags, "remove_tags")
+                )
+            note = self._reader.get(note_id)
+        except (TypeError, ValueError):
+            return _rejected(request_id, "invalid_request", note_id=_safe_note_id(note_id))
+        if note is None:
+            return _not_found(request_id, note_id)
+        if str(note.get("version", "")) != expected_version:
+            return _conflict(request_id, note_id, "stale_expected_version")
+        return self._enqueue(
+            request_id=request_id,
+            operation_type="update_note_metadata",
+            note_id=note_id,
+            expected_version=expected_version,
+            payload=payload,
         )
 
     def edit_note(
@@ -283,6 +375,15 @@ def _tags(value: object) -> list[str]:
             raise ValueError("tags_invalid")
         if tag not in result:
             result.append(tag)
+    return result
+
+
+def _metadata_tags(value: object, field: str) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_TAGS:
+        raise ValueError(f"{field}_invalid")
+    result: list[str] = []
+    for item in value:
+        result.append(_bounded_text(item, field, MAX_TAG_LENGTH))
     return result
 
 

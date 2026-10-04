@@ -88,7 +88,31 @@ def main() -> int:
             note = accept(edit)
             assert "unique beta" in note.content_markdown and "appended fixture" in note.content_markdown
             assert receipts.canonicalize_markdown(note.content_markdown) == note.content_markdown
+            original_body = note.content_markdown
+            original_revision = note.revision
+            prepend = import_proposal("prepend", {"content": "prepended fixture\n\n"}, note)
+            note = accept(prepend)
+            assert note.content_markdown.startswith("prepended fixture")
+            assert note.content_markdown.count("prepended fixture") == 1
+            assert original_body in note.content_markdown
+            assert note.revision > original_revision
+            prepended_body = note.content_markdown
+            prepended_revision = note.revision
+            destination = window.directory_service.create_directory("Step 11 metadata fictional")
+            metadata = import_proposal("update_note_metadata", {
+                "title": "Step 11 metadata App smoke",
+                "directory_id": destination.id,
+                "add_tags": ["metadata-fixture"], "remove_tags": ["fictional"],
+            }, note)
+            note = accept(metadata)
+            assert note.title == "Step 11 metadata App smoke"
+            assert note.directory_id == destination.id
+            assert note.content_markdown == prepended_body
+            assert note.revision > prepended_revision
+            assert "metadata-fixture" in window.tag_service.get_note_tags(note.id)
+            assert "fictional" not in window.tag_service.get_note_tags(note.id)
             outcome.update(status="passed", create_once=True, append=True, edit=True, zero_diff=True,
+                           prepend=True, metadata=True, metadata_body_unchanged=True,
                            source_actor_ui=True, node_on_path=False, real_user_database_opened=False)
             print("STEP11_FORMAL_APP_AUTOMATED_SMOKE=PASS", flush=True)
         except Exception as error:

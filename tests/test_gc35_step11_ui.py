@@ -29,6 +29,7 @@ from src.snotes.application.local_mcp_write_service import (
 )
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
+from src.snotes.domain.greencloud import GreenCloudSubmission
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.repositories.ai_audit import SQLiteAiAuditRepository
 from src.snotes.storage.repositories.ai_mcp_operations import (
@@ -225,6 +226,61 @@ class GC35Step11UiTests(unittest.TestCase):
         output = os.environ.get("SNOTES_STEP11_RENDER_OUTPUT", "").strip()
         if output:
             self.assertTrue(screenshot.save(output, "PNG"))
+
+    def test_cloud_new_operations_render_with_existing_previews(self) -> None:
+        blank = self.notes.create_note(NoteLocation("项目", "AI 提案"))
+        note = self.notes.save_note(
+            blank.id,
+            title="Fictional new operations",
+            content_markdown="base body\n",
+            location=blank.location,
+            expected_revision=blank.revision,
+        )
+        self.metadata.set_note_visibility(note.id, "full")
+        self.metadata.set_note_targets(note.id, ("claude-code",))
+        note = self.notes.get_note(note.id)
+        assert note is not None
+
+        def submission(operation: str, request_id: str, payload: dict):
+            return GreenCloudSubmission(
+                submission_uuid=f"uuid-{request_id}",
+                source_actor="claude-code",
+                request_id=request_id,
+                operation_type=operation,
+                note_id=note.id,
+                expected_version=note_version_token(note.id, note.updated_at),
+                payload=payload,
+                created_at="2026-10-04T00:00:00Z",
+                delivery_state="delivered",
+                delivered_at="2026-10-04T00:00:01Z",
+            )
+
+        prepend, _ = self.receipts.import_greencloud_pending(
+            submission("prepend", "ui-prepend", {"content": "cloud head"})
+        )
+        metadata, _ = self.receipts.import_greencloud_pending(
+            submission(
+                "update_note_metadata",
+                "ui-metadata",
+                {"title": "Cloud title"},
+            )
+        )
+        no_change, _ = self.receipts.import_greencloud_pending(
+            submission("update_note_metadata", "ui-metadata-empty", {})
+        )
+        view = ReceiptInboxView(self.receipts, self.metadata)
+        self.addCleanup(view.close)
+        self.assertIn("操作：前置追加", view.cards[prepend.id].summary_label.text())
+        self.assertIn("操作：修改资料", view.cards[metadata.id].summary_label.text())
+        metadata_card = view.cards[metadata.id]
+        self.assertTrue(metadata_card.is_pending_metadata)
+        metadata_card.refresh_metadata_preview()
+        self.assertTrue(metadata_card.metadata_preview_ready)
+        self.assertIn("标题：Cloud title", metadata_card.metadata_preview.text())
+        no_change_card = view.cards[no_change.id]
+        no_change_card.refresh_metadata_preview()
+        self.assertTrue(no_change_card.metadata_preview_ready)
+        self.assertIn("没有实际资料变化", no_change_card.metadata_preview.text())
 
     def test_bulk_reject_is_scoped_to_one_source_and_actor(self) -> None:
         selected = {

@@ -47,7 +47,9 @@ EXPECTED_TOOLS = {
     "get_note",
     "get_note_markdown",
     "create_note",
+    "prepend_note",
     "append_note",
+    "update_note_metadata",
     "edit_note",
     "get_operation_status",
 }
@@ -428,7 +430,7 @@ def _actor_fixture_baseline(root: Path, port: int) -> int:
         },
     )
     require(dialect.get("status") == "rejected", "invalid_dialect_not_rejected")
-    for name in ("prepend_note", "update_note_metadata", "delete_note"):
+    for name in ("delete_note",):
         result = call(name, {"request_id": prefix + "-forbidden-" + name})
         require(result.get("status") == "rejected", "forbidden_operation_available")
 
@@ -549,8 +551,8 @@ def _actor_production() -> int:
         PRODUCTION_PORT,
         "/v1/notes/proposals/enqueue",
         {
-            "request_id": marker + "-prepend",
-            "operation_type": "prepend",
+            "request_id": marker + "-delete",
+            "operation_type": "delete",
             "note_id": 9_223_372_036_854_775_807,
             "expected_version": "snotes-v1-" + "0" * 64,
             "payload": {"content": "Must not queue."},

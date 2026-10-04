@@ -71,6 +71,7 @@ AUDIT_OPERATION_LABELS = {
     "append": "追加内容",
     "edit": "精确修改正文",
     "metadata": "修改资料",
+    "update_note_metadata": "修改资料",
     "restore": "恢复笔记",
     "operation_status": "查询操作状态",
 }
@@ -117,6 +118,7 @@ RECEIPT_OPERATION_LABELS = {
     "edit": "精确修改正文",
     "prepend": "前置追加",
     "metadata": "修改资料",
+    "update_note_metadata": "修改资料",
 }
 
 
@@ -286,7 +288,9 @@ class ReceiptCard(QFrame):
                 details.addWidget(operation_error)
 
         self.is_pending_metadata = bool(
-            receipt.pending and receipt.request_id and receipt.operation_type == "metadata"
+            receipt.pending
+            and receipt.request_id
+            and receipt.operation_type in {"metadata", "update_note_metadata"}
         )
         self.has_final_preview = False
         self.is_edit_proposal = False
@@ -558,7 +562,7 @@ class ReceiptCard(QFrame):
                         "标签将设为（完整列表）：" + ("、".join(changes["tags"]) or "无")
                     )
             if not lines:
-                raise ValueError("提案没有实际资料变化。")
+                lines.append("没有实际资料变化；接受后将以无变化结果结束。")
             self.metadata_preview.setText("\n".join(lines))
             self.metadata_preview_status.setText("接受时会再次检查当前权限和笔记版本。")
             self.metadata_preview_ready = True
@@ -1045,7 +1049,7 @@ class ReceiptInboxView(QWidget):
             host.activateWindow()
 
 
-class _GaleWorker(QObject):
+class GaleWorker(QObject):
     finished = Signal(object, object, bool)
     actionFinished = Signal(object, object, bool, str)
 
@@ -1112,7 +1116,7 @@ class AiCenterDialog(QWidget):
         self.reminder_log_limit = 50
         self.gale = gale
         self._gale_threads: list[QThread] = []
-        self._gale_workers: list[_GaleWorker] = []
+        self._gale_workers: list[GaleWorker] = []
         self._greencloud_followup_running = False
         self._greencloud_followup_queued = False
         title = QLabel("AI中心")
@@ -1278,7 +1282,7 @@ class AiCenterDialog(QWidget):
         action_kind: str,
     ) -> None:
         thread = QThread(self)
-        worker = _GaleWorker(
+        worker = GaleWorker(
             action,
             refresh_receipts=refresh_receipts,
             action_kind=action_kind,

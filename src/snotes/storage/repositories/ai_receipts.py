@@ -77,7 +77,9 @@ GALE_IMPORT_SQL = """INSERT INTO ai_receipt_inbox (
 
 GREEN_CLOUD_ACTIONS = {
     "create": "新建",
+    "prepend": "开头追加",
     "append": "末尾追加",
+    "update_note_metadata": "修改资料",
     "edit": "精确修改",
 }
 GREEN_CLOUD_ENVELOPE_SCHEMA = 1

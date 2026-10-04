@@ -134,11 +134,14 @@ def call_cloud_read_tool(
 ) -> dict:
     values = arguments or {}
     proposal_names = {
-        "create_note", "append_note", "edit_note", "get_operation_status"
+        "create_note",
+        "prepend_note",
+        "append_note",
+        "update_note_metadata",
+        "edit_note",
+        "get_operation_status",
     }
-    blocked_names = {
-        "prepend_note", "update_note_metadata", "delete_note", "delete"
-    }
+    blocked_names = {"delete_note", "delete"}
     if name in blocked_names:
         request_id = values.get("request_id", "") if isinstance(values, dict) else ""
         if proposal_service is not None:
@@ -159,7 +162,12 @@ def call_cloud_read_tool(
             }
         allowed_fields = {
             "create_note": {"request_id", "title", "content", "directory_id", "main_category", "sub_category", "tags"},
+            "prepend_note": {"request_id", "note_id", "content", "expected_version"},
             "append_note": {"request_id", "note_id", "content", "expected_version"},
+            "update_note_metadata": {
+                "request_id", "note_id", "expected_version", "title",
+                "directory_id", "add_tags", "remove_tags",
+            },
             "edit_note": {"request_id", "note_id", "expected_version", "edits"},
             "get_operation_status": {"request_id"},
         }
@@ -176,12 +184,29 @@ def call_cloud_read_tool(
                     sub_category=values.get("sub_category"),
                     tags=values.get("tags"),
                 )
-            if name == "append_note":
-                return proposal_service.append_note(
+            if name in {"prepend_note", "append_note"}:
+                method = (
+                    proposal_service.prepend_note
+                    if name == "prepend_note"
+                    else proposal_service.append_note
+                )
+                return method(
                     request_id=values.get("request_id", ""),
                     note_id=values.get("note_id", 0),
                     content=values.get("content", ""),
                     expected_version=values.get("expected_version", ""),
+                )
+            if name == "update_note_metadata":
+                metadata = {
+                    field: values[field]
+                    for field in ("title", "directory_id", "add_tags", "remove_tags")
+                    if field in values
+                }
+                return proposal_service.update_note_metadata(
+                    request_id=values.get("request_id", ""),
+                    note_id=values.get("note_id", 0),
+                    expected_version=values.get("expected_version", ""),
+                    **metadata,
                 )
             if name == "edit_note":
                 return proposal_service.edit_note(
@@ -256,6 +281,7 @@ def _cloud_proposal_tools(note_id_schema: dict) -> list[types.Tool]:
         "pattern": r"^snotes-v1-[0-9a-f]{64}$",
     }
     content = {"type": "string", "minLength": 1, "maxLength": 50_000}
+    nullable_note_id = {**note_id_schema, "type": ["integer", "null"]}
     return [
         types.Tool(
             name="create_note",
@@ -285,6 +311,26 @@ def _cloud_proposal_tools(note_id_schema: dict) -> list[types.Tool]:
             annotations=WRITE_ANNOTATIONS,
         ),
         types.Tool(
+            name="prepend_note",
+            title="Propose prepending to a note",
+            description=(
+                "Queue a prepend proposal for a full or redacted note visible in this "
+                "actor's mirror. Use its current version as expected_version."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "request_id": request_id,
+                    "note_id": note_id_schema,
+                    "content": content,
+                    "expected_version": version,
+                },
+                "required": ["request_id", "note_id", "content", "expected_version"],
+                "additionalProperties": False,
+            },
+            annotations=WRITE_ANNOTATIONS,
+        ),
+        types.Tool(
             name="append_note",
             title="Propose appending to a note",
             description=(
@@ -300,6 +346,44 @@ def _cloud_proposal_tools(note_id_schema: dict) -> list[types.Tool]:
                     "expected_version": version,
                 },
                 "required": ["request_id", "note_id", "content", "expected_version"],
+                "additionalProperties": False,
+            },
+            annotations=WRITE_ANNOTATIONS,
+        ),
+        types.Tool(
+            name="update_note_metadata",
+            title="Propose updating note metadata",
+            description=(
+                "Queue a metadata proposal for a note visible in this actor's mirror. "
+                "Only title, directory_id, add_tags, and remove_tags are accepted; "
+                "AI visibility and actor targets cannot be supplied."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "request_id": request_id,
+                    "note_id": note_id_schema,
+                    "expected_version": version,
+                    "title": {
+                        "type": ["string", "null"],
+                        "minLength": 1,
+                        "maxLength": 500,
+                    },
+                    "directory_id": nullable_note_id,
+                    "add_tags": {
+                        "type": ["array", "null"],
+                        "minItems": 1,
+                        "maxItems": 32,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                    },
+                    "remove_tags": {
+                        "type": ["array", "null"],
+                        "minItems": 1,
+                        "maxItems": 32,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                    },
+                },
+                "required": ["request_id", "note_id", "expected_version"],
                 "additionalProperties": False,
             },
             annotations=WRITE_ANNOTATIONS,
