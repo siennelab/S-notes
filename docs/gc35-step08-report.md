@@ -1,5 +1,13 @@
 # GreenCloud 3.5-B / Step 8
 
+Latest status: **STEP08E=PASS; REMINDER_ACCEPTANCE_32_OF_32=PASS.** #14's existing
+Mac-off receipt now has complete production machine evidence; one real Cloud
+reboot passed #17/#18/#22, both final fixtures are cleaned, and #13's final
+Reminder-scope comparison passed. The formal App navigation repair and S's
+fresh Dock smoke remain PASS. See the [final 8E closeout](#8e-final-closeout--32-of-32-pass)
+and the updated §59 matrix. Earlier sections retain their historical gate state.
+Independent Step 8E closeout only: no main merge, push, Step 9 or Post-Vibe audit.
+
 ## 8C Cloud Production Activation — PASS; stop before 8D
 
 **STEP08C=PASS. READY_FOR_STEP08D=YES. STEP08D_STARTED=NO.** Production API,
@@ -1112,3 +1120,479 @@ STEP08D=PASS
 READY_FOR_STEP08E=YES
 STEP08E_STARTED=NO
 ```
+
+---
+
+## 8E Interim Evidence — helper reboot/login PASS; acceptance not closed
+
+**Historical interim state: STEP08E=IN_PROGRESS. Recorded acceptance: 28 PASS, 4 PENDING
+(#14, #17, #18, #22). GREENCloud_3_5_B=CLOSED is not asserted.**
+This section supersedes the historical `STEP08E_STARTED=NO` above. Construction
+branch remains `codex/gc35-step08-reminder-cutover`; pre-8E HEAD is
+`342d659f15e72b51236b4a66550f403c4a5989f6`. No source change is needed for the
+completed 8E gates. This is an interim report, not the Step 8E closeout commit.
+No amend, main merge, push or Step 9 work.
+
+S requested that the remaining real Cloud reboot / Persistent / no-duplicate
+gate wait until the Mac-off gate passes. This evening's work operated only the
+Mac and repository documentation: no Cloud reboot, production scheduler
+start/stop/restart, timer-stamp change, notification send or fixture mutation.
+Earlier passed 8A–8D and 8E gates were not repeated.
+
+### 8E retirement, rebuild, self-check and restore evidence already completed
+
+- The original `~/Library/LaunchAgents/com.snotes.reminder-helper.plist` was
+  copied into a private temporary evidence directory for the prescribed negative
+  test. `launchctl bootout gui/501/com.snotes.reminder-helper` returned
+  `Boot-out failed: 3: No such process`, consistent with its already-unregistered
+  state. The installed plist was then removed; registration and process checks
+  found neither. No `launchctl disable` state was added. The
+  `com.snotes.gale-production-pull` LaunchAgent was not changed.
+- The existing formal `scripts/build_macos_app.sh` completed from clean HEAD
+  `342d659...`, writing the installed formal path `dist/S-notes.app`. Its build
+  checks and independent deep/strict codesign check passed. No Reminder helper
+  executable or install payload was found in the bundle, and the build did not
+  recreate the plist. Info.plist records `SNotesSourceDirty=NO`, `remote`,
+  `https://reminder.ke-den.de`, `SNotesReminderHelperRetired=true` and
+  `SNotesStep07Candidate=false`. Packaging was not changed again.
+- Formal App startup was checked with temporary HOME/database. Normal state
+  showed no legacy warning. Only the saved plist was copied back to its original
+  path; no bootstrap/kickstart occurred and the helper remained unregistered and
+  stopped. The formal App visibly showed **Legacy local Reminder scheduler
+  detected**. The test plist was immediately removed; subsequent normal startup
+  again showed no warning. Each test window closed normally.
+- A current production backup, `/srv/snotes/backups/reminder-production/reminder-latest.db`,
+  was copied into a separate `snotes-step08e-restore-*` temporary directory.
+  The restored database opened with `quick_check=ok`, zero foreign-key failures,
+  coherent relationships and raw counts 2 labels / 5 tables / 51 reminders /
+  66 occurrences / 87 operation rows. The deployed read-only
+  `SQLiteReminderRepository` / `ReminderService` read path opened it and returned
+  1 visible label / 1 table / 48 items. The restored copy's hash stayed unchanged,
+  and its temporary directory was removed. Formal DB was never overwritten.
+  Backup SHA-256 at this gate was
+  `9407f9b5cd4acf1210a8fe0c5eb52271fd84440a76a7058f1a6299d2a799cfc4`.
+  This is a restore/read-path gate, beyond the historical backup-file smoke.
+- Initial and pre-Mac-off Reminder-scope checks preserved all 51 reminder rows,
+  66 occurrences, 87 Mac AI Reminder operations and two eligible settings at the
+  SQL-value digest level. Against the static 8B backup, label/table differences
+  were limited to default id=1 `updated_at`, retained as metadata-only without
+  backdating. The static 8B rollback backup was readable and retained. The whole
+  Notes database was not hashed. A final 8E scope refresh remains a closeout task.
+
+These earlier gate results are the machine/UI outputs recorded in this Step 8E
+chat. The original `/private/tmp/snotes-step08e-20261003` evidence directory was
+no longer present after the Mac reboot; it is not claimed to be durable storage.
+No passed gate was rerun merely to recreate those temporary files.
+
+### Actual Mac reboot/login and normal startup — PASS
+
+The Mac's actual `kern.boottime` is `2026-10-03T08:52:37Z`
+(**2026-10-03 16:52:37 Beijing**, 01:52:37 PDT), after helper retirement.
+`who` records the console login at 01:52 PDT. The enabled registered Codex
+`snotes-yan` entry still points at the formal packaged Yan launcher. Its
+post-login PID 1286 started at 01:53:39 PDT and its actual command is the formal
+App executable with `--mcp-stdio`; the bundle remains explicitly remote.
+
+Before and after this evening's GUI startup, the actual host helper plist was
+absent, `launchctl print gui/501/com.snotes.reminder-helper` returned 113 with
+`Could not find service`, and process inspection found no helper. The rebuilt
+formal App launched normally using temporary HOME/database and the actual host
+home for the legacy detector, showed no legacy warning, and closed normally.
+Neither the host HOME nor the temporary HOME acquired a helper plist.
+No manual killing, unloading, disabling or cleanup was used to obtain this
+post-reboot result.
+
+The completed check was recorded at `2026-10-03T09:14:10Z`; private machine
+evidence is retained across the next Mac shutdown at:
+
+`/Users/s/Library/Application Support/S-notes/backups/greencloud-step08e-20261003T091410Z/helper-reboot-login.json`
+
+This establishes `HELPER_SURVIVES_REBOOT_AS_ABSENT=PASS` and
+`HELPER_REBOOT_PERSISTENCE=PASS` together with the prior formal rebuild/reinstall
+gate. Helper permanent retirement is complete; the larger Step 8E remains open.
+
+### Mac-off attempts and unchanged final fixture — #14 PENDING
+
+The first fixture's 2026-10-03 16:10 Beijing notification reached the iPhone,
+but S reported the Mac had not fully shut down. It establishes
+`CLOUD_SCHEDULER_NOTIFICATION=PASS`, **not** #14. That fixture was cleaned
+through the formal owner path.
+
+The subsequent 16:50 retry remained paused: its 16:49 one-time activation
+harness failed on import of `src.snotes.transport.remote_reminder_client`,
+which is not deployed in the Cloud package. The owner activation never ran.
+The actual 16:50 production scheduler used
+`/srv/snotes/data/reminder-production.db`, exited successfully and reported
+zero sends. The paused fixture had no occurrence/marks and the exact ntfy cache
+match count was zero. This was a **Gate activation harness bug**, not a
+production scheduler failure. No Cloud module deployment, production fix,
+mark reset, backdating, direct ntfy send or manual scheduler replay followed.
+The failed fixture was removed through owner commands and its obsolete
+activation timer is inactive/not scheduled. Neither attempt qualifies for #14.
+
+S then selected **2026-10-04 10:00 Beijing**. A new independent
+`FICTIONAL Step08E Mac-off final` was created directly **active** through the
+existing formal owner API, without any post-shutdown activation job. Existing
+business configuration remains `daily_time=10:00` in Asia/Shanghai; the domain
+has reminder dates, not a per-item hour/minute field.
+
+The pre-shutdown read-only check at `2026-10-03T17:09:06+08:00` confirmed formal
+item 56, table 6 and pending occurrence 98; action date is `2026-10-04`, no
+deadline/multi-notify, and all five notified marks are NULL. Exact production
+ntfy cache matches were zero. Due time is `2026-10-04T10:00:00+08:00`
+(`2026-10-04T02:00:00Z`). These IDs were allocated anew after removal of the
+previous fixture; the distinct title, creation time and fresh occurrence/NULL
+marks identify the new fixture rather than any prior attempt.
+
+Persistent private pre-shutdown evidence:
+
+`/srv/snotes/step08e-mac-off-final-20261004T020000Z/pre-shutdown-evidence.json`
+
+This evening did not mutate or re-arm this fixture. S plans to fully shut down
+the Mac by **2026-10-04 09:45 Beijing**, keep the iPhone online, and return after
+receiving the final notification. Then verify the actual timer run, formal DB,
+due classification, successful production transport, exactly one cache message,
+one notification mark and no duplicate on the next normal timer pass before
+claiming #14 PASS and deleting the fixture through the formal owner path.
+
+### v2.2 §59 acceptance matrix — final 32/32 closeout
+
+The numbering below follows the v2.2 FINAL §59 original. Report/test references
+retain their already-passed evidence; they are not a request to rerun those gates.
+The final 2026-10-04 closeout below supplies #13/#14/#17/#18/#22. All other
+entries retain their prior PASS evidence without repeating their gates.
+
+| # | Acceptance | Status | Evidence source / remaining gate |
+| ---: | --- | --- | --- |
+| 1 | migration counts | PASS | 8B, Maintenance execution and formal reconciliation: frozen Mac → formal Cloud, all counts diff=0. |
+| 2 | labels/tables/items | PASS | 8B reconciliation: 2/5/51, identities, canonical fields, relationships and label semantics preserved. |
+| 3 | occurrences | PASS | 8B reconciliation: 66 occurrences, history and notification/dedupe marks preserved. |
+| 4 | ai_reminder_operations | PASS | 8B: 87 canonical operation rows; approved default-only omissions checked. 8D preserved original 87. |
+| 5 | multi notification points | PASS | 8C, Completed human and live multi-notification acceptance: two existing occurrences, eight live nodes. |
+| 6 | each point sent once | PASS | 8C: every first pass sent 1; independent cache query found eight distinct messages. |
+| 7 | each point deduped | PASS | 8C: every immediate repeated pass sent 0, marks unchanged, no cache duplicates. |
+| 8 | Mac owner CRUD | PASS | Step 7 live acceptance; 8D Formal App and GUI evidence: formal owner create/update/pause/resume/complete. |
+| 9 | UI no main-thread freeze | PASS | Step 7 GUI acceptance; `tests/test_gc35_step07_gui.py`, `test_delay_keeps_gui_responsive_and_disables_writes`: heartbeat continues during worker delay. |
+| 10 | schema mismatch → automatic read-only | PASS | Step 7 GUI acceptance; `test_future_schema_does_not_parse_or_write_and_keeps_cache`: cache retained, parse/write rejected. |
+| 11 | Cloud update → Mac | PASS | Step 7 live acceptance; 8D formal GUI observed the owner API fixture's changed title. |
+| 12 | Mac update → Cloud | PASS | Step 7 live acceptance; 8D formal remote mutations verified by independent owner Cloud reads. |
+| 13 | only Cloud DB changes | PASS | Final 8E readonly Mac-vs-frozen-baseline comparison: all Reminder business values/marks/operations/settings unchanged; only documented default label/table updated_at metadata differs. Cloud original scope also unchanged after fixture cleanup. |
+| 14 | Mac-off scheduler | PASS | S confirmed the existing Oct 4 10:00 Beijing receipt while Mac fully off; production timer at 02:00:01 UTC sent 1, exact private ntfy cache 1, one action mark, subsequent normal timer passes 0. No resend or new human Gate. |
+| 15 | daily_time Beijing semantics | PASS | Step 6 24h closeout: next-day 10:00+08:00 dispatched at 02:00 UTC; 8B Asia/Shanghai schedule parity. No real setting change. |
+| 16 | VPS UTC | PASS | 8C Runtime and deployment: OS Etc/UTC, business timezone Asia/Shanghai. |
+| 17 | Persistent timer catch-up after reboot | PASS | One real Cloud reboot missed the 03:00 UTC calendar trigger; new boot at 03:00:05, unchanged Persistent timer automatically sent 1 at 03:00:14 before the next calendar boundary. No manual scheduler replay/stamp edit. |
+| 18 | catch-up no duplicate | PASS | Next normal 03:05 UTC timer pass sent 0; full occurrence row and single exact ntfy cache record unchanged from initial catch-up evidence. |
+| 19 | private ntfy auth | PASS | 8C Authentication, API and scheduler evidence: exact write-only production-topic ACL; anonymous/unauthorized reads denied. |
+| 20 | no ntfy.sh client fallback | PASS | 8C formal runtime fixed private endpoint/topic and fail-closed config; 8D remote-only client and excluded local helper. Historical local candidate path is outside this formal path. |
+| 21 | new production topic iPhone lockscreen | PASS | 8C human Gate: S explicitly confirmed lock-screen receipt from actual production scheduler and credential. |
+| 22 | Cloud reboot auto recovery | PASS | New boot automatically restored enabled/active production API, scheduler timer and backup timer; localhost/public owner snapshots 200, existing production backup quick_check/FK PASS. No manual service start or configuration change. |
+| 23 | Mac helper bootout | PASS | 8E retirement above: bootout already-not-found, plist removed, no registration/process; actual reboot/login remained absent. |
+| 24 | helper removed from build/package | PASS | 8D formal build exclusion plus 8E clean formal build: no helper executable/install payload and no plist installation. |
+| 25 | rebuild/reinstall does not restore helper | PASS | 8E clean 342d659 formal build/install at existing dist path, codesign PASS, no bundle helper/plist; tonight post-reboot normal startup remained clean. |
+| 26 | startup self-check detects legacy helper | PASS | 8E prescribed real plist-only negative case visibly warned; normal-before/after showed no warning; no bootstrap/kickstart. |
+| 27 | offline snapshot read-only | PASS | 8D real formal GUI unavailable-proxy Gate: compatible snapshot retained, offline/read-only, write buttons disabled, no local fallback/queue. |
+| 28 | AI-invisible → not_found | PASS | 8D actual registered Codex and packaged Yan hidden item/table reads returned not_found. |
+| 29 | guessed ID cannot bypass | PASS | Step 6 live 72-check acceptance and `test_actor_commands_reuse_service_allowlist_and_cannot_guess_hidden_ids`; 8D hidden-item/table acceptance. |
+| 30 | AI cannot change visibility | PASS | Step 6 server owner-only visibility rejection and 8D unavailable/rejected visibility tools; permissions unchanged. |
+| 31 | unauthorized delete/table/label rejected | PASS | Step 6 live actor owner-only denial; Step 7 live owner-only rejection; 8D packaged Yan rejection. Server allowlist remains authoritative. |
+| 32 | backup restore | PASS | 8E isolated production-backup restore above: SQLite/quick_check/FK/relationships/counts and actual read-only repository/service path passed, copy removed. |
+
+The following block preserves the original interim state; the matrix above
+and final closeout below supersede its pending counters.
+
+```text
+STEP08E_STARTED=YES
+LEGACY_HELPER_PLIST_PRESENT=NO
+LEGACY_HELPER_REGISTERED=NO
+LEGACY_HELPER_RUNNING=NO
+FORMAL_APP_PACKAGES_REMINDER_HELPER=NO
+FORMAL_REBUILD_REINSTALL_HELPER_ABSENT=PASS
+SELF_CHECK_DETECTS_LEGACY_HELPER=PASS
+HELPER_SURVIVES_REBOOT_AS_ABSENT=PASS
+HELPER_REBOOT_PERSISTENCE=PASS
+HELPER_PERMANENTLY_RETIRED=YES
+PRODUCTION_BACKUP_RESTORE=PASS
+ITEM_13_STEP08D=PASS
+ITEM_13_STEP08E_FINAL_SCOPE_REFRESH=PENDING
+MAC_OFF_FINAL_FIXTURE_PREACTIVATED=PASS
+MAC_OFF_FINAL_DUE_BEIJING=2026-10-04 10:00
+MAC_OFF_SCHEDULER=NOT_PROVEN
+PERSISTENT_TIMER_CATCHUP=PENDING
+PERSISTENT_TIMER_NO_DUPLICATE=PENDING
+CLOUD_REBOOT_AUTO_RECOVERY=PENDING
+REMINDER_ACCEPTANCE_PASS=28
+REMINDER_ACCEPTANCE_PENDING=4
+PENDING_ITEMS=14,17,18,22
+REMINDER_ACCEPTANCE_32_OF_32=PENDING
+STEP08E=IN_PROGRESS
+GREENCloud_3_5_B=OPEN
+READY_FOR_FINAL_MERGE_PUSH=NO
+MERGE_MAIN=NO
+PUSH=NO
+```
+
+After #14 passes, perform the previously authorized controlled real Cloud
+reboot/Persistent/no-duplicate gate with its separate fictional fixture, then
+cleanup, refresh the final scoped Mac comparison, and write the independent
+Step 8E closeout commit only when all required evidence is complete.
+
+---
+
+## Step 8 UI regression — background Reminder snapshot navigation
+
+**Historical repair handoff: STEP08E=IN_PROGRESS. Cloud reboot / Persistent final gates were paused.**
+S confirmed receiving `FICTIONAL Step08E Mac-off final` at **2026-10-04 10:00
+Beijing** while the Mac was fully shut down. Acceptance #14 is **human PASS**;
+the actual production timer/transport/cache/notification-mark/dedupe evidence
+will be reconciled later from the existing production logs. The earlier #14
+PENDING entries describe the state before this confirmation. #17/#18/#22 and
+the final #13 scope refresh remain pending; 32/32 is not asserted.
+
+The requested repair starts from branch `codex/gc35-step08-reminder-cutover`,
+HEAD `342d659f15e72b51236b4a66550f403c4a5989f6`, with only this report's existing
+uncommitted updates. Those updates are preserved. The startup remote snapshot
+emits `ReminderCenter.changed`, which previously called
+`MainWindow._sync_sidebar_reminder_filters()` regardless of current navigation.
+`NoteSidebar.set_reminder_filters()` then selected Reminder and rewrote the
+sidebar mode. The minimal guard permits sidebar Reminder filter synchronization
+only when `current_mode == "smart_view"` and `current_filter == "reminder"`.
+The separate Reminder badge and remote writable state signal connections stay
+in place. No Cloud API, scheduler, ntfy, Reminder data, permission or helper
+retirement changes are included, and passed 8A–8D gates are not repeated.
+
+### Targeted verification and formal rebuild
+
+- `tests.test_gc35_step07_gui` and `tests.test_gc35_step08_navigation`:
+  **9 tests PASS** (7 existing remote GUI checks and 2 navigation regressions),
+  using the existing `.venv/bin/python`, a temporary HOME, and fictional
+  temporary application/Cloud databases. The new tests exercise the complete
+  asynchronous snapshot signal path, startup Notes, explicit Reminder sidebar
+  navigation, labels/tables/filters, pending/offline read-only and restored
+  online writable controls, background badge updates without changing Notes,
+  and preservation of search/tag/other smart view navigation.
+- A temporary in-memory monkeypatch restored the old unguarded synchronization;
+  the regression test failed precisely because `sidebar.mode` became
+  `reminder` instead of `directory`. No source file was reverted for this
+  negative check, and the temporary negative-check harness was removed.
+- After S reported Notes could not be opened, the new navigation regression
+  was extended with real viewport clicks on two fictional Notes in a shown
+  window. Cold first-note load, Reminder round-trip to a second Note, and Note
+  opening after a background snapshot all passed with the real Markdown
+  editor. The extended case plus the existing single-click Reminder/Note
+  navigation case passed **2/2**. No Note editor or persistence code was changed.
+  The final combined targeted run (7 existing remote GUI + 2 extended navigation
+  + 1 existing Reminder/Note single-click case) then passed **10/10** in 17.816s.
+- A source GUI smoke using the real remote snapshot and existing GUI credential
+  provider, with temporary HOME/database, passed startup Notes → explicit
+  Reminder click → Notes → a second remote snapshot. Both startup and final
+  `current_mode`/sidebar mode were `directory`; 2 snapshot events completed
+  online, and Reminder labels/tables and writable controls loaded. The passing
+  run exited through `QTimer`/`app.quit`. No real user database was opened by
+  this source smoke and no production Reminder command was sent.
+- The unchanged `scripts/build_macos_app.sh` completed successfully at the
+  existing formal path `/Users/s/Documents/项目/S-notes/dist/S-notes.app`.
+  Build verification and independent `codesign --verify --deep --strict`
+  passed. Info.plist identifies source HEAD `342d659...`,
+  `SNotesSourceDirty=YES` (this uncommitted repair), formal `remote`,
+  `https://reminder.ke-den.de`, helper-retired `true`, and Step 7 candidate
+  `false`. No packaging configuration or helper lifecycle was changed.
+- The formal executable was also launched with temporary HOME/database.
+  A separately running ordinary Dock instance shared its Bundle ID, and the
+  window tool could not reliably distinguish the two. This automated window
+  attempt is not counted as the required human Dock smoke; the temporary
+  instance was stopped without closing S's ordinary instance. S's human
+  startup/navigation smoke subsequently **failed**: Reminder could be entered,
+  but Notes could not be opened. That adjacent navigation blocker is under
+  investigation; the formal human gate is not passed.
+- S confirmed the affected window had remained after a close/quit request.
+  `MainWindow.switch_note()` ignores clicks while `_close_pending` is set,
+  whereas Reminder navigation remains available, consistent with that symptom.
+  A native `app.exec()` probe with temporary HOME/database showed this waiting
+  state after the first normal close and then completed closure within roughly
+  3 seconds. The clean probe retained no worker threads and did not reproduce
+  a permanent close failure. No speculative close/editor patch was added;
+  a fresh ordinary Dock instance must still pass the human gate.
+- S explicitly confirmed there were no unsaved edits and authorized ending
+  the stuck GUI instance. Only the previously identified GUI PID 33583 was
+  terminated after its exact formal executable command was rechecked; its
+  exit was confirmed. MCP/helper processes were not targeted. S was asked to
+  reopen from the Dock and repeat the minimal startup/Note/Reminder smoke.
+- **Fresh formal Dock smoke — human PASS.** After reopening, S explicitly
+  answered **“新窗口三项都通过”**: the startup snapshot returned while Notes
+  stayed active and Notes could be opened; deliberate Reminder navigation
+  loaded normally; returning to Notes preserved Note opening. This supersedes
+  the earlier failed smoke on the stuck closing instance. Together with the
+  real remote second-snapshot source check and 10 targeted checks, the requested
+  UI regression gates are passed. No additional source change beyond the
+  6-line navigation guard was needed to restore Note opening in the fresh App.
+
+```text
+SOURCE_STARTUP_STAYS_ON_NOTES=PASS
+SOURCE_REMOTE_REFRESH_DOES_NOT_HIJACK_NAVIGATION=PASS
+SOURCE_REMINDER_MANUAL_NAVIGATION=PASS
+STARTUP_STAYS_ON_NOTES=PASS
+REMOTE_REFRESH_DOES_NOT_HIJACK_NAVIGATION=PASS
+REMINDER_MANUAL_NAVIGATION=PASS
+TARGETED_UI_REMOTE_TESTS=10_PASS
+FORMAL_APP_REBUILD=PASS
+CODESIGN=PASS
+FORMAL_APP_HUMAN_SMOKE=PASS
+ITEM_14_HUMAN_MAC_OFF=PASS
+ITEM_14_PRODUCTION_MACHINE_EVIDENCE=PENDING
+PERSISTENT_TIMER_CATCHUP=PAUSED
+PERSISTENT_TIMER_NO_DUPLICATE=PAUSED
+CLOUD_REBOOT_AUTO_RECOVERY=PAUSED
+REMINDER_ACCEPTANCE_32_OF_32=PENDING
+STEP08E=IN_PROGRESS
+READY_FOR_FINAL_MERGE_PUSH=NO
+MERGE_MAIN=NO
+PUSH=NO
+```
+
+No closeout commit, merge or push. Stop after the navigation repair and human
+formal App smoke; remaining #17/#18/#22, #14 machine evidence and the final
+32/32 reconciliation are a subsequent gate.
+
+---
+
+## 8E Final Closeout — 32 of 32 PASS
+
+**STEP08E=PASS. REMINDER_ACCEPTANCE_32_OF_32=PASS.** S resumed the remaining
+gates after the formal App UI regression was sealed. This closeout supplements
+the existing human #14 receipt and performs exactly one real Cloud reboot;
+it does not repeat any passed 8A–8D, helper, App, GUI/MCP, startup or restore
+gate. Construction branch is `codex/gc35-step08-reminder-cutover`, parent HEAD
+`342d659f15e72b51236b4a66550f403c4a5989f6`. The existing uncommitted report and
+minimal UI guard/tests are preserved in the independent Step 8E closeout.
+
+### #14 — existing Mac-off receipt and production machine evidence
+
+S already confirmed receiving `FICTIONAL Step08E Mac-off final` at **2026-10-04
+10:00 Beijing** while the Mac was completely shut down. Readonly reconciliation
+used its existing pre-shutdown evidence, production journal, formal DB and
+private ntfy cache; no notification resend or new human Gate occurred.
+
+- Formal item 56 / table 6 / occurrence 98 was due on Oct 4 at unchanged
+  Beijing `daily_time=10:00`. Its pre-shutdown cache count was 0 and all five
+  notification marks were NULL.
+- Actual production timer started at `02:00:00.694966Z`, reported **1** at
+  `02:00:01.100039Z`, and completed successfully. The occurrence's sole mark
+  is `action_notified_at=2026-10-04T10:00:01+08:00`; the other four remain NULL.
+- Exact topic/title/body cache match is **1**, published, message ID
+  `AAeUPHdHMX8d`, time `2026-10-04T02:00:01Z`. This ties the successful production
+  transport to the due fixture and mark.
+- The next normal timer at `02:05:01.041054Z` reported **0**; each later checked
+  normal pass through `02:40Z` also reported 0. No mark reset, direct send,
+  activation retry or manual scheduler run was used.
+- After evidence was saved, the existing owner API performed `delete_reminder`,
+  `delete_table`, then `permanently_delete_table` for this exact fixture. Its
+  item, occurrence and table rows are all absent; a protected pre-cleanup DB
+  backup remains in the private evidence directory.
+
+### #17/#18/#22 — one real Cloud reboot and Persistent timer recovery
+
+An independent hidden fictional table/item,
+`FICTIONAL Step08E Persistent reboot final`, was created through the owner API
+paused, then resumed immediately before the selected **03:00 UTC / 11:00 Beijing**
+calendar boundary. Before activation, the preceding normal pass sent 0. Before
+reboot, the new fixture had one pending occurrence, all five marks NULL and
+exact cache count 0. SQLite reused item/table/occurrence IDs 56/6/98 after the
+old fixture's complete removal; distinct title/creation time and fresh NULL
+marks establish that this is a separate fixture.
+
+The production timer was enabled, active, `Persistent=yes`, with actual
+`NextElapseUSecRealtime=03:00:00Z`. A single-use, fsynced reboot request was
+recorded at `02:59:57.000158Z`. The timer was stopped at `02:59:57.012669Z`
+without disabling it or editing its unit/stamp, then `systemctl reboot` was
+issued **once**. No manual service/scheduler start followed.
+
+| Evidence | Result |
+| --- | --- |
+| Old boot | `1d7cb1d0-713d-4d9d-a6bd-e016fdfe6dfe` |
+| Exactly one new boot | `689b0e84-f7cc-42de-a865-d45a97bd10e7`, boot time `03:00:05Z` |
+| Missed trigger | No scheduler numeric output in the old boot after `03:00:00Z` |
+| Automatic Persistent catch-up | New boot's first production timer pass sent **1** at `03:00:14.882548Z`; timer LastTrigger `03:00:14Z`, before next calendar trigger `03:05Z` |
+| Production delivery and mark | Exact published cache **1**, ID `21tOqCOGvkf5`, time `03:00:14Z`; sole action mark `2026-10-04T11:00:14+08:00` |
+| Next normal timer | Sent **0** at `03:05:01.241194Z`, successful; complete occurrence row and exact single cache record unchanged |
+| API automatic recovery | Enabled/active new-boot PID; localhost and public HTTPS owner snapshots **200** |
+| Timer automatic recovery | Scheduler and backup timers enabled/active with new-boot automatic-start journal records; scheduler `Persistent=yes` |
+| Existing production backup | Readonly `quick_check=ok`, FK violations **0**; no new restore rehearsal |
+| Configuration boundary | All five production unit hashes unchanged; OS Etc/UTC, daily_time 10:00, notifications enabled unchanged |
+
+The temporary evidence harness initially passed a hyphenated boot ID to
+`journalctl`, which rejects that format. Only its readonly argument formatting
+was corrected; the same actual reboot and catch-up evidence then passed. No
+second reboot, resend or production repair was required.
+
+After the next normal pass proved dedupe, the owner API cleaned the independent
+reboot fixture with the same three owner commands. A protected pre-cleanup DB
+backup was saved first. Remaining fixture item/occurrence/table rows are **0**.
+Formal counts returned to **2 labels / 5 tables / 51 reminders / 66 occurrences /
+93 operations**, with 2 eligible settings. All six scoped canonical digests
+match the pre-reboot-gate baseline, allowing only the previously documented
+default label/table `updated_at` metadata normalization. The original Cloud
+Reminder business values, marks, operation rows and settings did not change.
+
+### #13 — final Reminder-scope readonly comparison
+
+After fixture cleanup, the formal Mac DB was opened in SQLite `mode=ro` with
+`query_only=ON` and compared to the existing frozen 8B backup:
+
+`/Users/s/Library/Application Support/S-notes/backups/greencloud-step08b-20261003T020342Z/mac-pre-cloud-authority.db`
+
+Mac and baseline counts are **2 labels / 5 tables / 51 reminders / 66 occurrences /
+87 operations / 2 eligible settings**. Exact SQL values for reminders,
+occurrences (including every notified mark), all operation rows and the two
+eligible settings are equal. Label/table identities and every business field
+are equal; the only differences are the already-recorded default label 1 and
+default table 1 `updated_at` metadata. All six normalized scope digests match,
+unexpected differences are **0**, and SQLite `total_changes=0`. Notes and other
+unrelated DB tables were not compared or hashed. The Cloud operation count 93
+already existed before this final gate; it is distinct from the frozen Mac's
+87 and stayed unchanged throughout this round.
+
+Private durable evidence is retained under:
+
+`/srv/snotes/step08e-closeout-20261004/`
+
+The directory is mode 0700; evidence/backups are mode 0600. It contains
+`item14-machine-evidence.json`, `mac-off-cleanup.json`, `reboot-baseline.json`,
+`reboot-pre-shutdown.json`, `reboot-requested.json`,
+`reboot-catchup-evidence.json`, `reboot-final-evidence.json`,
+`reboot-cleanup.json`, `mac-final-scope.json`, and protected SQLite backups.
+The original Mac-off pre-shutdown evidence remains at its earlier private path.
+No credentials, private DB, build artifact or temporary harness is committed.
+
+```text
+ITEM_14_HUMAN_MAC_OFF=PASS
+ITEM_14_PRODUCTION_MACHINE_EVIDENCE=PASS
+PRODUCTION_SCHEDULER_RUN=PASS
+FIXTURE_DUE=YES
+PRODUCTION_TRANSPORT=PASS
+NTFY_CACHE_EXACT_MATCH=1
+NOTIFICATION_MARK_WRITTEN_ONCE=YES
+SUBSEQUENT_NORMAL_TIMER_DUPLICATE=NO
+CLOUD_REBOOT_COUNT=1
+CLOUD_REBOOT_AUTO_RECOVERY=PASS
+PRODUCTION_API_AUTO_RECOVERY=PASS
+PRODUCTION_SCHEDULER_TIMER_AUTO_RECOVERY=PASS
+PRODUCTION_BACKUP_TIMER_AUTO_RECOVERY=PASS
+PERSISTENT_TIMER_CATCHUP=PASS
+PERSISTENT_TIMER_NO_DUPLICATE=PASS
+FINAL_FICTIONAL_FIXTURES_CLEANED=PASS
+ITEM_13_STEP08E_FINAL_SCOPE_REFRESH=PASS
+CLOUD_ORIGINAL_REMINDER_SCOPE_UNCHANGED=PASS
+REMINDER_ACCEPTANCE_PASS=32
+REMINDER_ACCEPTANCE_PENDING=0
+REMINDER_ACCEPTANCE_32_OF_32=PASS
+STEP08E=PASS
+MERGE_MAIN=NO
+PUSH=NO
+STEP09_STARTED=NO
+POST_VIBE_AUDIT_STARTED=NO
+```
+
+No production architecture, Reminder permissions, ntfy endpoint/topic/ACL,
+daily_time, Mac authority or Cloud/Mac DB ownership was changed. Closeout ends
+with the independent Step 8E commit; Post-Vibe readonly audit is a separate
+next task.

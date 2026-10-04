@@ -461,6 +461,12 @@ class MainWindow(QMainWindow):
         self._sync_sidebar_reminder_filters()
 
     def _sync_sidebar_reminder_filters(self, *_args) -> None:
+        # Background snapshot updates must preserve the current navigation.
+        if not (
+            self.current_mode == "smart_view"
+            and self.current_filter == "reminder"
+        ):
+            return
         center = self.shell.reminder_center
         if center is None:
             return
