@@ -210,6 +210,40 @@ class Step07RemoteMcpReminderTests(unittest.TestCase):
         )
         self.assertEqual(service._reminders.mock_calls, [])
 
+    def test_non_reminder_actors_build_and_read_notes_with_remote_authority(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="snotes-step07-notes-") as temporary:
+            root = Path(temporary)
+            with patch.dict(os.environ, {"HOME": str(root / "home")}):
+                for actor_target_id in ("antigravity", "clawbot"):
+                    with self.subTest(actor_target_id=actor_target_id):
+                        service = build_local_mcp_service(
+                            actor_target_id=actor_target_id,
+                            resolved_data_root=root / actor_target_id,
+                            reminder_authority=ReminderAuthority(
+                                "remote", "http://127.0.0.1:9"
+                            ),
+                        )
+                        note = service._notes.create_note()
+                        note = service._notes.save_note(
+                            note.id,
+                            title="FICTIONAL_REMOTE_BOOTSTRAP_NOTE",
+                            content_markdown=f"readable by {actor_target_id}",
+                            location=note.location,
+                            expected_revision=note.revision,
+                        )
+                        service._ai_metadata.set_note_visibility(note.id, "full")
+                        service._ai_metadata.set_note_targets(note.id, [actor_target_id])
+
+                        discovered = service.search_notes("REMOTE_BOOTSTRAP_NOTE")
+                        self.assertEqual(discovered["status"], "ok")
+                        self.assertEqual(
+                            [item["note_id"] for item in discovered["results"]],
+                            [note.id],
+                        )
+                        read = service.get_note(note.id)
+                        self.assertEqual(read["status"], "ok")
+                        self.assertEqual(read["content"], f"readable by {actor_target_id}")
+
     def test_missing_actor_credential_fails_closed_without_local_reminder_or_gui_cache(self) -> None:
         with tempfile.TemporaryDirectory(prefix="snotes-step07-mcp-") as temporary:
             root = Path(temporary)
@@ -230,21 +264,43 @@ class Step07RemoteMcpReminderTests(unittest.TestCase):
                     "src.snotes.ui.reminder_owner.owner_credential",
                     side_effect=AssertionError("GUI owner credential accessed"),
                 ) as owner_credential,
+                patch(
+                    "src.snotes.transport.remote_reminder_client."
+                    "RemoteReminderClient._new_http_client",
+                    side_effect=AssertionError("Reminder HTTP client created"),
+                ) as http_client,
             ):
-                service = build_local_mcp_service(
-                    actor_target_id="yan",
-                    resolved_data_root=root / "data",
-                    reminder_authority=ReminderAuthority(
-                        "remote", "http://127.0.0.1:9"
-                    ),
-                )
-                result = service.list_reminder_labels()
+                for actor_target_id in (
+                    "yan",
+                    "claude-code",
+                    "antigravity",
+                    "clawbot",
+                ):
+                    with self.subTest(actor_target_id=actor_target_id):
+                        service = build_local_mcp_service(
+                            actor_target_id=actor_target_id,
+                            resolved_data_root=root / actor_target_id,
+                            reminder_authority=ReminderAuthority(
+                                "remote", "http://127.0.0.1:9"
+                            ),
+                        )
+                        read = service.list_reminder_labels()
+                        write = service.create_reminder_label(
+                            f"fixture-{actor_target_id}", "FICTIONAL"
+                        )
 
-            self.assertEqual(result["status"], "failed")
-            self.assertIn("actor credential", result["reason"])
+                        self.assertEqual(read["status"], "failed")
+                        self.assertEqual(read["labels"], [])
+                        self.assertIn("actor credential", read["reason"])
+                        self.assertEqual(write["status"], "failed")
+                        self.assertFalse(write["modified_formal_reminder"])
+                        self.assertFalse(write["entered_confirmation"])
+                        self.assertIn("actor credential", write["reason"])
+
             local_repository.assert_not_called()
             owner_credential.assert_not_called()
             cache_load.assert_not_called()
+            http_client.assert_not_called()
 
 
 if __name__ == "__main__":

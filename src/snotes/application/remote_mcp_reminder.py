@@ -357,10 +357,12 @@ def compose_remote_mcp_reminder(
     client_factory: Callable[..., RemoteReminderCommandClient],
     timeout_seconds: float = 4.0,
 ) -> RemoteMcpReminderAdapter:
-    provider = ActorReminderCredentialProvider(
-        actor_target_id,
-        credential_path=credential_path,
-    )
+    def provider() -> str:
+        return ActorReminderCredentialProvider(
+            actor_target_id,
+            credential_path=credential_path,
+        )()
+
     client = client_factory(
         endpoint,
         provider,
