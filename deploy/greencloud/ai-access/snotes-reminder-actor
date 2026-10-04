@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+test "$#" -eq 0
+cd /srv/snotes/reminder-runtime
+exec /usr/bin/env -i PATH=/usr/bin:/bin /srv/snotes/runtime/.venv/bin/python -I -B /srv/snotes/ai-access/reminder_actor.py
