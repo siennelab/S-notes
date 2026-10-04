@@ -24,7 +24,6 @@ REMINDER_HELPER_BINARY = Path(
 BUNDLE_IDENTIFIER = os.environ.get(
     "S_NOTES_BUNDLE_IDENTIFIER", "de.ke-den.snotes"
 )
-STEP07_CANDIDATE = os.environ.get("S_NOTES_STEP07_CANDIDATE") == "1"
 RETIRE_REMINDER_HELPER = (
     os.environ.get("S_NOTES_RETIRE_REMINDER_HELPER") == "1"
 )
@@ -110,7 +109,7 @@ app = BUNDLE(
         "NSHighResolutionCapable": True,
         "SNotesSourceCommit": os.environ.get("S_NOTES_SOURCE_COMMIT", "unknown"),
         "SNotesSourceDirty": os.environ.get("S_NOTES_SOURCE_DIRTY", "unknown"),
-        "SNotesStep07Candidate": STEP07_CANDIDATE,
+        "SNotesStep07Candidate": False,
         **REMINDER_AUTHORITY_INFO,
     },
 )

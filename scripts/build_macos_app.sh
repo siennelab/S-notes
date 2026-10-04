@@ -11,7 +11,6 @@ REMINDER_HELPER_SPEC_FILE="$ROOT_DIR/packaging/snotes-reminder-helper.spec"
 ICON_SOURCE="$ROOT_DIR/resources/macos/icon/S-notes-icon-source-2048.png"
 BUILD_DIR="$ROOT_DIR/build"
 DIST_DIR="$ROOT_DIR/dist"
-STEP07_CANDIDATE="0"
 BUNDLE_IDENTIFIER="de.ke-den.snotes"
 # Each profile declares its Reminder authority explicitly; the App reads it
 # from Info.plist at runtime and fails closed without it. The formal Step 8
@@ -25,16 +24,8 @@ if [[ "${1:-}" == "--candidate" ]]; then
     REMINDER_AUTHORITY="local"
     REMOTE_REMINDER_ENDPOINT=""
     RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"
-elif [[ "${1:-}" == "--step07-candidate" ]]; then
-    BUILD_DIR="$ROOT_DIR/build-step07-candidate"
-    DIST_DIR="$ROOT_DIR/dist-step07-candidate"
-    STEP07_CANDIDATE="1"
-    BUNDLE_IDENTIFIER="de.ke-den.snotes.step07candidate"
-    REMINDER_AUTHORITY="remote"
-    REMOTE_REMINDER_ENDPOINT="https://reminder.ke-den.de"
-    RETIRE_REMINDER_HELPER="${S_NOTES_RETIRE_REMINDER_HELPER:-0}"
 elif [[ $# -gt 0 ]]; then
-    echo "Usage: $0 [--candidate|--step07-candidate]" >&2
+    echo "Usage: $0 [--candidate]" >&2
     exit 2
 fi
 if [[ "$RETIRE_REMINDER_HELPER" != "0" && "$RETIRE_REMINDER_HELPER" != "1" ]]; then
@@ -76,8 +67,7 @@ safe_clean() {
     local target="$1"
     case "$target" in
         "$ROOT_DIR/build"|"$ROOT_DIR/dist"|\
-        "$ROOT_DIR/build-d1-candidate"|"$ROOT_DIR/dist-d1-candidate"|\
-        "$ROOT_DIR/build-step07-candidate"|"$ROOT_DIR/dist-step07-candidate")
+        "$ROOT_DIR/build-d1-candidate"|"$ROOT_DIR/dist-d1-candidate")
             rm -rf -- "$target"
             ;;
         *)
@@ -232,7 +222,6 @@ env \
     S_NOTES_RETIRE_REMINDER_HELPER="$RETIRE_REMINDER_HELPER" \
     S_NOTES_REMINDER_AUTHORITY="$REMINDER_AUTHORITY" \
     S_NOTES_REMOTE_REMINDER_ENDPOINT="$REMOTE_REMINDER_ENDPOINT" \
-    S_NOTES_STEP07_CANDIDATE="$STEP07_CANDIDATE" \
     S_NOTES_BUNDLE_IDENTIFIER="$BUNDLE_IDENTIFIER" \
     S_NOTES_SOURCE_COMMIT="$source_commit" \
     S_NOTES_SOURCE_DIRTY="$source_dirty" \
@@ -279,7 +268,7 @@ fi
 [[ "$(metadata_value LSMinimumSystemVersion)" == "13.0" ]] || fail "Incorrect minimum macOS version."
 [[ "$(metadata_value SNotesSourceCommit)" == "$source_commit" ]] || fail "Incorrect source commit provenance."
 [[ "$(metadata_value SNotesSourceDirty)" == "$source_dirty" ]] || fail "Incorrect source dirty provenance."
-[[ "$(metadata_value SNotesStep07Candidate)" == "$([[ "$STEP07_CANDIDATE" == "1" ]] && echo true || echo false)" ]] || fail "Incorrect Step 7 candidate marker."
+[[ "$(metadata_value SNotesStep07Candidate)" == "false" ]] || fail "Incorrect retired Step 7 candidate marker."
 [[ "$(metadata_value SNotesReminderAuthority)" == "$REMINDER_AUTHORITY" ]] || fail "Incorrect Reminder authority."
 if [[ "$REMINDER_AUTHORITY" == "remote" ]]; then
     [[ "$(metadata_value SNotesRemoteReminderEndpoint)" == "$REMOTE_REMINDER_ENDPOINT" ]] || fail "Incorrect remote Reminder endpoint."

@@ -1596,3 +1596,33 @@ No production architecture, Reminder permissions, ntfy endpoint/topic/ACL,
 daily_time, Mac authority or Cloud/Mac DB ownership was changed. Closeout ends
 with the independent Step 8E commit; Post-Vibe readonly audit is a separate
 next task.
+
+---
+
+## Final Post-Vibe P2 cleanup
+
+Both completed independent Post-Vibe rounds reported **P0=0 / P1=0** and
+ready to close. This final cleanup addresses only their two confirmed P2 tails:
+
+- **P2-1 production staging error-name residue = cleaned.** Topic changes still
+  fail closed with HTTP 400, now `ntfy_topic_immutable`; the unused runtime
+  `STAGING_TOPIC` constant was removed and its fictional test value moved into
+  the test fixture. Legal owner settings updates and actor HTTP 403 remain
+  unchanged. The 16 directly related HTTP/transport contract tests passed.
+- **P2-2 obsolete Step7 candidate artifact = cleaned.** The exact historical
+  `dist-step07-candidate/S-notes.app` path and candidate bundle metadata were
+  confirmed before removing its containing build-artifact directory. The formal
+  `dist/S-notes.app` was preserved during this cleanup.
+- **Candidate source profile = RETIRED.** No formal runtime or current
+  development flow depended on it. Removed only its build/activation/title/smoke
+  code and direct tests. The 10 focused authority/profile/owner tests passed;
+  shell syntax, changed Python compilation and diff checks passed. Formal build
+  settings remain `remote`, `https://reminder.ke-den.de`, helper retired `true`,
+  `SNotesStep07Candidate=false`. Shared credential interfaces remain unchanged.
+
+All automated checks used the existing `.venv`, temporary HOME and temporary
+databases. This cleanup did **not** change Reminder architecture, authority,
+permissions or Cloud production runtime. There was no third Post-Vibe audit,
+no 32/32 rerun, and no Step 9 work. The independent cleanup commit is followed
+by the requested fast-forward-only main merge, formal rebuild from clean main,
+minimal App smoke and main-only push.

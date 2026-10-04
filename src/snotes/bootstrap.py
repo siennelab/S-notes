@@ -142,11 +142,7 @@ def build_application(
     )
     if remote_controller is not None:
         from src.snotes.ui.reminder_legacy_check import start_legacy_check
-        window.setWindowTitle(
-            "S-notes Step 7 · GreenCloud staging"
-            if os.environ.get("S_NOTES_STEP07_CANDIDATE") == "1"
-            else "S-notes · GreenCloud"
-        )
+        window.setWindowTitle("S-notes · GreenCloud")
         start_legacy_check(window)
     application.aboutToQuit.connect(window.body_edit.page.deleteLater)
     return application, window

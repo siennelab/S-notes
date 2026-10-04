@@ -18,11 +18,13 @@ from src.snotes.transport.reminder_http import (
     ACTOR_ROLE,
     OWNER_ONLY_COMMANDS,
     OWNER_ROLE,
-    STAGING_TOPIC,
     ReminderCredential,
     ReminderHttpApplication,
     create_server,
 )
+
+
+TEST_TOPIC = "s-step06"
 
 
 class FakeTransport:
@@ -43,7 +45,7 @@ class Step06ReminderApiTests(unittest.TestCase):
         )
         current = self.service.settings()
         self.service.save_settings(
-            ReminderSettings(False, "10:00", "https://ntfy.ke-den.de", STAGING_TOPIC)
+            ReminderSettings(False, "10:00", "https://ntfy.ke-den.de", TEST_TOPIC)
         )
         self.credentials = {
             "owner-token": ReminderCredential("owner", OWNER_ROLE),
@@ -166,7 +168,7 @@ class Step06ReminderApiTests(unittest.TestCase):
         self.assertEqual(owner.body["schema_version"], 4)
         self.assertEqual(owner.body["server_time"], "2026-09-29T18:20:00Z")
         self.assertNotIn("ntfy_endpoint", owner.body["settings"])
-        self.assertEqual(owner.body["settings"]["ntfy_topic"], STAGING_TOPIC)
+        self.assertEqual(owner.body["settings"]["ntfy_topic"], TEST_TOPIC)
         self.assertNotIn("ntfy_endpoint", actor.body["settings"])
         self.assertNotIn("ntfy_topic", actor.body["settings"])
         self.assertNotIn("trash", actor.body)
@@ -320,12 +322,20 @@ class Step06ReminderApiTests(unittest.TestCase):
                 self.command("owner-token", command, {"item_id": item_id}).status, 200
             )
 
+        existing_settings = self.service.settings()
         bad_topic = self.command(
             "owner-token",
             "save_settings",
             {"notifications_enabled": True, "ntfy_topic": "s-other"},
         )
         self.assertEqual(bad_topic.status, 400)
+        self.assertEqual(bad_topic.body["error"], "ntfy_topic_immutable")
+        self.assertEqual(self.service.settings(), existing_settings)
+        actor_settings = self.command(
+            "yan-token", "save_settings", {"notifications_enabled": True}
+        )
+        self.assertEqual(actor_settings.status, 403)
+        self.assertEqual(self.service.settings(), existing_settings)
         bad_time = self.command(
             "owner-token", "save_settings", {"daily_time": "25:90"}
         )
@@ -342,17 +352,20 @@ class Step06ReminderApiTests(unittest.TestCase):
             {
                 "notifications_enabled": True,
                 "daily_time": "10:00",
-                "ntfy_topic": STAGING_TOPIC,
+                "ntfy_topic": TEST_TOPIC,
             },
         )
+        self.assertEqual(saved.status, 200)
         self.assertEqual(saved.body["status"], "updated")
+        self.assertTrue(self.service.settings().notifications_enabled)
+        self.assertEqual(self.service.settings().daily_time, "10:00")
         self.assertEqual(self.service.settings().ntfy_endpoint, "https://ntfy.ke-den.de")
-        self.assertEqual(self.service.settings().ntfy_topic, STAGING_TOPIC)
+        self.assertEqual(self.service.settings().ntfy_topic, TEST_TOPIC)
         self.assertEqual(
             self.command("owner-token", "send_test_notification", {}).body["status"],
             "sent",
         )
-        self.assertEqual(self.transport.calls[0]["topic"], STAGING_TOPIC)
+        self.assertEqual(self.transport.calls[0]["topic"], TEST_TOPIC)
         self.assertEqual(
             self.command(
                 "owner-token", "list_ai_operation_logs", {"offset": 0, "limit": 20}

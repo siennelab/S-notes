@@ -31,7 +31,6 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 DEFAULT_MAX_BODY_BYTES = 64 * 1024
 DEFAULT_REQUEST_TIMEOUT = 10.0
-STAGING_TOPIC = "s-step06"
 
 OWNER_ROLE = "owner"
 ACTOR_ROLE = "actor"
@@ -543,7 +542,7 @@ class ReminderHttpApplication:
             existing = self._service.settings()
             topic = _optional_str(payload, "ntfy_topic", existing.ntfy_topic)
             if topic != existing.ntfy_topic:
-                raise ValueError("staging_topic_required")
+                raise ValueError("ntfy_topic_immutable")
             daily_time = _optional_str(payload, "daily_time", existing.daily_time)
             _validate_daily_time(daily_time)
             self._service.save_settings(

@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QApplication
 from src.snotes.domain.reminder_remote_contract import REMINDER_WIRE_SCHEMA_VERSION
 from src.snotes.ui.reminder_owner import OwnerSnapshotCache, owner_credential
 from src.snotes.ui.reminder_legacy_check import legacy_scheduler_detected
-from src.snotes.step07_candidate import configure_candidate
 
 
 class OwnerIsolationTests(unittest.TestCase):
@@ -74,15 +73,6 @@ class OwnerIsolationTests(unittest.TestCase):
             with patch('src.snotes.ui.reminder_legacy_check.subprocess.run', return_value=subprocess.CompletedProcess([], 0)) as run:
                 self.assertTrue(legacy_scheduler_detected(Path(root)))
                 self.assertEqual(run.call_args.args[0][1], 'print')
-
-    def test_candidate_forces_isolated_root_without_any_secret(self):
-        with tempfile.TemporaryDirectory() as home, patch.dict(os.environ, {'HOME': home, 'S_NOTES_STEP07_CANDIDATE': '1', 'S_NOTES_DATA_ROOT': '/untrusted/formal'}):
-            self.assertTrue(configure_candidate())
-            self.assertEqual(os.environ['S_NOTES_DATA_ROOT'], str(Path(home) / 'Library/Application Support/S-notes-Step07'))
-            self.assertEqual(os.environ['S_NOTES_REMOTE_REMINDER_ENDPOINT'], 'https://reminder.ke-den.de')
-            self.assertEqual(os.environ['HOME'], str(Path(home) / 'Library/Application Support/S-notes-Step07/home'))
-            self.assertEqual(os.environ['S_NOTES_STEP07_HOST_HOME'], home)
-
 
 if __name__ == '__main__':
     unittest.main()
