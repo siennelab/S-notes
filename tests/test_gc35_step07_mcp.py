@@ -10,7 +10,9 @@ from unittest.mock import Mock, patch
 from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.application.remote_mcp_reminder import (
     ACTOR_CREDENTIAL_DIRECTORY,
+    MAC_LOCAL_REMINDER_ACTORS,
     RemoteMcpReminderAdapter,
+    compose_remote_mcp_reminder,
     default_actor_credential_path,
 )
 from src.snotes.bootstrap import build_local_mcp_service
@@ -106,6 +108,48 @@ class Step07RemoteMcpReminderTests(unittest.TestCase):
                 / ACTOR_CREDENTIAL_DIRECTORY
                 / "yan",
             )
+
+    def test_default_provider_keeps_four_actor_credentials_separate_and_lazy(self) -> None:
+        actors = ("yan", "claude-code", "clawbot", "antigravity")
+        self.assertEqual(MAC_LOCAL_REMINDER_ACTORS, frozenset(actors))
+        with tempfile.TemporaryDirectory(prefix="snotes-step07-provider-") as temporary:
+            host_home = Path(temporary)
+            credential_directory = host_home / ACTOR_CREDENTIAL_DIRECTORY
+            credential_directory.mkdir(parents=True)
+            expected = {}
+            for actor in actors:
+                token = f"fictional-{actor}-token"
+                expected[actor] = token
+                path = credential_directory / actor
+                path.write_text(token, encoding="utf-8")
+                path.chmod(0o600)
+
+            providers = {}
+
+            def client_factory(endpoint, provider, *, timeout_seconds):
+                actor = actors[len(providers)]
+                providers[actor] = provider
+                self.assertEqual(endpoint, "http://127.0.0.1:8766")
+                self.assertEqual(timeout_seconds, 4.0)
+                return _RecordingCommandClient()
+
+            with patch.dict(
+                os.environ,
+                {"S_NOTES_STEP07_HOST_HOME": str(host_home)},
+            ):
+                adapters = {
+                    actor: compose_remote_mcp_reminder(
+                        actor,
+                        "http://127.0.0.1:8766",
+                        client_factory=client_factory,
+                    )
+                    for actor in actors
+                }
+                self.assertEqual(set(adapters), set(actors))
+                self.assertEqual(
+                    {actor: provider() for actor, provider in providers.items()},
+                    expected,
+                )
 
     def test_adapter_routes_every_actor_reminder_operation_to_cloud_commands(self) -> None:
         client = _RecordingCommandClient()

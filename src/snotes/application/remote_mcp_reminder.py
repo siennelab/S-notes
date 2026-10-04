@@ -18,7 +18,9 @@ from src.snotes.domain.reminder_remote_contract import (
 )
 
 
-MAC_LOCAL_REMINDER_ACTORS = frozenset({"yan", "claude-code"})
+MAC_LOCAL_REMINDER_ACTORS = frozenset(
+    {"yan", "claude-code", "clawbot", "antigravity"}
+)
 ACTOR_CREDENTIAL_DIRECTORY = Path(
     "Library/Application Support/S-notes-Step07/actor-credentials"
 )

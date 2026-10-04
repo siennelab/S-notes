@@ -117,11 +117,104 @@ class CloudReminderRuntimeTests(unittest.TestCase):
         self.assertEqual(loaded["owner-token"].role, "owner")
         self.assertEqual(loaded["claude-token"].identity, "claude-code")
         self.assertEqual(loaded["claude-token"].role, "actor")
+        self.assertEqual(set(loaded), set(tokens.values()))
 
         credential.chmod(0o644)
         with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.credentials)}):
             with self.assertRaisesRegex(RuntimeError, "credential_invalid"):
                 reminder_cloud.load_api_credentials()
+
+    def test_optional_local_actor_credentials_are_distinct_fixed_actors(self) -> None:
+        payload = {
+            "owner": "owner-token",
+            "yan": "yan-token",
+            "claude-code": "claude-token",
+            "clawbot": "cloud-clawbot-token",
+            "local_actor_credentials": {
+                "clawbot": "mac-clawbot-token",
+                "antigravity": "mac-antigravity-token",
+            },
+        }
+        self._credential(
+            reminder_cloud.API_CREDENTIAL_NAME,
+            json.dumps(payload),
+        )
+        with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.credentials)}):
+            loaded = reminder_cloud.load_api_credentials()
+
+        self.assertEqual(set(loaded), {
+            "owner-token",
+            "yan-token",
+            "claude-token",
+            "cloud-clawbot-token",
+            "mac-clawbot-token",
+            "mac-antigravity-token",
+        })
+        self.assertEqual(loaded["mac-clawbot-token"].identity, "clawbot")
+        self.assertEqual(loaded["mac-clawbot-token"].role, "actor")
+        self.assertEqual(loaded["mac-antigravity-token"].identity, "antigravity")
+        self.assertEqual(loaded["mac-antigravity-token"].role, "actor")
+
+        payload["local_actor_credentials"] = {"antigravity": "replacement-token"}
+        self._credential(
+            reminder_cloud.API_CREDENTIAL_NAME,
+            json.dumps(payload),
+        )
+        with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.credentials)}):
+            replaced = reminder_cloud.load_api_credentials()
+        self.assertNotIn("mac-clawbot-token", replaced)
+        self.assertEqual(replaced["replacement-token"].identity, "antigravity")
+
+    def test_optional_local_actor_credentials_reject_malformed_or_duplicate_values(self) -> None:
+        primary = {
+            "owner": "owner-token",
+            "yan": "yan-token",
+            "claude-code": "claude-token",
+            "clawbot": "cloud-clawbot-token",
+        }
+        invalid_local_blocks = (
+            ["mac-clawbot-token"],
+            {"owner": "local-owner-token"},
+            {"yan": "local-yan-token"},
+            {"claude-code": "local-claude-token"},
+            {"unknown": "unknown-token"},
+            {"clawbot": "owner-token"},
+            {"clawbot": "same-token", "antigravity": "same-token"},
+            {"clawbot": "has whitespace"},
+            {"antigravity": ""},
+        )
+        credential = self.credentials / reminder_cloud.API_CREDENTIAL_NAME
+        for local_block in invalid_local_blocks:
+            with self.subTest(local_block=local_block):
+                credential.write_text(
+                    json.dumps({**primary, "local_actor_credentials": local_block}),
+                    encoding="utf-8",
+                )
+                credential.chmod(0o600)
+                with patch.dict(
+                    os.environ,
+                    {"CREDENTIALS_DIRECTORY": str(self.credentials)},
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "reminder_api_credential_invalid"
+                    ):
+                        reminder_cloud.load_api_credentials()
+
+        for malformed_payload in (
+            {**primary, "unknown_namespace": {}},
+            {key: value for key, value in primary.items() if key != "owner"},
+        ):
+            with self.subTest(keys=set(malformed_payload)):
+                credential.write_text(json.dumps(malformed_payload), encoding="utf-8")
+                credential.chmod(0o600)
+                with patch.dict(
+                    os.environ,
+                    {"CREDENTIALS_DIRECTORY": str(self.credentials)},
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "reminder_api_credential_invalid"
+                    ):
+                        reminder_cloud.load_api_credentials()
 
     def test_authenticated_schedule_uses_fixed_origin_and_dedupes_nodes(self) -> None:
         self._initialize()

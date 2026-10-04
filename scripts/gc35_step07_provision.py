@@ -7,6 +7,7 @@ Actor credentials are separate private files, never an owner fallback.
 from __future__ import annotations
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,10 +17,22 @@ from PySide6.QtWidgets import QApplication
 from src.snotes.ui.reminder_owner import OWNER_KEYCHAIN_ACCOUNT, OWNER_KEYCHAIN_SERVICE, owner_credential
 
 
-def fetch(actor: str) -> str:
-    if actor not in {'owner', 'yan', 'claude-code'}:
+PRIMARY_ACTORS = frozenset({'owner', 'yan', 'claude-code'})
+LOCAL_ACTORS = ('clawbot', 'antigravity')
+ACTOR_CREDENTIAL_ROOT = Path('Library/Application Support/S-notes-Step07/actor-credentials')
+
+
+def fetch(actor: str, *, local_actor: bool = False) -> str:
+    permitted = LOCAL_ACTORS if local_actor else PRIMARY_ACTORS
+    if actor not in permitted:
         raise RuntimeError('unsupported_identity')
-    code = "import json; from pathlib import Path; print(json.loads(Path('/root/greencloud-secrets/reminder-api.json').read_text())[" + repr(actor) + "])"
+    selection = (
+        "['local_actor_credentials'][" + repr(actor) + "]"
+        if local_actor else "[" + repr(actor) + "]"
+    )
+    code = ("import json; from pathlib import Path; "
+            "print(json.loads(Path('/root/greencloud-secrets/reminder-api.json').read_text())"
+            + selection + ")")
     import shlex
     result = subprocess.run(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', 'optimal',
@@ -31,6 +44,42 @@ def fetch(actor: str) -> str:
     if not re.fullmatch(r'[A-Za-z0-9_-]{40,128}', value):
         raise RuntimeError('staging_credential_format_invalid')
     return value
+
+
+def _credential_root() -> Path:
+    root = Path.home() / ACTOR_CREDENTIAL_ROOT
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    details = root.lstat()
+    if stat.S_ISLNK(details.st_mode):
+        raise RuntimeError('credential_directory_symlink')
+    if not stat.S_ISDIR(details.st_mode):
+        raise RuntimeError('credential_directory_invalid')
+    if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
+        raise RuntimeError('credential_directory_permissions')
+    return root
+
+
+def _write_actor_credential(root: Path, actor: str, value: str) -> None:
+    target = root / actor
+    if target.is_symlink():
+        raise RuntimeError('credential_file_symlink')
+    fd, name = tempfile.mkstemp(prefix='.credential-', dir=root)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(value + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, target)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def provision_local_actors() -> None:
+    root = _credential_root()
+    values = {actor: fetch(actor, local_actor=True) for actor in LOCAL_ACTORS}
+    for actor in LOCAL_ACTORS:
+        _write_actor_credential(root, actor, values.pop(actor))
 
 
 class ProvisionWorker(QThread):
@@ -48,22 +97,10 @@ class ProvisionWorker(QThread):
             if result.returncode or owner_credential() != owner:
                 raise RuntimeError('keychain_provision_failed')
             del owner, command, result
-            root = Path.home() / 'Library/Application Support/S-notes-Step07/actor-credentials'
-            root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if root.is_symlink():
-                raise RuntimeError('credential_directory_symlink')
+            root = _credential_root()
             for actor in ('yan', 'claude-code'):
                 value = fetch(actor)
-                target = root / actor
-                if target.is_symlink():
-                    raise RuntimeError('credential_file_symlink')
-                fd, name = tempfile.mkstemp(prefix='.credential-', dir=root)
-                try:
-                    with os.fdopen(fd, 'w') as stream:
-                        stream.write(value + '\n')
-                    os.replace(name, target)
-                finally:
-                    Path(name).unlink(missing_ok=True)
+                _write_actor_credential(root, actor, value)
                 del value
             self.done.emit(True)
         except Exception:
@@ -71,8 +108,21 @@ class ProvisionWorker(QThread):
             self.done.emit(False)
 
 
-def main() -> int:
-    app = QApplication(sys.argv)
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else list(argv)
+    if '--local-actors' in args:
+        ok = False
+        if args == ['--local-actors']:
+            try:
+                provision_local_actors()
+                ok = True
+            except Exception:
+                pass
+        print('STEP07_PRIVATE_CREDENTIAL_PROVISION=' + ('PASS' if ok else 'FAIL'))
+        return 0 if ok else 1
+
+    app_args = sys.argv if argv is None else [sys.argv[0], *args]
+    app = QApplication(app_args)
     result = {'ok': False}
     worker = ProvisionWorker()
     def finished(ok):

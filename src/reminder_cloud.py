@@ -50,6 +50,8 @@ API_CREDENTIAL_NAME = "reminder-api.json"
 NTFY_CREDENTIAL_NAME = "reminder-ntfy-token"
 PRODUCTION_NTFY_CREDENTIAL_NAME = "reminder-ntfy-production-token"
 API_IDENTITIES = frozenset({"owner", "yan", "claude-code", "clawbot"})
+LOCAL_ACTOR_CREDENTIAL_NAMESPACE = "local_actor_credentials"
+LOCAL_ACTOR_IDENTITIES = frozenset({"clawbot", "antigravity"})
 _BACKUP_NAME = re.compile(r"^reminder-\d{8}T\d{12}Z\.db$")
 
 
@@ -312,7 +314,16 @@ def load_api_credentials() -> dict[str, object]:
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError("reminder_api_credential_invalid") from error
-    if not isinstance(payload, dict) or set(payload) != API_IDENTITIES:
+    if not isinstance(payload, dict) or frozenset(payload) not in {
+        API_IDENTITIES,
+        API_IDENTITIES | {LOCAL_ACTOR_CREDENTIAL_NAMESPACE},
+    }:
+        raise RuntimeError("reminder_api_credential_invalid")
+    local_credentials = payload.get(LOCAL_ACTOR_CREDENTIAL_NAMESPACE, {})
+    if (
+        not isinstance(local_credentials, dict)
+        or not set(local_credentials).issubset(LOCAL_ACTOR_IDENTITIES)
+    ):
         raise RuntimeError("reminder_api_credential_invalid")
     try:
         from src.snotes.transport.reminder_http import ReminderCredential
@@ -320,7 +331,10 @@ def load_api_credentials() -> dict[str, object]:
         raise RuntimeError("reminder_http_runtime_unavailable") from error
 
     credentials: dict[str, object] = {}
-    for identity, token in payload.items():
+    identity_tokens = [
+        (identity, payload[identity]) for identity in API_IDENTITIES
+    ] + list(local_credentials.items())
+    for identity, token in identity_tokens:
         if (
             not isinstance(identity, str)
             or not identity.strip()

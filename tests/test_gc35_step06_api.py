@@ -52,6 +52,8 @@ class Step06ReminderApiTests(unittest.TestCase):
             "yan-token": ReminderCredential("yan", ACTOR_ROLE),
             "claude-token": ReminderCredential("claude-code", ACTOR_ROLE),
             "clawbot-token": ReminderCredential("clawbot", ACTOR_ROLE),
+            "mac-clawbot-token": ReminderCredential("clawbot", ACTOR_ROLE),
+            "antigravity-token": ReminderCredential("antigravity", ACTOR_ROLE),
         }
         self.app = ReminderHttpApplication(
             self.service,
@@ -115,6 +117,63 @@ class Step06ReminderApiTests(unittest.TestCase):
                 "table_id": table_id,
                 "title": "spoof",
                 "action_spec": {"type": "one_time", "date": "2026-10-11"},
+            },
+        )
+        self.assertEqual(spoof.status, 400)
+        self.assertEqual(spoof.body["error"], "identity_in_body_forbidden")
+        with self.assertRaisesRegex(ValueError, "unsupported_reminder_credential"):
+            ReminderCredential("unknown", ACTOR_ROLE)
+
+    def test_local_actor_tokens_keep_actor_permissions_and_audit_identity(self) -> None:
+        table_id, _item_id = self.seed_table_and_item(
+            visible=True,
+            title="LOCAL ACTOR VISIBLE",
+        )
+        cases = (
+            ("clawbot-token", "cloud-clawbot", "clawbot"),
+            ("mac-clawbot-token", "mac-clawbot", "clawbot"),
+            ("antigravity-token", "mac-antigravity", "antigravity"),
+        )
+        for token, request_id, expected_actor in cases:
+            with self.subTest(token=token):
+                created = self.command(
+                    token,
+                    "create_reminder_item",
+                    {
+                        "request_id": request_id,
+                        "table_id": table_id,
+                        "title": request_id,
+                        "action_spec": {
+                            "type": "one_time",
+                            "date": "2026-10-21",
+                        },
+                    },
+                )
+                self.assertEqual(created.status, 200)
+                self.assertEqual(created.body["status"], "created")
+                operation = next(
+                    row
+                    for row in self.service.list_ai_operation_logs().rows
+                    if row.request_id == request_id
+                )
+                self.assertEqual(operation.actor_target_id, expected_actor)
+                forbidden = self.command(
+                    token,
+                    "delete_reminder",
+                    {"item_id": created.body["item_id"]},
+                )
+                self.assertEqual(forbidden.status, 403)
+                self.assertEqual(forbidden.body["error"], "command_forbidden")
+
+        spoof = self.command(
+            "antigravity-token",
+            "create_reminder_item",
+            {
+                "request_id": "antigravity-spoof",
+                "table_id": table_id,
+                "title": "spoof",
+                "action_spec": {"type": "one_time", "date": "2026-10-22"},
+                "actor": "owner",
             },
         )
         self.assertEqual(spoof.status, 400)

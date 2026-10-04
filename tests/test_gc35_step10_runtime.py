@@ -44,8 +44,15 @@ class Step10RuntimeTests(unittest.TestCase):
 
     def test_server_uses_only_two_existing_actor_credentials(self):
         credential = self.root / "reminder-api.json"
-        credential.write_text(json.dumps({"owner": "fictional-owner", "claude-code": "fictional-claude",
-                                         "clawbot": "fictional-claw"}))
+        credential.write_text(json.dumps({
+            "owner": "fictional-owner",
+            "claude-code": "fictional-claude",
+            "clawbot": "fictional-claw",
+            "local_actor_credentials": {
+                "clawbot": "fictional-mac-claw",
+                "antigravity": "fictional-mac-antigravity",
+            },
+        }))
         credential.chmod(0o600)
         with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.root)}):
             self.assertEqual(load_actor_credentials(), {"fictional-claude": "claude-code",
