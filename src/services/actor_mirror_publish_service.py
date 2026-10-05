@@ -1,4 +1,4 @@
-"""Generate and publish the two GreenCloud actor mirrors from the Mac authority."""
+"""Generate and publish the registered GreenCloud actor mirrors from the Mac authority."""
 
 from __future__ import annotations
 

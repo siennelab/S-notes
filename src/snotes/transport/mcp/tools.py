@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Annotated
+from typing import Annotated, TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from src.snotes.application.ai_acceptance_outcome import normalize_operation_outcome
-from src.snotes.application.local_mcp_service import LocalMcpService
+if TYPE_CHECKING:
+    from src.snotes.application.local_mcp_service import LocalMcpService
 from src.snotes.transport.mcp.schemas import (
     AiTargetList,
     CategoryText,

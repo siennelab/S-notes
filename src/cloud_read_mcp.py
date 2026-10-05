@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pwd
 from dataclasses import dataclass
 from pathlib import Path
 import stat
@@ -21,6 +22,19 @@ class ActorBinding:
     actor: str
     mirror_path: Path
     credential_path: Path
+
+
+@dataclass(slots=True)
+class ActorCloudRuntime:
+    """Actor-fixed Cloud Notes services with one owned proposal client."""
+
+    binding: ActorBinding
+    read_service: CloudReadService
+    proposal_service: CloudProposalService
+    _client: CloudProposalClient
+
+    def close(self) -> None:
+        self._client.close()
 
 
 PRODUCTION_UID_BINDINGS = {
@@ -42,12 +56,52 @@ PRODUCTION_UID_BINDINGS = {
     ),
 }
 
+GALE_OS_ACCOUNT = "snotes-gale"
+GALE_MIRROR_PATH = Path("/srv/snotes/mirror/gale/current.db")
+GALE_NOTES_CREDENTIAL_PATH = Path(
+    "/srv/snotes/actor-credentials/gale/notes-proposal-token"
+)
+
+
+def gale_production_binding() -> ActorBinding:
+    """Resolve Gale's installation-assigned UID without guessing it in code."""
+    try:
+        account = pwd.getpwnam(GALE_OS_ACCOUNT)
+        uid = int(account.pw_uid)
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("gale_os_identity_unavailable") from error
+    if (
+        getattr(account, "pw_name", GALE_OS_ACCOUNT) != GALE_OS_ACCOUNT
+        or uid <= 0
+        or uid in PRODUCTION_UID_BINDINGS
+        or account.pw_gid != uid
+        or account.pw_shell not in {"/usr/sbin/nologin", "/sbin/nologin"}
+    ):
+        raise RuntimeError("gale_os_identity_invalid")
+    return ActorBinding(
+        uid=uid,
+        actor="gale",
+        mirror_path=GALE_MIRROR_PATH,
+        credential_path=GALE_NOTES_CREDENTIAL_PATH,
+    )
+
 
 def binding_for_effective_uid(effective_uid: int) -> ActorBinding:
     try:
-        return PRODUCTION_UID_BINDINGS[int(effective_uid)]
-    except (KeyError, TypeError, ValueError) as error:
+        uid = int(effective_uid)
+    except (TypeError, ValueError) as error:
         raise RuntimeError("unsupported_os_identity") from error
+    try:
+        return PRODUCTION_UID_BINDINGS[uid]
+    except KeyError:
+        pass
+    try:
+        gale = gale_production_binding()
+    except RuntimeError as error:
+        raise RuntimeError("unsupported_os_identity") from error
+    if uid != gale.uid:
+        raise RuntimeError("unsupported_os_identity")
+    return gale
 
 
 def read_actor_credential(binding: ActorBinding) -> str:
@@ -87,15 +141,31 @@ def read_actor_credential(binding: ActorBinding) -> str:
     return token
 
 
+def compose_actor_cloud_runtime(
+    effective_uid: int | None = None,
+) -> ActorCloudRuntime:
+    """Build the existing Notes services for the caller's fixed OS identity."""
+    binding = binding_for_effective_uid(
+        os.geteuid() if effective_uid is None else effective_uid
+    )
+    reader = SQLiteCloudMirrorReader(binding.mirror_path)
+    read_service = CloudReadService(reader)
+    client = CloudProposalClient(lambda: read_actor_credential(binding))
+    return ActorCloudRuntime(
+        binding=binding,
+        read_service=read_service,
+        proposal_service=CloudProposalService(reader, client),
+        _client=client,
+    )
+
+
 def main() -> int:
-    client: CloudProposalClient | None = None
+    runtime: ActorCloudRuntime | None = None
     try:
-        binding = binding_for_effective_uid(os.geteuid())
-        reader = SQLiteCloudMirrorReader(binding.mirror_path)
-        service = CloudReadService(reader)
-        client = CloudProposalClient(lambda: read_actor_credential(binding))
-        proposal_service = CloudProposalService(reader, client)
-        asyncio.run(serve_cloud_read(service, proposal_service))
+        runtime = compose_actor_cloud_runtime()
+        asyncio.run(
+            serve_cloud_read(runtime.read_service, runtime.proposal_service)
+        )
         return 0
     except KeyboardInterrupt:
         return 0
@@ -103,8 +173,8 @@ def main() -> int:
         startup_error(str(error) or type(error).__name__)
         return 2
     finally:
-        if client is not None:
-            client.close()
+        if runtime is not None:
+            runtime.close()
 
 
 if __name__ == "__main__":

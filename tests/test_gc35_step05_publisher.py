@@ -122,18 +122,18 @@ class ActorMirrorPublisherTest(unittest.TestCase):
         first = self.publisher.publish()
         self.assertEqual(
             [result.status for result in first],
-            ["published", "published"],
+            ["published", "published", "published"],
         )
         self.assertEqual(
             [call[0] for call in self.transport.calls],
-            ["claude-code", "clawbot"],
+            ["claude-code", "clawbot", "gale"],
         )
         second = self.publisher.publish()
         self.assertEqual(
             [result.status for result in second],
-            ["unchanged", "unchanged"],
+            ["unchanged", "unchanged", "unchanged"],
         )
-        self.assertEqual(len(self.transport.calls), 2)
+        self.assertEqual(len(self.transport.calls), 3)
         self.assertEqual(self.database.read_bytes(), source_before)
         with self.assertRaisesRegex(RuntimeError, "read-only"):
             with SQLiteConnectionFactory(
@@ -160,7 +160,7 @@ class ActorMirrorPublisherTest(unittest.TestCase):
         failed = self.publisher.publish()
         self.assertEqual(
             [result.status for result in failed],
-            ["published", "failed"],
+            ["published", "failed", "published"],
         )
         failure_state = self.publisher.status()["actors"]["clawbot"]
         self.assertEqual(
@@ -173,7 +173,7 @@ class ActorMirrorPublisherTest(unittest.TestCase):
         retried = self.publisher.publish()
         self.assertEqual(
             [result.status for result in retried],
-            ["unchanged", "published"],
+            ["unchanged", "published", "unchanged"],
         )
         self.assertEqual(len(self.transport.calls), calls_before_retry + 1)
         self.assertFalse(

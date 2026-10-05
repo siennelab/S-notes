@@ -34,7 +34,9 @@ DEFAULT_REQUEST_TIMEOUT = 10.0
 
 OWNER_ROLE = "owner"
 ACTOR_ROLE = "actor"
-ALLOWED_ACTORS = frozenset({"yan", "claude-code", "clawbot", "antigravity"})
+ALLOWED_ACTORS = frozenset(
+    {"yan", "claude-code", "clawbot", "antigravity", "gale"}
+)
 IDENTITY_FIELDS = frozenset(
     {"actor", "actor_id", "actor_target_id", "identity", "principal", "role"}
 )

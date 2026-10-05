@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import pwd
 from pathlib import Path
 import stat
 import sys
@@ -37,7 +38,16 @@ def binding_for_effective_uid(uid: int) -> ActorAccess:
     try:
         return UID_BINDINGS[uid]
     except KeyError:
+        pass
+    try:
+        account = pwd.getpwnam("snotes-gale")
+    except KeyError:
         raise ValueError("unsupported_os_identity") from None
+    if (uid <= 0 or uid != account.pw_uid or uid != account.pw_gid
+            or uid in UID_BINDINGS
+            or account.pw_shell not in {"/usr/sbin/nologin", "/sbin/nologin"}):
+        raise ValueError("unsupported_os_identity")
+    return ActorAccess(uid, "gale", Path("/srv/snotes/actor-credentials/gale/reminder-token"))
 
 
 def read_credential(binding: ActorAccess) -> str:

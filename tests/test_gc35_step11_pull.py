@@ -136,6 +136,10 @@ class PublishStub:
 
 
 class GC35Step11PullTest(unittest.TestCase):
+    def test_greencloud_gale_preserves_source_without_oracle_alias(self) -> None:
+        parsed = parse_export_payload(export_payload(proposal(source_actor="gale")))
+        self.assertEqual(parsed[0].source_actor, "gale")
+
     def test_parser_preserves_cloud_actor_and_operation_envelope(self) -> None:
         parsed = parse_export_payload(export_payload(proposal()))
         self.assertEqual(
@@ -158,7 +162,7 @@ class GC35Step11PullTest(unittest.TestCase):
 
     def test_parser_rejects_identity_operation_and_envelope_confusion(self) -> None:
         cases = (
-            (proposal(source_actor="gale"), "source_actor_invalid"),
+            (proposal(source_actor="unknown-actor"), "source_actor_invalid"),
             (proposal(operation_type="delete"), "operation_type_invalid"),
             (proposal(note_id=None), "operation_envelope_invalid"),
             (proposal(delivery_state="acknowledged"), "remote_delivery_state_invalid"),

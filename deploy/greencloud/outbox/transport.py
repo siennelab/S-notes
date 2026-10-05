@@ -12,9 +12,10 @@ from src.services.gale_submission_outbox import (
     export_unacknowledged,
     record_terminal_receipt,
 )
+from src.snotes.domain.greencloud import GREEN_CLOUD_ACTORS
 
 DATABASE = Path("/srv/snotes/data/outbox.db")
-ACTORS = frozenset({"claude-code", "clawbot"})
+ACTORS = GREEN_CLOUD_ACTORS
 MAX_REQUEST_BYTES = 512 * 1024
 
 

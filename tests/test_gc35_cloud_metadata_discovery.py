@@ -186,7 +186,7 @@ class GreenCloudMetadataDiscoveryTests(unittest.TestCase):
         results = self.publisher.publish()
         self.assertEqual(
             [result.status for result in results],
-            ["published", "published"],
+            ["published", "published", "published"],
         )
         service = self._claude_service()
 
@@ -346,7 +346,7 @@ class GreenCloudMetadataDiscoveryTests(unittest.TestCase):
             second = self.publisher.publish()
         self.assertEqual(
             [result.status for result in second],
-            ["published", "published"],
+            ["published", "published", "published"],
         )
         self.assertNotEqual(
             [result.content_hash for result in second], first_hashes

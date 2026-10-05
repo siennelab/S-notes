@@ -10,6 +10,7 @@ import stat
 import sys
 
 from src.services.gale_submission_outbox import initialize_outbox
+from src.snotes.domain.greencloud import GREEN_CLOUD_ACTORS
 from src.snotes.storage.cloud_read import SQLiteCloudMirrorReader
 from src.snotes.transport.cloud_outbox_http import (
     CloudOutboxHttpApplication,
@@ -19,7 +20,9 @@ from src.snotes.transport.cloud_outbox_http import (
 
 DATABASE_PATH = Path("/srv/snotes/data/outbox.db")
 API_CREDENTIAL_NAME = "reminder-api.json"
-ACTORS = frozenset({"claude-code", "clawbot"})
+GALE_NOTES_CREDENTIAL_NAME = "gale-notes-proposal-token"
+ACTORS = GREEN_CLOUD_ACTORS
+LEGACY_SHARED_CREDENTIAL_ACTORS = frozenset({"claude-code", "clawbot"})
 
 
 def production_reader(actor: str) -> SQLiteCloudMirrorReader:
@@ -29,17 +32,20 @@ def production_reader(actor: str) -> SQLiteCloudMirrorReader:
 
 
 def load_actor_credentials() -> dict[str, str]:
-    """Return token -> actor for only the two Cloud Notes identities."""
+    """Return token -> actor for every fixed Cloud Notes identity."""
     try:
         payload = json.loads(
             _credential_bytes(API_CREDENTIAL_NAME, limit=65_536).decode("utf-8")
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError("cloud_outbox_credential_invalid") from error
-    if not isinstance(payload, dict) or not ACTORS.issubset(payload):
+    if (
+        not isinstance(payload, dict)
+        or not LEGACY_SHARED_CREDENTIAL_ACTORS.issubset(payload)
+    ):
         raise RuntimeError("cloud_outbox_credential_invalid")
     credentials: dict[str, str] = {}
-    for actor in ACTORS:
+    for actor in LEGACY_SHARED_CREDENTIAL_ACTORS:
         token = payload.get(actor)
         if (
             not isinstance(token, str)
@@ -50,6 +56,22 @@ def load_actor_credentials() -> dict[str, str]:
         if token in credentials:
             raise RuntimeError("cloud_outbox_credential_invalid")
         credentials[token] = actor
+    try:
+        gale_token = _credential_bytes(
+            GALE_NOTES_CREDENTIAL_NAME,
+            limit=4096,
+        ).decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise RuntimeError("cloud_outbox_credential_invalid") from error
+    if (
+        not gale_token
+        or any(character.isspace() for character in gale_token)
+        or gale_token in credentials
+        or gale_token in {value for value in payload.values() if isinstance(value, str)}
+        or gale_token in payload.get("local_actor_credentials", {}).values()
+    ):
+        raise RuntimeError("cloud_outbox_credential_invalid")
+    credentials[gale_token] = "gale"
     return credentials
 
 

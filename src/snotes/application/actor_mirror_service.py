@@ -15,11 +15,12 @@ from src.snotes.application.ai_safe_read_service import (
 )
 from src.snotes.application.local_mcp_write_service import note_version_token
 from src.snotes.domain.actor_mirror import ACTOR_MIRROR_DIALECT, ActorMirrorError, ActorMirrorRecord
+from src.snotes.domain.greencloud import GREEN_CLOUD_ACTOR_SEQUENCE
 from src.snotes.domain.tags import parse_tags
 from src.snotes.application.ports import ActorMirrorWriter, ActorMirrorSource
 
 
-SUPPORTED_ACTORS = ("claude-code", "clawbot")
+SUPPORTED_ACTORS = GREEN_CLOUD_ACTOR_SEQUENCE
 
 
 class ActorMetadataCatalogSource(Protocol):

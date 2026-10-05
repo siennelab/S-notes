@@ -12,6 +12,7 @@ from typing import Callable, Mapping
 from urllib.parse import urlsplit
 
 from src.snotes.application.cloud_proposal_service import CloudProposalService
+from src.snotes.domain.greencloud import GREEN_CLOUD_ACTORS
 from src.services.gale_submission_outbox import (
     GaleSubmissionOutboxError,
     enqueue_proposal,
@@ -22,7 +23,7 @@ from src.services.gale_submission_outbox import (
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
 DEFAULT_MAX_BODY_BYTES = 640 * 1024
-ALLOWED_ACTORS = frozenset({"claude-code", "clawbot"})
+ALLOWED_ACTORS = GREEN_CLOUD_ACTORS
 ALLOWED_OPERATIONS = frozenset(
     {"create", "prepend", "append", "update_note_metadata", "edit"}
 )
@@ -58,7 +59,7 @@ class CloudOutboxHttpApplication:
             ):
                 raise ValueError("cloud_outbox_credentials_invalid")
             normalized[token] = actor
-        if set(normalized.values()) != ALLOWED_ACTORS:
+        if not {"claude-code", "clawbot"}.issubset(normalized.values()):
             raise ValueError("cloud_outbox_credentials_incomplete")
         self._database_path = Path(database_path)
         self._credentials = normalized

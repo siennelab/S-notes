@@ -54,7 +54,7 @@ class ReceiverTransport:
         self.mirror_root = Path(mirror_root)
         self.calls: list[str] = []
         self.fail_next_actor = ""
-        for actor in ("claude-code", "clawbot"):
+        for actor in ("claude-code", "clawbot", "gale"):
             (self.mirror_root / actor).mkdir(parents=True, mode=0o700)
 
     def publish(
@@ -171,7 +171,7 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
         )
         self.metadata.set_note_visibility(self.note.id, "full")
         self.metadata.set_note_targets(
-            self.note.id, ("claude-code", "clawbot")
+            self.note.id, ("claude-code", "clawbot", "gale")
         )
 
         rules = self.root / "local" / "config" / "local_redaction_rules.json"
@@ -187,7 +187,7 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
             transport=self.receiver,
         )
         initial = self.publisher.publish()
-        self.assertEqual([item.status for item in initial], ["published", "published"])
+        self.assertEqual([item.status for item in initial], ["published", "published", "published"])
 
         self.identity = self.root / "mirror-key"
         self.identity.write_text("fictional", encoding="utf-8")
@@ -251,7 +251,7 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
                 sub_category=receipt.sub_category,
                 tags=receipt.tags,
                 visibility=receipt.ai_visibility,
-                target_ids=("claude-code", "clawbot"),
+                target_ids=("claude-code", "clawbot", "gale"),
             ),
         )
 
@@ -499,8 +499,21 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
         self.assertEqual(self._proposal("claude-code").get_operation_status(request_id)["delivery_state"], "accepted")
         self.assertEqual(self._proposal("clawbot").get_operation_status(request_id)["delivery_state"], "rejected")
 
+    def test_gale_cloud_proposal_acceptance_refreshes_gale_and_returns_receipt(self) -> None:
+        request_id = "fictional-greencloud-gale-accept"
+        self._queue_append("gale", request_id, "FICTIONAL Gale accepted tail")
+        self._pull_once()
+        receipt = self.receipts.list_pending_receipts()[0]
+        self.assertEqual((receipt.source, receipt.actor_target_id), ("GreenCloud", "gale"))
+        self.assertTrue(self._accept(receipt.id).outcome.accepted)
+        before = len(self.receiver.calls)
+        result = self._flush()
+        self.assertEqual((result.sent_count, result.failed_count), (1, 0))
+        self.assertEqual(self.receiver.calls[before:], ["gale"])
+        self.assertEqual(self._proposal("gale").get_operation_status(request_id)["delivery_state"], "accepted")
+
     def test_same_external_identity_is_isolated_between_gale_and_cloud(self) -> None:
-        queued = self._queue_append("claude-code", "shared-cross-source-id")
+        queued = self._queue_append("gale", "shared-cross-source-id")
         self._pull_once()
         cloud_receipt = self.receipts.list_pending_receipts()[0]
         gale_receipt, created = self.receipts.import_gale_submission(

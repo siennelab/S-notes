@@ -15,11 +15,12 @@ import tempfile
 from typing import BinaryIO
 
 from src.snotes.domain.actor_mirror import ActorMirrorError
+from src.snotes.domain.greencloud import GREEN_CLOUD_ACTORS
 from src.snotes.storage.actor_mirror import verify_actor_mirror
 
 
 MIRROR_ROOT = Path("/srv/snotes/mirror")
-ALLOWED_ACTORS = frozenset({"claude-code", "clawbot"})
+ALLOWED_ACTORS = GREEN_CLOUD_ACTORS
 MAX_HEADER_BYTES = 4096
 MAX_PAYLOAD_BYTES = 512 * 1024 * 1024
 INPUT_TIMEOUT_SECONDS = 120

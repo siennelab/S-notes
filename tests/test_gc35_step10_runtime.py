@@ -42,7 +42,7 @@ class Step10RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "credential_unavailable"):
             read_actor_credential(linked)
 
-    def test_server_uses_only_two_existing_actor_credentials(self):
+    def test_server_uses_existing_actor_credentials_and_separate_gale_notes_token(self):
         credential = self.root / "reminder-api.json"
         credential.write_text(json.dumps({
             "owner": "fictional-owner",
@@ -54,9 +54,13 @@ class Step10RuntimeTests(unittest.TestCase):
             },
         }))
         credential.chmod(0o600)
+        gale_credential = self.root / "gale-notes-proposal-token"
+        gale_credential.write_text("fictional-gale-notes")
+        gale_credential.chmod(0o600)
         with patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.root)}):
             self.assertEqual(load_actor_credentials(), {"fictional-claude": "claude-code",
-                                                       "fictional-claw": "clawbot"})
+                                                       "fictional-claw": "clawbot",
+                                                       "fictional-gale-notes": "gale"})
             credential.chmod(0o644)
             with self.assertRaisesRegex(RuntimeError, "cloud_outbox_credential_invalid"):
                 load_actor_credentials()
