@@ -4603,3 +4603,586 @@ WEB_GALE_TO_GREENCLOUD_MCP = NEXT
 ```
 
 含义：下一阶段再单独设计并施工 ChatGPT Web Gale 直接连接 GreenCloud S-notes MCP。Oracle Gale production 暂时保留，本轮不迁移、不删除。这里不提前记录尚未拍板的 Remote MCP 架构细节。
+
+---
+
+# 92. Web Gale → GreenCloud Direct MCP｜正式 CLOSED
+
+**补记日期：2026-10-05**
+**状态：§91 的 `WEB_GALE_TO_GREENCLOUD_MCP = NEXT` 已完成施工、部署、ChatGPT connector 接入与真人 E2E；从本节开始该状态正式更新为 CLOSED。GreenCloud 成为 Web Gale 当前正式主入口，Oracle Gale 暂时保留为过渡 fallback。**
+
+```text
+WEB_GALE_TO_GREENCLOUD_MCP=CLOSED
+WEB_GALE_PRIMARY=GREENCLOUD
+CHATGPT_CONNECTOR=PASS
+NOTES_AUTHORITY=Mac
+REMINDER_AUTHORITY=GreenCloud
+```
+
+本阶段没有为 Web Gale 另造第二套 Notes authority、Reminder DB、proposal lifecycle 或同步 daemon。最终结构继续沿用 GreenCloud 3.5 已封口的边界：
+
+```text
+Notes
+Mac = 唯一正式 authority
+GreenCloud = Gale 专属安全笔记副本 + 既有 proposal / receipt 链
+
+Reminder
+GreenCloud = 唯一正式 authority
+Web Gale = 普通 AI actor，经既有 Reminder API 读写
+```
+
+Web Gale 的 Notes 修改仍固定走：
+
+```text
+Web Gale
+→ GreenCloud proposal
+→ Mac AI Center
+→ S 人工 Accept / Reject
+→ 正式 Note
+→ Gale mirror refresh
+→ terminal receipt
+```
+
+没有 Cloud 直接改正式 Mac Notes，也没有绕开 AI Center 人工确认。
+
+## 92.1 GreenCloud Gale internal identity / composition｜CLOSED
+
+施工 branch：
+
+```text
+codex/web-gale-greencloud-internal
+```
+
+实现 commit：
+
+```text
+2f596c7096156b801f56671560f95ac57c145259
+```
+
+Gale 继续复用稳定 actor ID：
+
+```text
+actor=gale
+```
+
+GreenCloud 独立 OS identity：
+
+```text
+user=snotes-gale
+UID=2007
+GID=2007
+nologin
+sudo=NO
+```
+
+Gale Notes 安全副本：
+
+```text
+/srv/snotes/mirror/gale/current.db
+```
+
+该副本继续由现有 Mac → GreenCloud publisher 更新；没有同步整个正式 Notes DB，也没有改变 Mac Notes authority。
+
+Gale 使用独立 credential：
+
+```text
+Notes proposal credential:
+/srv/snotes/actor-credentials/gale/notes-proposal-token
+
+Reminder credential:
+/srv/snotes/actor-credentials/gale/reminder-token
+```
+
+内部入口：
+
+```text
+runuser -u snotes-gale -- /usr/local/bin/snotes-gale-internal-mcp
+```
+
+既有内部服务继续保持 localhost：
+
+```text
+Notes outbox = 127.0.0.1:8767
+Reminder     = 127.0.0.1:8766
+```
+
+Gale 不能直接读取 Notes outbox DB、Reminder production DB、其它 actor mirror / credential、owner-only 数据或 backup；身份由 server / OS side 固定，客户端不能自报别的 actor。
+
+## 92.2 Gale 统一 MCP discovery｜25 tools
+
+最终 internal discovery：
+
+```text
+NOTES_TOOLS=12
+REMINDER_TOOLS=13
+TOTAL_TOOLS=25
+```
+
+Notes 12：
+
+```text
+search_notes
+get_note
+get_note_markdown
+list_directories
+list_tags
+list_ai_metadata_options
+create_note
+prepend_note
+append_note
+update_note_metadata
+edit_note
+get_operation_status
+```
+
+Reminder 13：
+
+```text
+list_reminder_labels
+list_reminder_tables
+get_reminder_table
+list_reminder_items
+get_reminder_item
+create_reminder_label
+create_reminder_table
+update_reminder_table
+create_reminder_item
+update_reminder_item
+complete_reminder_item
+pause_reminder_item
+resume_reminder_item
+```
+
+Notes 权限语义保持既有正式 contract：
+
+- hidden / unauthorized / other-actor Note 完全不可搜索、不可读取、不可猜 ID 探测；
+- `full` / `redacted` 保持现有语义；
+- Gale 可读取自己已获准 Note 的 AI visibility / targets；
+- Gale 不可修改 AI visibility / actor targets；
+- Note delete 继续不开放；
+- metadata 写入只允许既有 `title / directory_id / add_tags / remove_tags`。
+
+Ticket 1 最终 targeted / live / permission verification PASS；真实 internal discovery 为 25 tools，actor injection、cross-credential、direct DB、其它 mirror 等负例均按预期拒绝。Oracle Gale production 本票未修改。
+
+# 93. GreenCloud Remote MCP + ChatGPT Connector｜CLOSED
+
+Remote MCP 施工 branch：
+
+```text
+codex/web-gale-greencloud-remote-mcp
+```
+
+Remote MCP / Web Gale 主入口代码合入后的正式基线：
+
+```text
+3765c6fd93d8650f0603fb9f16bad1bce97aa83f
+```
+
+正式 service：
+
+```text
+snotes-gale-remote-mcp.service
+```
+
+仅监听：
+
+```text
+127.0.0.1:8768
+```
+
+公网 MCP endpoint：
+
+```text
+https://snotes-gale.ke-den.de/mcp
+```
+
+公网只暴露 authenticated Remote MCP web entry；8766 / 8767 / 8768 三个 Python service 均保持 loopback。
+
+OAuth 使用独立 Auth0 配置：
+
+```text
+Authorization Code + PKCE + Refresh
+scope=gale.read
+```
+
+匿名请求只允许 MCP 协议发现 / initialize；business tool call 必须经过 OAuth。无 token / 错 token 均按预期拒绝。
+
+Remote MCP 最终与 internal contract 保持同一 25-tool discovery；targeted tests、localhost/public contract、fictional Notes / metadata / Reminder smoke 与权限负例全部 PASS。部署验收没有读取真实 Note 正文。
+
+ChatGPT Web 已正式创建并连接 connector：
+
+```text
+S-notes Gale｜GreenCloud
+```
+
+ChatGPT discovery：
+
+```text
+25 tools
+```
+
+因此 Web Gale 当前正式业务路径为：
+
+```text
+ChatGPT Web
+→ Auth0 OAuth
+→ snotes-gale.ke-den.de/mcp
+→ GreenCloud Remote MCP
+→ snotes-gale internal composition
+→ Gale Notes safe mirror / existing Notes outbox / formal Reminder API
+```
+
+# 94. Web Gale 真人 E2E｜FULL PASS
+
+## 94.1 Notes read / discovery Gate｜PASS
+
+Web Gale 通过新 GreenCloud connector 成功执行：
+
+```text
+list_directories
+list_tags
+list_ai_metadata_options
+search_notes
+get_note
+get_note_markdown
+```
+
+真实读取链证明：
+
+```text
+ChatGPT Web
+→ OAuth
+→ GreenCloud Remote MCP
+→ Gale actor-specific Notes safe mirror
+```
+
+正常可见 Note 的分类、tags、AI metadata 与 Markdown 均正确返回。
+
+权限负例：
+
+```text
+TITLE=逸的记忆 · 起点
+EXPECTED=Gale invisible
+RESULT=search 0
+```
+
+PASS。
+
+## 94.2 Notes write full loop｜PASS
+
+真人 proposal：
+
+```text
+request_id=web-gale-greencloud-human-gate-20261004-note-create-v1
+submission_uuid=65a775ca-b678-4cfa-8057-b6e54f48290b
+operation=create
+```
+
+最终：
+
+```text
+status=accepted
+formal_note_id=350
+```
+
+完整链路：
+
+```text
+Web Gale
+→ GreenCloud outbox
+→ Mac pull
+→ ai_receipt_inbox
+→ AI Center
+→ S Accept
+→ 正式 Note #350
+→ Gale mirror refresh
+→ Web Gale 回读
+```
+
+正式 Note 的分类、tags、`ai_visibility=full`、`ai_targets=[gale]` 均符合预期。
+
+因此：
+
+```text
+WEB_GALE_NOTES_READ=PASS
+WEB_GALE_NOTES_WRITE=PASS
+MAC_NOTES_AUTHORITY_PRESERVED=YES
+```
+
+## 94.3 Reminder 真人 Gate｜PASS
+
+Web Gale 经新 GreenCloud connector 创建并回读正式 Reminder：
+
+```text
+item_id=56
+title=Web Gale → GreenCloud Reminder 真人验收｜2026-10-05
+```
+
+结果：
+
+```text
+processing_mode=direct
+changed_formal_reminder=true
+READBACK=PASS
+```
+
+这证明 Web Gale → GreenCloud formal Reminder authority 的实际写链可用。
+
+## 94.4 真人测试数据 cleanup｜CLOSED
+
+本轮三条明确测试数据已由 S 清理：
+
+```text
+Note #350
+Web Gale → GreenCloud 真人写链验收｜2026-10-04
+
+Note #351
+Web Gale → Candidate 关闭修复真人验收｜2026-10-04
+
+Reminder #56
+Web Gale → GreenCloud Reminder 真人验收｜2026-10-05
+```
+
+不再保留为当前业务数据或待办。本节只记录真人 Gate 曾使用这些 ID，不得未来把它们当作正式业务对象继续操作。
+
+# 95. Formal App stale + GUI close regression｜CLOSED
+
+Web Gale 真人 Gate 期间连续暴露两个只影响 Mac Formal App 的真实 blocker；均已修复并进入正式版本。
+
+## 95.1 Formal App stale｜CLOSED
+
+第一次 Notes proposal 到达 GreenCloud 后，Cloud `get_operation_status` 已显示：
+
+```text
+delivery_state=delivered
+```
+
+但 Mac AI Center 仍显示 pending 0。
+
+最终根因：当时正在运行的 Formal App 仍来自旧 source：
+
+```text
+89607dafdd99f5414d5af0e4c8c0278f64d0ecd6
+```
+
+旧 GreenCloud parser 不支持：
+
+```text
+actor=gale
+```
+
+因此 proposal 卡在 Mac inbox 导入前。
+
+本轮没有创建第二张替代 proposal；重建 Formal App 到当时 current main 后，复用原 submission：
+
+```text
+65a775ca-b678-4cfa-8057-b6e54f48290b
+```
+
+成功进入：
+
+```text
+ai_receipt_inbox
+receipt row id=95
+status=pending
+```
+
+AI Center 真人看到 exact title / source=GreenCloud / actor=gale / operation=create 后 Accept，原 proposal 正常完成 terminal accepted。
+
+结论：
+
+```text
+STALE_FORMAL_APP_ROOT_CAUSE=CLOSED
+EXISTING_PROPOSAL_RECOVERED=YES
+SECOND_PROPOSAL_REQUIRED=NO
+```
+
+## 95.2 Accept 后“切不动 / 退不掉” GUI regression｜CLOSED
+
+第一次真人 Accept 后，Formal App 出现：
+
+```text
+左侧笔记可以点击并变化高亮
+右侧正文不切换
+Command+Q 无法退出
+旧进程持续存活
+```
+
+S 抓取 `sample` 后确认主 GUI event loop 仍存活，不是 SQLite / 网络把主线程永久堵死。
+
+最终修复定位：AI Center GreenCloud follow-up worker 的清理 / MainWindow close handoff 不可靠，现场最符合 `_gale_threads` 残留，连带使 `_close_pending` 持续为真；旧实现又会反复 50ms self-close retry，而 `switch_note()` 在 `_close_pending` 时直接返回。
+
+修复 branch：
+
+```text
+codex/fix-ai-center-close-stall
+```
+
+最终 commit：
+
+```text
+db9c3312ea398d94de10d76ff039ec1ecf3f1b9d
+```
+
+修复内容保持最小：
+
+- AI Center worker 使用显式 GUI slot 完成清理；
+- 完成信号恢复退出；
+- MainWindow 不再无限 50ms self.close polling；
+- 不取消 terminal receipt / mirror refresh；
+- 不改 Notes 保存、权限、schema 或 Cloud runtime。
+
+针对性测试：
+
+```text
+4 PASS
+```
+
+candidate 真人 Gate 又走一条真实 GreenCloud proposal：
+
+```text
+request_id=web-gale-close-fix-human-gate-20261004-note-create-v1
+submission_uuid=f511cace-d741-4cba-9af6-0ff37d5777c9
+status=accepted
+local_receipt_id=96
+formal_note_id=351
+```
+
+S 真人确认：
+
+```text
+Accept 后立即关闭 AI Center=PASS
+连续切换笔记=PASS
+Command+Q=PASS
+```
+
+随后 `db9c3312...` ff-only merge / push，正式 `dist/S-notes.app` 从同一 main 重建。
+
+最终 Formal App smoke：
+
+```text
+cold start=PASS
+3-note switch=PASS
+AI Center open/close=PASS
+AI Center close 后继续切 note=PASS
+Command+Q=PASS
+residual process=NO
+```
+
+candidate 已删除。
+
+因此：
+
+```text
+GUI_CLOSE_FIX_FORMALIZED=YES
+```
+
+# 96. Oracle Gale fallback / retirement plan｜正式拍板
+
+从本节开始，Web Gale 的正式主入口明确为 GreenCloud：
+
+```text
+WEB_GALE_PRIMARY=GREENCLOUD
+```
+
+旧 Oracle Gale production **暂时继续保留**，但定位已经变化：
+
+```text
+ORACLE_GALE_FALLBACK=RETAINED
+```
+
+当前阶段对 Oracle：
+
+- 不拆；
+- 不删；
+- 不迁移；
+- 不改 schema；
+- 不改 runtime；
+- 不动旧数据 / mirror / outbox / credential；
+- 只作为 GreenCloud Web Gale 主入口的过渡期 fallback。
+
+Oracle 不再视为长期双主，也不是未来默认入口。
+
+S 已明确拍板：
+
+> 先让 GreenCloud Web Gale 主入口稳定运行一段时间。确认稳定后，再单独开启一张 Oracle Gale retirement 施工票，把旧 Oracle Web Gale 链路正式拆掉。
+
+因此现行状态：
+
+```text
+WEB_GALE_PRIMARY=GREENCLOUD
+ORACLE_GALE_FALLBACK=RETAINED
+ORACLE_GALE_RETIREMENT=DEFERRED
+RETIRE_TRIGGER=GreenCloud stable operation + explicit S approval
+```
+
+未来 `ORACLE_GALE_RETIREMENT` 独立票才负责判断并处理：
+
+- 旧 ChatGPT Oracle connector；
+- Oracle Gale Web MCP / service；
+- 对应 runtime；
+- mirror / outbox / retained data；
+- credential；
+- rollback / archive / deletion 边界。
+
+在该独立票开始前，不得因为当前 GreenCloud 已 PASS 就提前删除或停用 Oracle fallback。
+
+# 97. 当前唯一正式状态｜2026-10-05 FINAL
+
+§90–§91 的 `89607daf...` / `WEB_GALE_TO_GREENCLOUD_MCP = NEXT` 现在只代表 Web Gale 工程开工前历史状态。从本节开始，当前正式代码 / App 基线为：
+
+```text
+MAIN=db9c3312ea398d94de10d76ff039ec1ecf3f1b9d
+ORIGIN_MAIN=db9c3312ea398d94de10d76ff039ec1ecf3f1b9d
+WORKTREE=CLEAN
+PUSH=PASS
+
+FORMAL_APP=/Users/s/Documents/项目/S-notes/dist/S-notes.app
+FORMAL_APP_SOURCE=db9c3312ea398d94de10d76ff039ec1ecf3f1b9d
+FORMAL_APP_BUILD=PASS
+FORMAL_APP_CODESIGN=PASS
+FORMAL_APP_SMOKE=PASS
+GUI_CLOSE_FIX=PASS
+```
+
+Web Gale / architecture 总账：
+
+```text
+WEB_GALE_TO_GREENCLOUD_MCP=CLOSED
+WEB_GALE_PRIMARY=GREENCLOUD
+CHATGPT_CONNECTOR=PASS
+GALE_ACTOR=gale
+GALE_TOOL_DISCOVERY=25
+
+WEB_GALE_NOTES_READ=PASS
+WEB_GALE_NOTES_WRITE=PASS
+WEB_GALE_REMINDER=PASS
+
+NOTES_AUTHORITY=Mac
+REMINDER_AUTHORITY=GreenCloud
+LOCAL_WRITABLE_FALLBACK=NO
+LEGACY_REMINDER_HELPER=RETIRED
+
+NOTE_DELETE=NO
+AI_VISIBILITY_WRITE=NO
+ACTOR_TARGETS_WRITE=NO
+
+ORACLE_GALE_FALLBACK=RETAINED
+ORACLE_GALE_RETIREMENT=DEFERRED
+```
+
+本轮真人测试数据已清理：
+
+```text
+TEST_NOTE_350=CLEANED
+TEST_NOTE_351=CLEANED
+TEST_REMINDER_56=CLEANED
+```
+
+当前没有新的 Web Gale 功能 blocker。下一阶段不是继续改 Web Gale；先让 GreenCloud 主入口进入真实稳定运行期。Oracle retirement 只在满足 `GreenCloud stable operation + explicit S approval` 后单独开票。
+
+本文件此次补记 §92–§97 后只需要一个新的 **docs-only commit + push**：docs commit 会使仓库 `HEAD / main / origin/main` 前进到新的文档 SHA，但不改变已经真人验收的 Formal App source `db9c3312...`，也不要求再次 build / codesign / smoke。
+
+# 98. 新窗口接班短句｜Web Gale → GreenCloud 封口版
+
+> G，继续 S-notes。Web Gale → GreenCloud Direct MCP 已正式 CLOSED：GreenCloud `snotes-gale` 固定 actor=`gale`，使用自己的 Notes safe mirror 与独立 Notes/Reminder credential；internal composition 与 Remote MCP 统一 discovery 25 tools，公网入口 `https://snotes-gale.ke-den.de/mcp` 仅经 Auth0 OAuth 提供 business call，8766/8767/8768 继续 loopback。ChatGPT connector `S-notes Gale｜GreenCloud` 已连接并真人验收：Notes discovery/read PASS，`逸的记忆 · 起点` 对 Gale 不可见负例 PASS；真人 Notes create proposal `web-gale-greencloud-human-gate-20261004-note-create-v1` 完整走通 Web → GreenCloud → Mac AI Center → S Accept → 正式 Note → Gale mirror 回读；Reminder 真人 create/readback 也 PASS。期间发现 Formal App 仍停在 `89607daf...`，旧 parser 不支持 `actor=gale`，复用原 delivered submission 更新 Formal App 后恢复，未建第二张 proposal；随后 Accept 又暴露“切不动 / Command+Q 退不掉” GUI close regression，修复 commit=`db9c3312ea398d94de10d76ff039ec1ecf3f1b9d`，candidate 再走真实 GreenCloud Accept 后 S 真人确认关闭 AI Center、切笔记、Command+Q 全 PASS，修复已 ff-only merge/push 并重建正式 `dist/S-notes.app`，formal smoke PASS、candidate 已删。测试 Note #350 / #351 与 Reminder #56 已由 S 清理。当前 `main == origin/main == db9c3312...`、worktree clean；本进度书补记后只做 docs-only commit，不重建 App。Web Gale 当前正式主入口是 GreenCloud；Oracle Gale 暂时只作为 fallback 保留，不拆、不删。等 GreenCloud 主入口稳定运行一段时间并由 S 明确批准后，再单独开启 `ORACLE_GALE_RETIREMENT` 票正式拆除 Oracle 链路。在此之前不要提前动 Oracle，也不要从旧 §91 把 `WEB_GALE_TO_GREENCLOUD_MCP = NEXT` 捞回待办。
