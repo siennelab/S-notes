@@ -4487,3 +4487,119 @@ Cloud read open-time target_actor       = NO_CONSTRUCTION_REQUIRED
 
 > G，继续 S-notes。GreenCloud 3.5-A/B/C/D、11 步路线、四个本地 Agent MCP、post-close cleanup、Cloud `prepend_note + update_note_metadata` 均已正式 CLOSED；Cloud 功能真人 Gate 中发现的 AI Center close crash 也已修复并进入正式版本。随后最终 small maintenance 也已收口：此前最新版进度书已以 docs commit `7527df1c1827e2b81d9d3ac9830df39af797eb50` 纳入 Git；GreenCloud `sudo: unable to resolve host optimal-living` 根因是 `/etc/hosts` 仍保留旧 `debian` hostname，现已对齐为 `127.0.1.1 optimal-living debian`，解析与 sudo probe PASS；`ai_call_logs` retention 已正式采用 count-based policy：`TRIGGER_ROWS=12000`，超过后一次裁回 `KEEP_ROWS=10000`，实现挂在现有 `initialize_database` 启动维护路径，不新增 scheduler/service。首次正式裁剪 `24389 → 10000`，删除 14389 条，随后 smoke 后最终 10005 条；18 项相关测试、正式 App build、codesign、隔离 smoke PASS，业务表未变，恢复备份保留。当前已验收代码 / runtime 基线为 `main == origin/main == 3f1da0baa9b1fe2b0f87057d2671ef259dd6b7a6`，worktree clean，`PUSH=PASS`。本进度书此次补记 §85–§87 后只需再做一次 docs-only commit + push，不需要 rebuild App。当前没有新的强制 GreenCloud 3.5 主线；仍保留的 maintenance 只有 Reminder owner slimming（真实触发时）、sidebar 约 17px UI polish、actor mapping duplication（相关 owner 真被修改时）、`raw_candidate_markdown` DELETE_CANDIDATE / DO_NOT_OPEN_ALONE，以及 Cloud read open-time `target_actor`=`NO_CONSTRUCTION_REQUIRED`。Ke local MCP 继续 DEFERRED；Delete Note、AI visibility write、actor targets write 继续 NO。不要从旧章节重新捞回已经 CLOSED 的 cleanup、prepend/metadata、hostname 或 retention。
 
+# 88. GreenCloud metadata discovery 补齐｜POST-CLOSE CLOSED
+
+本轮第一张独立小票已由 S / G 验收 PASS，并已 fast-forward 合入 main、push origin/main：
+
+```text
+BRANCH=codex/greencloud-metadata-discovery
+FINAL_COMMIT=f04d92f832510b2f7433dd41bad4383629211cff
+MERGE_MODE=FAST_FORWARD_ONLY
+MERGE=PASS
+PUSH=PASS
+TARGETED_TESTS=54_PASS
+CLAUDE_CODE_REAL_CLOUD_SMOKE=PASS
+CLAWBOT_REAL_CLOUD_SMOKE=PASS
+```
+
+actor-specific mirror 的派生 schema 从 v1 更新至 v2；镜像可由现有 publisher 重建。Mac 正式 Notes 数据库 schema 未改。
+
+当前 actor 已获准读取的 Note，`get_note` 除原有标题、正文、分类路径、tags、版本外，正式返回：
+
+- `main_category`
+- `sub_category`
+- `ai_visibility`
+- `ai_targets`
+
+`main_category / sub_category` 直接来自正式 Note 的现有分类数据，不从“待办 / xxx / xxx”等展示字符串反向猜测。
+
+GreenCloud Cloud MCP 新增并正式注册三个 discovery 工具：
+
+- `list_directories`：正式分类候选，包括当前 actor 可见 Note 尚未使用的分类。
+- `list_tags`：正式标签候选。
+- `list_ai_metadata_options`：当前有效 AI 可见性选项及 AI actor registry 中当前有效对象。
+
+候选复用现有 directory / tag service、AI metadata options / actor registry，语义沿用成熟的本地 MCP / Oracle Gale 定义。小型 metadata catalog 随既有 Mac → GreenCloud publisher 更新，不硬编码静态名单。
+
+本票 GreenCloud runtime 与镜像继续全部放在既有 `/srv/snotes` 结构内：只更新本票需要的 runtime 文件、现有 INSTALL 文档与 actor mirrors，没有新增 S-notes 顶层业务目录，没有新同步 daemon，没有同步整个正式 Notes DB，也没有新增公网接口或数据库 authority。
+
+Notes 权限、full / redacted、actor 身份和 authority 边界保持不变：hidden / 未授权 / other-actor Note 仍不可搜索、不可读取、不可通过猜 ID 探测；只为已经授权读取的 Note 返回上述 metadata。Mac 仍是 Notes 唯一正式 authority，GreenCloud 仍保存 actor-specific 派生镜像与现有 proposal / outbox；delete、AI visibility 写入、AI targets 写入继续没有。
+
+本票没有修改 Oracle runtime、Reminder 或 Caddy。54 项 targeted tests 已覆盖 fictional full / redacted / hidden / other-actor Note、三项 catalog discovery 与原有 read / search / proposal 行为；claude-code / clawbot 各一次真实 Cloud discovery / read smoke PASS，测试和日志未打印真实 Note 正文或 secret。
+
+# 89. Reminder metadata chips UI｜POST-CLOSE CLOSED
+
+本轮第二张独立 UI 小票已通过 S 真人 Gate，并已 fast-forward 合入 main、push origin/main：
+
+```text
+BRANCH=codex/reminder-metadata-chips
+FINAL_COMMIT=89607dafdd99f5414d5af0e4c8c0278f64d0ecd6
+MERGE_MODE=FAST_FORWARD_ONLY
+MERGE=PASS
+PUSH=PASS
+TARGETED_TESTS=18_PASS
+CANDIDATE_BUILD=PASS
+CANDIDATE_CODESIGN=PASS
+S_HUMAN_GATE=PASS
+FORMAL_APP_BUILD=PASS
+FORMAL_APP_CODESIGN=PASS
+FORMAL_APP_SMOKE=PASS
+CANDIDATE_CLEANUP=PASS
+```
+
+Reminder 主界面原来重复的“所属标签 / AI 可见性”整行已删除。标题下摘要改为两个独立、可点击的小 chips：所属标签与 AI 可见性；例如 `[ 未归类 ▾ ] [ AI 可见 ▾ ]`。
+
+继续复用原有标签 / AI 可见性数据源、FloatingComboBox 菜单、立即保存与 refresh / selection 逻辑。选择后顶部文字立即更新，切换 Reminder table 时两项状态随当前选中表变化。保留当前 S-notes 的轻量视觉，表格相对原展开整行上移约 51px。
+
+本票不改 Reminder schema、GreenCloud Reminder API、authority 或 ntfy，也不改 Notes、第一张 metadata discovery 或 Oracle。18 项直接相关 UI / 附近 Reminder regression PASS；candidate build / codesign PASS；S 真人已确认顶部清爽、两个控件可识别、表格腾出空间及修改顺手。
+
+从合并后的干净 main `89607dafdd99f5414d5af0e4c8c0278f64d0ecd6` 使用现有正常 build 脚本重建正式 App，arm64 打包与 `codesign --verify --deep --strict` PASS。
+
+本轮从正式 dist 路径启动一次，使用临时 HOME / fictional Notes DB 隔离真实 Mac Notes，复用既有 Keychain owner 接口只读连接现有 GreenCloud Reminder。最小成品 smoke：Notes 编辑主界面正常打开，Reminder 主界面正常打开，两个 metadata chips 正常显示，GreenCloud / Reminder 显示“已连接”且无明显异常；随后 App 正常关闭，exit code 0，未见崩溃。
+
+正式 App 成功后，仅删除本轮 `dist-d1-candidate`，cleanup PASS；正式 `dist/S-notes.app` 与其它 backup 未被清理。
+
+# 90. 当前正式基线｜本轮统一封口
+
+§83 / §86 / §87 中的旧基线只代表当时状态。从本节开始，当前已验收功能 / 正式 App source 基线为：
+
+```text
+UI_FAST_FORWARD_MAIN=89607dafdd99f5414d5af0e4c8c0278f64d0ecd6
+CODE_RUNTIME_BASELINE=89607dafdd99f5414d5af0e4c8c0278f64d0ecd6
+FORMAL_APP=/Users/s/Documents/项目/S-notes/dist/S-notes.app
+FORMAL_APP_SOURCE=89607dafdd99f5414d5af0e4c8c0278f64d0ecd6
+FORMAL_APP_SOURCE_DIRTY=NO
+FORMAL_APP_BUILD=PASS
+CODESIGN=PASS
+SMOKE=PASS
+CANDIDATE_CLEANUP=PASS
+```
+
+本节与 §88–§91 由一个单独的 docs-only commit 收口并 push。最终仓库 `HEAD == main == origin/main` 指向该进度书提交；该提交的 parent 为上面的 `89607dafdd99f5414d5af0e4c8c0278f64d0ecd6`。该提交 SHA 可由 `git log -1 --format=%H -- docs/S-notes-final-progress-20261004-GREENCLOUD-3.5-POST-CLOSE-EXTENSIONS-CLOSED-G.md` 精确取得，并在本轮最终回报中给出。
+
+```text
+FINAL_HEAD=本文件的统一封口 docs-only commit
+FINAL_MAIN=FINAL_HEAD
+FINAL_ORIGIN_MAIN=FINAL_HEAD
+WORKTREE=CLEAN
+PUSH=PASS
+
+GREENCLOUD_METADATA_DISCOVERY=CLOSED
+REMINDER_METADATA_CHIPS=CLOSED
+NOTES_AUTHORITY=Mac
+REMINDER_AUTHORITY=GreenCloud
+LOCAL_WRITABLE_FALLBACK=NO
+DELETE_NOTE=NO
+AI_VISIBILITY_WRITE=NO
+ACTOR_TARGETS_WRITE=NO
+```
+
+该 docs-only commit 只追加正式记录并按 S 指定文件名保存最新版进度书，旧 §1–§87 正文完整保留；它不改变正式 App 的功能 source，也不要求为文档提交重新 build。
+
+# 91. 下一步｜仅记录，不施工
+
+```text
+WEB_GALE_TO_GREENCLOUD_MCP = NEXT
+```
+
+含义：下一阶段再单独设计并施工 ChatGPT Web Gale 直接连接 GreenCloud S-notes MCP。Oracle Gale production 暂时保留，本轮不迁移、不删除。这里不提前记录尚未拍板的 Remote MCP 架构细节。
