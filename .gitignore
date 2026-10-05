@@ -42,6 +42,7 @@ __pycache__/
 /dist/
 /build-d1-candidate/
 /dist-d1-candidate/
+/dist-close-fix-candidate/
 
 /web/markdown-editor/node_modules/
 /web/markdown-editor/dist/

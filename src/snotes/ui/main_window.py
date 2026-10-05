@@ -258,6 +258,7 @@ class MainWindow(QMainWindow):
         dialog.pendingCountChanged.connect(
             self.shell.sidebar.set_ai_center_pending_count
         )
+        dialog.backgroundIdle.connect(self._ai_center_background_idle)
         dialog.destroyed.connect(lambda: setattr(self, "ai_center_dialog", None))
         self.refresh_ai_center_badge()
         dialog.show()
@@ -1115,6 +1116,11 @@ class MainWindow(QMainWindow):
             self._close_ready = True
             QTimer.singleShot(0, self.close)
 
+    @Slot()
+    def _ai_center_background_idle(self) -> None:
+        if self._close_pending:
+            QTimer.singleShot(0, self.close)
+
     def closeEvent(self, event) -> None:
         if not self._close_ready:
             event.ignore()
@@ -1135,7 +1141,6 @@ class MainWindow(QMainWindow):
                 or dialog._greencloud_followup_queued
             ):
                 event.ignore()
-                QTimer.singleShot(50, self.close)
                 return
             controller = self.remote_reminder_controller
             if controller is not None and getattr(controller, "_threads", None):
@@ -1145,8 +1150,11 @@ class MainWindow(QMainWindow):
                     controller.shutdownFinished.connect(self._remote_shutdown_finished)
                     controller.begin_shutdown()
                 return
+            if dialog is not None:
+                dialog.close()
             self._pending_note = None  # A late loaded/failed must not touch a closed window.
             self.receipt_refresh_timer.stop()
+            self._close_pending = False
             event.accept()
         else:
             self._close_ready = self._close_pending = False

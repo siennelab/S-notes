@@ -1094,6 +1094,7 @@ class AiCenterDialog(QWidget):
     finished = Signal(int)
     receiptAccepted = Signal(int)
     pendingCountChanged = Signal(int)
+    backgroundIdle = Signal()
 
     def __init__(
         self,
@@ -1302,22 +1303,29 @@ class AiCenterDialog(QWidget):
         worker.actionFinished.connect(self._gale_action_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        # Keep cleanup on the dialog's GUI-thread receiver, and release the
+        # tracked worker before scheduling destruction of its QThread.
+        thread.finished.connect(self._gale_thread_finished)
         thread.finished.connect(thread.deleteLater)
-
-        def release() -> None:
-            if thread in self._gale_threads:
-                self._gale_threads.remove(thread)
-            if worker in self._gale_workers:
-                self._gale_workers.remove(worker)
-            if not self._gale_threads and self._greencloud_followup_queued:
-                QTimer.singleShot(0, self._drain_greencloud_followup_queue)
-            elif not self._gale_threads and self._close_pending:
-                QTimer.singleShot(0, self._finish_deferred_close)
-
-        thread.finished.connect(release)
         self._gale_threads.append(thread)
         self._gale_workers.append(worker)
         thread.start()
+
+    @Slot()
+    def _gale_thread_finished(self) -> None:
+        thread = self.sender()
+        if thread in self._gale_threads:
+            index = self._gale_threads.index(thread)
+            self._gale_threads.pop(index)
+            self._gale_workers.pop(index)
+        if self._gale_threads:
+            return
+        if self._greencloud_followup_queued:
+            QTimer.singleShot(0, self._drain_greencloud_followup_queue)
+        elif not self._greencloud_followup_running:
+            self.backgroundIdle.emit()
+            if self._close_pending:
+                QTimer.singleShot(0, self._finish_deferred_close)
 
     @Slot()
     def _queue_greencloud_followup(self) -> None:
