@@ -1,0 +1,23 @@
+
+# BEGIN S-NOTES GALE REMOTE MCP
+snotes-gale.ke-den.de {
+	log {
+		output discard
+	}
+	@gale_remote path /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/mcp /.well-known/oauth-authorization-server /register /authorize /consent /auth/callback /token /revoke /mcp
+	handle @gale_remote {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:8768 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+				read_timeout 5m
+				write_timeout 5m
+			}
+		}
+	}
+	respond "Not Found" 404
+}
+# END S-NOTES GALE REMOTE MCP

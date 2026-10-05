@@ -1,0 +1,32 @@
+[Unit]
+Description=S-notes GreenCloud fixed Gale Remote MCP
+After=network-online.target snotes-notes-outbox.service snotes-reminder-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=snotes-gale
+Group=snotes-gale
+WorkingDirectory=/srv/snotes/runtime
+Environment=PYTHONPATH=/srv/snotes/gale-remote/vendor:/srv/snotes/runtime
+Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=remote-oauth.json:/root/greencloud-secrets/gale-remote-oauth.json
+ExecStart=/srv/snotes/runtime/.venv/bin/python -B -m src.greencloud_remote_mcp
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/snotes/gale-remote/oauth
+
+[Install]
+WantedBy=multi-user.target

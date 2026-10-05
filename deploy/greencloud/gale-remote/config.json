@@ -1,0 +1,12 @@
+{
+  "issuer_url": "https://dev-se55o7e1ug44w2z1.us.auth0.com/",
+  "jwks_url": "https://dev-se55o7e1ug44w2z1.us.auth0.com/.well-known/jwks.json",
+  "auth0_config_url": "https://dev-se55o7e1ug44w2z1.us.auth0.com/.well-known/openid-configuration",
+  "proxy_base_url": "https://snotes-gale.ke-den.de",
+  "audience": "https://snotes-gale.ke-den.de/mcp",
+  "oauth_storage_directory": "/srv/snotes/gale-remote/oauth",
+  "allowed_client_redirect_uris": [
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    "http://127.0.0.1:*"
+  ]
+}
