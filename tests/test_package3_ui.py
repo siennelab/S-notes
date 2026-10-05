@@ -969,11 +969,10 @@ class Package3UiTests(unittest.TestCase):
         self.assertEqual(center.table_title_input.objectName(), "reminderTableTitleInput")
         self.assertEqual(center.title_separator.height(), 2)
         self.assertNotEqual(center.table_title_input.palette().color(QPalette.Text), QColor())
-        self.assertEqual(center.meta_summary.text(), "未归类 · AI 可见")
-        self.assertTrue(center.meta_panel.isHidden())
-        center.meta_summary.click()
-        self.app.processEvents()
-        self.assertFalse(center.meta_panel.isHidden())
+        self.assertEqual(center.table_label_combo.currentText(), "未归类")
+        self.assertEqual(center.table_ai_combo.currentText(), "AI 可见")
+        self.assertFalse(hasattr(center, "meta_panel"))
+        self.assertFalse(hasattr(center, "meta_summary"))
         self.assertFalse(any(label.text() == "元数据" for label in center.findChildren(QLabel)))
         self.assertIsInstance(center.table_label_combo, FloatingComboBox)
         self.assertIsInstance(center.table_ai_combo, FloatingComboBox)
@@ -997,7 +996,7 @@ class Package3UiTests(unittest.TestCase):
             ["事项", "状态", "开始处理日", "重复", "最晚处理日", "备注"],
         )
         self.assertEqual(center.table_title_input.text(), "原有提醒")
-        self.assertIn("AI 可见", center.meta_summary.text())
+        self.assertEqual(center.table_ai_combo.currentText(), "AI 可见")
         self.assertEqual(
             center.table.horizontalHeader().defaultAlignment(),
             Qt.AlignLeft | Qt.AlignVCenter,

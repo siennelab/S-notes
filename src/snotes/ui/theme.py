@@ -408,26 +408,29 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
     max-height: 2px;
     background: {t.title_separator};
 }}
-#reminderMetaSummaryButton {{
-    padding: 8px 0;
-    background: {t.editor};
+#reminderMetadataChips {{ background: transparent; }}
+#reminderTableLabelCombo, #reminderTableAiVisibleCombo {{
+    border: 1px solid {t.editor_border};
+    border-radius: 11px;
+    padding: 2px 25px 2px 9px;
+    min-height: 20px;
+    max-height: 20px;
+    background: {t.surface};
     color: {t.text_muted};
     font-size: 12.5px;
-    text-align: left;
 }}
-#reminderMetaSummaryButton:hover {{ background: {t.editor}; color: {t.text}; }}
-#reminderMetaSummaryButton:pressed, #reminderMetaSummaryButton:checked {{
-    background: {t.editor};
+#reminderTableLabelCombo:hover, #reminderTableAiVisibleCombo:hover {{
+    background: {t.surface_hover};
     color: {t.text};
 }}
-#reminderMetaPanel {{
+#reminderTableLabelCombo:focus, #reminderTableAiVisibleCombo:focus {{
+    border-color: {t.focus};
     background: {t.surface};
-    color: {t.text};
-    border-radius: 8px;
 }}
-#reminderMetaPanel QComboBox {{
-    background: {t.editor_paper};
-    color: {t.text};
+#reminderTableLabelCombo:disabled, #reminderTableAiVisibleCombo:disabled {{
+    border-color: transparent;
+    background: {t.editor};
+    color: {t.disabled};
 }}
 #reminderSettingsHint, #reminderSettingsLabel {{
     color: {t.text_muted}; font-size: 12.5px;

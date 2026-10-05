@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QStyle,
+    QStyleOptionComboBox,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -106,33 +108,25 @@ class ReminderCenter(QWidget):
         self.title_separator = QWidget()
         self.title_separator.setObjectName("reminderTitleSeparator")
         meta_layout.addWidget(self.title_separator)
-        self.meta_toggle = QToolButton()
-        self.meta_toggle.setObjectName("reminderMetaSummaryButton")
-        self.meta_toggle.setCheckable(True)
-        self.meta_toggle.setChecked(False)
-        self.meta_toggle.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.meta_summary = self.meta_toggle
-        meta_layout.addWidget(self.meta_toggle)
-        self.meta_panel = QWidget()
-        self.meta_panel.setObjectName("reminderMetaPanel")
-        panel_row = QHBoxLayout(self.meta_panel)
-        panel_row.setContentsMargins(0, 0, 0, 0)
-        panel_row.setSpacing(6)
+        self.metadata_chips = QWidget()
+        self.metadata_chips.setObjectName("reminderMetadataChips")
+        chips_row = QHBoxLayout(self.metadata_chips)
+        chips_row.setContentsMargins(0, 0, 0, 0)
+        chips_row.setSpacing(6)
         self.table_label_combo = FloatingComboBox()
         self.table_label_combo.setObjectName("reminderTableLabelCombo")
+        self.table_label_combo.setToolTip("更改所属标签")
         self.table_label_combo.configure_popup(220)
         self.table_ai_combo = FloatingComboBox()
         self.table_ai_combo.setObjectName("reminderTableAiVisibleCombo")
+        self.table_ai_combo.setToolTip("更改 AI 可见性")
         self.table_ai_combo.configure_popup(160)
         self.table_ai_combo.addItem("AI 可见", True)
         self.table_ai_combo.addItem("AI 不可见", False)
-        panel_row.addWidget(_settings_label("所属标签"))
-        panel_row.addWidget(self.table_label_combo)
-        panel_row.addWidget(_settings_label("AI 可见性"))
-        panel_row.addWidget(self.table_ai_combo)
-        panel_row.addStretch(1)
-        meta_layout.addWidget(self.meta_panel)
-        self.meta_panel.setVisible(False)
+        chips_row.addWidget(self.table_label_combo)
+        chips_row.addWidget(self.table_ai_combo)
+        chips_row.addStretch(1)
+        meta_layout.addWidget(self.metadata_chips)
         layout.addWidget(self.table_meta)
 
         self.toolbar = QWidget()
@@ -231,7 +225,6 @@ class ReminderCenter(QWidget):
         self.resume_button.clicked.connect(self._resume)
         self.complete_occurrence_button.clicked.connect(self._complete_occurrence)
         self.complete_button.clicked.connect(self._complete)
-        self.meta_toggle.toggled.connect(self.meta_panel.setVisible)
         self.table_title_input.editingFinished.connect(self._save_table_title)
         self.table_label_combo.currentIndexChanged.connect(self._table_label_changed)
         self.table_ai_combo.currentIndexChanged.connect(self._table_ai_changed)
@@ -574,11 +567,25 @@ class ReminderCenter(QWidget):
 
     def _load_table_metadata(self) -> None:
         if self.selected_table_id is None:
+            self.table_title_input.setText("")
+            self.table_label_combo.blockSignals(True)
+            self.table_ai_combo.blockSignals(True)
+            self.table_label_combo.clear()
+            self.table_ai_combo.setCurrentIndex(-1)
+            self.table_label_combo.blockSignals(False)
+            self.table_ai_combo.blockSignals(False)
+            self._resize_table_metadata_chips()
             return
         item = self.service.get_table(self.selected_table_id)
         if item is None:
             self.table_title_input.setText("")
-            self.meta_summary.setText("")
+            self.table_label_combo.blockSignals(True)
+            self.table_ai_combo.blockSignals(True)
+            self.table_label_combo.clear()
+            self.table_ai_combo.setCurrentIndex(-1)
+            self.table_label_combo.blockSignals(False)
+            self.table_ai_combo.blockSignals(False)
+            self._resize_table_metadata_chips()
             return
         self.table_title_input.blockSignals(True)
         self.table_label_combo.blockSignals(True)
@@ -591,12 +598,54 @@ class ReminderCenter(QWidget):
         self.table_label_combo.setCurrentIndex(max(0, label_index))
         ai_index = self.table_ai_combo.findData(item.table.ai_visible)
         self.table_ai_combo.setCurrentIndex(max(0, ai_index))
-        self.meta_summary.setText(
-            f"{item.label.name} · {'AI 可见' if item.table.ai_visible else 'AI 不可见'}"
-        )
         self.table_title_input.blockSignals(False)
         self.table_label_combo.blockSignals(False)
         self.table_ai_combo.blockSignals(False)
+        self._resize_table_metadata_chips()
+
+    def _resize_table_metadata_chips(self) -> None:
+        self._fit_metadata_chip(
+            self.table_label_combo,
+            fallback_text="未归类",
+            minimum_width=72,
+            maximum_width=220,
+            tooltip_label="所属标签",
+        )
+        self._fit_metadata_chip(
+            self.table_ai_combo,
+            fallback_text="AI 不可见",
+            minimum_width=92,
+            maximum_width=140,
+            tooltip_label="AI 可见性",
+        )
+
+    @staticmethod
+    def _fit_metadata_chip(
+        combo: FloatingComboBox,
+        *,
+        fallback_text: str,
+        minimum_width: int,
+        maximum_width: int,
+        tooltip_label: str,
+    ) -> None:
+        combo.ensurePolished()
+        option = QStyleOptionComboBox()
+        combo.initStyleOption(option)
+        edit_field = combo.style().subControlRect(
+            QStyle.CC_ComboBox,
+            option,
+            QStyle.SC_ComboBoxEditField,
+            combo,
+        )
+        chrome_width = max(38, combo.width() - edit_field.width())
+        current_text = combo.currentText()
+        text_width = combo.fontMetrics().horizontalAdvance(current_text or fallback_text)
+        combo.setFixedWidth(
+            min(maximum_width, max(minimum_width, text_width + chrome_width + 4))
+        )
+        combo.setToolTip(
+            f"更改{tooltip_label}" + (f"：{current_text}" if current_text else "")
+        )
 
     def _save_table_title(self) -> None:
         if self.trash_mode or self.selected_table_id is None:
@@ -617,6 +666,7 @@ class ReminderCenter(QWidget):
     def _table_label_changed(self, _index: int = -1) -> None:
         if self.trash_mode or self.selected_table_id is None or self.table_label_combo.signalsBlocked():
             return
+        self._resize_table_metadata_chips()
         label_id = self.table_label_combo.currentData()
         if label_id is None:
             return
@@ -632,7 +682,11 @@ class ReminderCenter(QWidget):
     def _table_ai_changed(self, _index: int = -1) -> None:
         if self.trash_mode or self.selected_table_id is None or self.table_ai_combo.signalsBlocked():
             return
-        ai_visible = bool(self.table_ai_combo.currentData())
+        self._resize_table_metadata_chips()
+        selected_visibility = self.table_ai_combo.currentData()
+        if selected_visibility is None:
+            return
+        ai_visible = bool(selected_visibility)
         if self.is_remote:
             self._command(
                 "set_table_ai_visible",
@@ -782,8 +836,9 @@ class ReminderCenter(QWidget):
         self.permanent_delete_button.setEnabled(writable and table_selected)
         self.delete_table_button.setEnabled(writable and self.selected_table_id is not None)
         self.table_title_input.setReadOnly(not writable)
-        self.table_label_combo.setEnabled(writable)
-        self.table_ai_combo.setEnabled(writable)
+        metadata_writable = writable and not self.trash_mode and self.selected_table_id is not None
+        self.table_label_combo.setEnabled(metadata_writable)
+        self.table_ai_combo.setEnabled(metadata_writable)
         self.enabled_check.setEnabled(writable)
         self.time_edit.setEnabled(writable)
 

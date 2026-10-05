@@ -88,6 +88,43 @@ class RemoteGuiTests(unittest.TestCase):
         self.assertFalse(self.controller.submit('delete_reminder',{'item_id':self.item.id}))
         self.assertEqual(len(self.client.calls),calls)
         self.assertEqual(len(self.controller.list_reminders()),1)
+
+    def test_metadata_chips_submit_remote_changes_and_follow_busy_state(self):
+        self.online()
+        work=self.service.create_label('工作')
+        table_id=self.center.selected_table_id
+        self.assertIsNotNone(table_id)
+        self.controller.refresh();self.online()
+        self.center.select_table(table_id)
+        self.center.table.setCurrentCell(0,0);self.app.processEvents()
+
+        original_command=self.client.command
+        def delayed_command(name,payload):
+            time.sleep(.05)
+            return original_command(name,payload)
+        self.client.command=delayed_command
+
+        label_index=self.center.table_label_combo.findData(work.id)
+        self.assertGreaterEqual(label_index,0)
+        self.center.table_label_combo.setCurrentIndex(label_index)
+        self.wait(lambda:self.controller.pending)
+        self.assertEqual(self.center.table_label_combo.currentText(),'工作')
+        self.assertFalse(self.center.table_label_combo.isEnabled())
+        self.assertFalse(self.center.table_ai_combo.isEnabled())
+        self.online()
+        self.assertEqual(self.service.get_table(table_id).label.id,work.id)
+        self.assertEqual(self.center.table_label_combo.currentText(),'工作')
+        self.assertEqual(self.center._selected_id(),self.item.id)
+
+        hidden_index=self.center.table_ai_combo.findData(False)
+        self.center.table_ai_combo.setCurrentIndex(hidden_index)
+        self.wait(lambda:self.controller.pending)
+        self.assertEqual(self.center.table_ai_combo.currentText(),'AI 不可见')
+        self.assertFalse(self.center.table_ai_combo.isEnabled())
+        self.online()
+        self.assertFalse(self.service.get_table(table_id).table.ai_visible)
+        self.assertEqual(self.center.table_ai_combo.currentText(),'AI 不可见')
+        self.assertEqual(self.center._selected_id(),self.item.id)
     def test_future_schema_does_not_parse_or_write_and_keeps_cache(self):
         self.online();cached=self.cache.path.read_bytes();calls=len(self.client.calls)
         self.client.future=True;self.controller.refresh()
