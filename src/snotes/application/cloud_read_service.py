@@ -20,6 +20,8 @@ class CloudMirrorReader(Protocol):
 
     def get_markdown(self, note_id: int) -> dict | None: ...
 
+    def metadata_catalog(self) -> dict: ...
+
 
 class CloudReadService:
     """Expose only safe data already materialized into one actor mirror."""
@@ -62,6 +64,34 @@ class CloudReadService:
         if note is None:
             return {"status": "not_found", "note_id": normalized_id}
         return {"status": "ok", **note}
+
+    def list_directories(self) -> dict:
+        catalog = self._reader.metadata_catalog()
+        return {
+            "status": "ok",
+            "directories": [
+                {**directory, "writable": True}
+                for directory in catalog["directories"]
+            ],
+            "reason": "",
+        }
+
+    def list_tags(self) -> dict:
+        catalog = self._reader.metadata_catalog()
+        return {
+            "status": "ok",
+            "tags": [{"name": tag} for tag in catalog["tags"]],
+            "reason": "",
+        }
+
+    def list_ai_metadata_options(self) -> dict:
+        catalog = self._reader.metadata_catalog()
+        return {
+            "status": "ok",
+            "ai_visibility_options": catalog["visibility_options"],
+            "ai_targets": catalog["ai_targets"],
+            "reason": "",
+        }
 
     @staticmethod
     def _note_id(value: int) -> int:

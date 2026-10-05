@@ -530,7 +530,15 @@ class GaleMirrorWriter(Protocol):
 
 
 class ActorMirrorWriter(Protocol):
-    def write(self, records, output_path: Path, *, actor: str, source_schema: str) -> dict: ...
+    def write(
+        self,
+        records,
+        output_path: Path,
+        *,
+        actor: str,
+        source_schema: str,
+        metadata_catalog: Mapping[str, Sequence] | None = None,
+    ) -> dict: ...
 
     def verify(
         self, path: Path, *, expected_actor: str, expected_note_count: int | None = None

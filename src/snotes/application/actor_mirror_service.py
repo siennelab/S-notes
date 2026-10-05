@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol
 
 from src.snotes.application.ai_actor_registry import AI_ACTOR_IDS, target_definition
 from src.snotes.application.ai_safe_read_service import (
@@ -21,11 +22,22 @@ from src.snotes.application.ports import ActorMirrorWriter, ActorMirrorSource
 SUPPORTED_ACTORS = ("claude-code", "clawbot")
 
 
+class ActorMetadataCatalogSource(Protocol):
+    def catalog(self) -> dict[str, list]: ...
+
+
 class ActorMirrorService:
-    def __init__(self, notes: ActorMirrorSource, safe_reads: AiSafeReadService, writer: ActorMirrorWriter) -> None:
+    def __init__(
+        self,
+        notes: ActorMirrorSource,
+        safe_reads: AiSafeReadService,
+        writer: ActorMirrorWriter,
+        metadata_catalog: ActorMetadataCatalogSource | None = None,
+    ) -> None:
         self._notes = notes
         self._safe_reads = safe_reads
         self._writer = writer
+        self._metadata_catalog = metadata_catalog
 
     def generate(self, actor: str, output_path: Path) -> dict:
         actor_id = str(actor or "").strip()
@@ -56,10 +68,18 @@ class ActorMirrorService:
                 source_version=note_version_token(note.id, note.updated_at),
                 visibility=safe.visibility, redaction_count=safe.redaction_count,
                 ai_visibility=note.ai_visibility, ai_targets=tuple(target_ids),
+                main_category=note.main_category,
+                sub_category=note.sub_category,
                 dialect=ACTOR_MIRROR_DIALECT,
             ))
+        metadata_catalog = (
+            self._metadata_catalog.catalog()
+            if self._metadata_catalog is not None
+            else None
+        )
         result = self._writer.write(
-            tuple(records), Path(output_path), actor=actor_id, source_schema=source_schema
+            tuple(records), Path(output_path), actor=actor_id,
+            source_schema=source_schema, metadata_catalog=metadata_catalog,
         )
         result["full_note_count"] = sum(item.visibility == AI_VISIBILITY_FULL for item in records)
         result["redacted_note_count"] = sum(item.visibility == AI_VISIBILITY_REDACTED for item in records)

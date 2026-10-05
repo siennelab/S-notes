@@ -39,9 +39,29 @@ runuser -u openclaw -- /usr/local/bin/snotes-cloud-read
 ```
 
 Effective UID fixes the actor and mirror path. Each read opens `current.db`
-with `mode=ro&immutable=1` and closes it. Only `search_notes`, `get_note`, and
-`get_note_markdown` are registered. Runtime client configuration/discovery is
-deferred until Claude Code/OpenClaw installation.
+with `mode=ro&immutable=1` and closes it. The read tools are `search_notes`,
+`get_note`, `get_note_markdown`, `list_directories`, `list_tags`, and
+`list_ai_metadata_options`. Existing proposal tools remain `create_note`,
+`prepend_note`, `append_note`, `update_note_metadata`, `edit_note`, and
+`get_operation_status`; these continue through the existing Mac acceptance path.
+
+Actor mirror schema version 2 carries `main_category` and `sub_category` directly
+from the formal Note fields, plus the existing `ai_visibility` and `ai_targets`.
+`get_note` and search results return these metadata fields only for notes already
+in the actor's authorized mirror. Full/redacted Markdown rules are unchanged.
+The small `metadata_catalog` in `mirror_metadata` carries current formal directory
+and tag candidates and the current selectable AI registry/visibility options.
+It comes from the Mac's existing services and is included in the content hash,
+so catalog-only changes use the same publisher, receiver and atomic replacement.
+The catalog does not grant note access or AI metadata write access.
+
+For this version update, stop the existing Mac publisher schedule, replace only
+the changed read MCP and actor-mirror validator/domain runtime files, then point
+the same LaunchAgent at a pinned export of the approved revision and publish both
+actor mirrors before resuming the schedule. Reuse the existing publisher venv
+when its dependency pins are unchanged. Keep backups under the existing S-notes
+backup directories. No source Notes database, new transport, public endpoint,
+or new GreenCloud business directory is required.
 
 SSH entry rejects requested commands before invoking the exact, no-argument
 receiver through sudo as `snotes`. The receiver accepts a bounded JSON header

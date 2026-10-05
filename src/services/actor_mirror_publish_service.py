@@ -18,7 +18,15 @@ from src.snotes.application.actor_mirror_service import (
     ActorMirrorService,
     SUPPORTED_ACTORS,
 )
+from src.snotes.application.actor_metadata_catalog import (
+    ActorMetadataCatalogService,
+)
+from src.snotes.application.ai_access_metadata_service import (
+    AiAccessMetadataService,
+)
 from src.snotes.application.ai_safe_read_service import AiSafeReadService
+from src.snotes.application.directory_service import DirectoryService
+from src.snotes.application.tag_service import TagService
 from src.snotes.domain.actor_mirror import ActorMirrorError
 from src.snotes.storage.actor_mirror import SQLiteActorMirrorWriter
 from src.snotes.storage.connection import SQLiteConnectionFactory
@@ -26,6 +34,7 @@ from src.snotes.storage.repositories.directories import (
     SQLiteDirectoriesRepository,
 )
 from src.snotes.storage.repositories.notes import SQLiteNotesRepository
+from src.snotes.storage.repositories.tags import SQLiteTagsRepository
 
 
 MAX_MIRROR_BYTES = 512 * 1024 * 1024
@@ -245,11 +254,17 @@ class ActorMirrorPublisher:
         )
         directories = SQLiteDirectoriesRepository(connections)
         notes = SQLiteNotesRepository(connections, directories)
+        metadata_catalog = ActorMetadataCatalogService(
+            directories=DirectoryService(directories, notes),
+            tags=TagService(SQLiteTagsRepository(connections)),
+            ai_metadata=AiAccessMetadataService(notes),
+        )
         safe_reads = AiSafeReadService(self.redaction_rules)
         return ActorMirrorService(
             notes,
             safe_reads,
             SQLiteActorMirrorWriter(),
+            metadata_catalog,
         )
 
     def _publish_actor(

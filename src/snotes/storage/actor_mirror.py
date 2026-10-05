@@ -7,6 +7,7 @@ mirror: safe Markdown is a GreenCloud-only field.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from contextlib import closing
 import json
 import os
@@ -31,7 +32,8 @@ CREATE TABLE mirror_notes (
  mirror_note_id INTEGER PRIMARY KEY,
  source_note_id INTEGER NOT NULL UNIQUE CHECK(source_note_id > 0),
  title TEXT NOT NULL, safe_text TEXT NOT NULL, safe_markdown TEXT,
- directory TEXT NOT NULL, tags_json TEXT NOT NULL CHECK(json_valid(tags_json)),
+ directory TEXT NOT NULL, main_category TEXT NOT NULL, sub_category TEXT NOT NULL,
+ tags_json TEXT NOT NULL CHECK(json_valid(tags_json)),
  tags_text TEXT NOT NULL, source_updated_at TEXT NOT NULL,
  source_version TEXT NOT NULL, visibility TEXT NOT NULL CHECK(visibility IN ('full','redacted')),
  redaction_count INTEGER NOT NULL CHECK(redaction_count >= 0),
@@ -51,13 +53,26 @@ REQUIRED_TABLES = {
 }
 REQUIRED_METADATA = {
     "mirror_schema_version", "generated_at", "target_actor", "note_count",
-    "hash", "source_schema", "markdown_dialect",
+    "hash", "source_schema", "markdown_dialect", "metadata_catalog",
+}
+
+EMPTY_METADATA_CATALOG = {
+    "directories": [],
+    "tags": [],
+    "visibility_options": [],
+    "ai_targets": [],
 }
 
 
 class SQLiteActorMirrorWriter(ActorMirrorWriter):
-    def write(self, records, output_path: Path, *, actor: str, source_schema: str) -> dict:
-        return write_actor_mirror(records, output_path, actor=actor, source_schema=source_schema)
+    def write(
+        self, records, output_path: Path, *, actor: str, source_schema: str,
+        metadata_catalog: Mapping[str, object] | None = None,
+    ) -> dict:
+        return write_actor_mirror(
+            records, output_path, actor=actor, source_schema=source_schema,
+            metadata_catalog=metadata_catalog,
+        )
 
     def verify(self, path: Path, *, expected_actor: str, expected_note_count: int | None = None) -> dict:
         return verify_actor_mirror(path, expected_actor=expected_actor, expected_note_count=expected_note_count)
@@ -66,12 +81,16 @@ class SQLiteActorMirrorWriter(ActorMirrorWriter):
 def write_actor_mirror(
     records: tuple[ActorMirrorRecord, ...], output_path: Path, *, actor: str,
     source_schema: str, generated_at: str | None = None,
+    metadata_catalog: Mapping[str, object] | None = None,
 ) -> dict:
     output = Path(output_path)
     if not output.parent.is_dir() or output.is_symlink():
         raise ActorMirrorError("unsafe_output_path")
     if not all(isinstance(record, ActorMirrorRecord) for record in records):
         raise ActorMirrorError("raw_record_rejected")
+    catalog = validate_metadata_catalog(
+        EMPTY_METADATA_CATALOG if metadata_catalog is None else metadata_catalog
+    )
     fd, name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".candidate", dir=output.parent)
     os.close(fd)
     candidate = Path(name)
@@ -82,7 +101,7 @@ def write_actor_mirror(
             connection.execute("PRAGMA journal_mode=DELETE")
             connection.execute("PRAGMA synchronous=FULL")
             connection.executescript(SCHEMA)
-            content_hash = records_hash(records)
+            content_hash = records_hash(records, catalog)
             metadata = {
                 "mirror_schema_version": ACTOR_MIRROR_SCHEMA_VERSION,
                 "generated_at": generated_at or datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
@@ -91,14 +110,19 @@ def write_actor_mirror(
                 "hash": content_hash,
                 "source_schema": source_schema,
                 "markdown_dialect": "snotes-markdown-v1",
+                "metadata_catalog": json.dumps(
+                    catalog, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"),
+                ),
             }
             connection.executemany("INSERT INTO mirror_metadata VALUES (?,?)", metadata.items())
             for index, item in enumerate(records, 1):
                 tags_json = json.dumps(item.tags, ensure_ascii=False, separators=(",", ":"))
                 connection.execute(
-                    """INSERT INTO mirror_notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO mirror_notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (index, item.source_note_id, item.title, item.safe_text, item.safe_markdown,
-                     item.directory, tags_json, " ".join(item.tags), item.source_updated_at,
+                     item.directory, item.main_category, item.sub_category,
+                     tags_json, " ".join(item.tags), item.source_updated_at,
                      item.source_version, item.visibility, item.redaction_count, item.ai_visibility,
                      json.dumps(item.ai_targets, ensure_ascii=False, separators=(",", ":")), item.dialect),
                 )
@@ -157,6 +181,9 @@ def verify_actor_mirror(path: Path, *, expected_actor: str, expected_note_count:
             raise ActorMirrorError("metadata_invalid")
         if metadata["source_schema"] != "snotes-markdown-v1":
             raise ActorMirrorError("source_schema_mismatch")
+        catalog = validate_metadata_catalog(
+            json.loads(metadata["metadata_catalog"])
+        )
         notes = [dict(row) for row in connection.execute("SELECT * FROM mirror_notes ORDER BY mirror_note_id")]
         fts_count = int(connection.execute("SELECT COUNT(*) FROM mirror_notes_fts").fetchone()[0])
         if len(notes) != fts_count or int(metadata["note_count"]) != len(notes):
@@ -178,6 +205,7 @@ def verify_actor_mirror(path: Path, *, expected_actor: str, expected_note_count:
         records = tuple(ActorMirrorRecord(
             source_note_id=row["source_note_id"], title=row["title"], safe_text=row["safe_text"],
             safe_markdown=row["safe_markdown"], directory=row["directory"],
+            main_category=row["main_category"], sub_category=row["sub_category"],
             tags=tuple(json.loads(row["tags_json"])), source_updated_at=row["source_updated_at"],
             source_version=row["source_version"], visibility=row["visibility"],
             redaction_count=row["redaction_count"], ai_visibility=row["ai_visibility"],
@@ -192,9 +220,12 @@ def verify_actor_mirror(path: Path, *, expected_actor: str, expected_note_count:
                 raise ActorMirrorError("unauthorized_record")
             if record.visibility not in {"full", "redacted"}:
                 raise ActorMirrorError("unsafe_visibility")
-        if records_hash(records) != metadata["hash"]:
+        if records_hash(records, catalog) != metadata["hash"]:
             raise ActorMirrorError("hash_mismatch")
-        return {"note_count": len(notes), "target_actor": expected_actor, "hash": metadata["hash"]}
+        return {
+            "note_count": len(notes), "target_actor": expected_actor,
+            "hash": metadata["hash"], "metadata_catalog": catalog,
+        }
     except ActorMirrorError:
         raise
     except (sqlite3.Error, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
@@ -204,15 +235,142 @@ def verify_actor_mirror(path: Path, *, expected_actor: str, expected_note_count:
             connection.close()
 
 
-def records_hash(records: tuple[ActorMirrorRecord, ...]) -> str:
-    payload = json.dumps([{
+def records_hash(
+    records: tuple[ActorMirrorRecord, ...],
+    metadata_catalog: Mapping[str, object] | None = None,
+) -> str:
+    catalog = validate_metadata_catalog(
+        EMPTY_METADATA_CATALOG if metadata_catalog is None else metadata_catalog
+    )
+    payload = json.dumps({
+        "mirror_schema_version": ACTOR_MIRROR_SCHEMA_VERSION,
+        "metadata_catalog": catalog,
+        "records": [{
         "source_note_id": row.source_note_id, "title": row.title, "safe_text": row.safe_text,
-        "safe_markdown": row.safe_markdown, "directory": row.directory, "tags": row.tags,
+        "safe_markdown": row.safe_markdown, "directory": row.directory,
+        "main_category": row.main_category, "sub_category": row.sub_category,
+        "tags": row.tags,
         "source_updated_at": row.source_updated_at, "source_version": row.source_version,
         "visibility": row.visibility, "redaction_count": row.redaction_count,
         "ai_visibility": row.ai_visibility, "ai_targets": row.ai_targets, "dialect": row.dialect,
-    } for row in records], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    } for row in records],
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def validate_metadata_catalog(catalog: object) -> dict[str, list]:
+    """Return a plain validated catalog safe for hashing and Cloud reads."""
+    if not isinstance(catalog, Mapping) or set(catalog) != set(EMPTY_METADATA_CATALOG):
+        raise ActorMirrorError("metadata_catalog_invalid")
+    directories = catalog["directories"]
+    tags = catalog["tags"]
+    visibility_options = catalog["visibility_options"]
+    ai_targets = catalog["ai_targets"]
+    if not all(isinstance(value, list) for value in (
+        directories, tags, visibility_options, ai_targets
+    )):
+        raise ActorMirrorError("metadata_catalog_invalid")
+
+    clean_directories: list[dict] = []
+    directory_ids: set[int] = set()
+    for item in directories:
+        required = {
+            "directory_id", "name", "parent_id", "main_category",
+            "sub_category", "path",
+        }
+        if not isinstance(item, Mapping) or set(item) != required:
+            raise ActorMirrorError("metadata_catalog_invalid")
+        directory_id = item["directory_id"]
+        parent_id = item["parent_id"]
+        path = item["path"]
+        if (
+            isinstance(directory_id, bool)
+            or not isinstance(directory_id, int)
+            or directory_id < 1
+            or directory_id in directory_ids
+            or (
+                parent_id is not None
+                and (
+                    isinstance(parent_id, bool)
+                    or not isinstance(parent_id, int)
+                    or parent_id < 1
+                )
+            )
+            or not isinstance(path, list)
+            or not 1 <= len(path) <= 2
+            or not all(isinstance(value, str) and value for value in path)
+        ):
+            raise ActorMirrorError("metadata_catalog_invalid")
+        name = item["name"]
+        main_category = item["main_category"]
+        sub_category = item["sub_category"]
+        if (
+            not isinstance(name, str) or not name
+            or not isinstance(main_category, str) or not main_category
+            or not isinstance(sub_category, str)
+            or name != path[-1]
+            or main_category != path[0]
+            or sub_category != (path[1] if len(path) > 1 else "")
+        ):
+            raise ActorMirrorError("metadata_catalog_invalid")
+        directory_ids.add(directory_id)
+        clean_directories.append({
+            "directory_id": directory_id,
+            "name": name,
+            "parent_id": parent_id,
+            "main_category": main_category,
+            "sub_category": sub_category,
+            "path": list(path),
+        })
+    if any(
+        item["parent_id"] is not None
+        and item["parent_id"] not in directory_ids
+        for item in clean_directories
+    ):
+        raise ActorMirrorError("metadata_catalog_invalid")
+
+    if (
+        not all(isinstance(tag, str) and tag for tag in tags)
+        or len(tags) != len(set(tags))
+    ):
+        raise ActorMirrorError("metadata_catalog_invalid")
+
+    clean_visibility = _validate_option_list(
+        visibility_options, "value", "label"
+    )
+    clean_targets = _validate_option_list(
+        ai_targets, "target_id", "display_name"
+    )
+    return {
+        "directories": clean_directories,
+        "tags": list(tags),
+        "visibility_options": clean_visibility,
+        "ai_targets": clean_targets,
+    }
+
+
+def _validate_option_list(
+    values: list, identifier_key: str, label_key: str,
+) -> list[dict]:
+    clean: list[dict] = []
+    seen: set[str] = set()
+    for item in values:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {identifier_key, label_key}
+        ):
+            raise ActorMirrorError("metadata_catalog_invalid")
+        identifier = item[identifier_key]
+        label = item[label_key]
+        if (
+            not isinstance(identifier, str) or not identifier
+            or not isinstance(label, str) or not label
+            or identifier in seen
+        ):
+            raise ActorMirrorError("metadata_catalog_invalid")
+        seen.add(identifier)
+        clean.append({identifier_key: identifier, label_key: label})
+    return clean
 
 
 def _file_hash(path: Path) -> str:

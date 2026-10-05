@@ -44,6 +44,7 @@ def build_cloud_read_server(
         instructions=(
             "Read only the actor mirror fixed by the operating-system identity. "
             "Unavailable, unauthorized, hidden, and redacted Markdown all behave as not_found."
+            " Metadata discovery lists current S-notes candidates, not note permissions."
             " Notes writes queue proposals for later Mac review; Mac is the sole Notes authority."
         ),
     )
@@ -120,6 +121,36 @@ def cloud_read_tools(*, proposal_enabled: bool = False) -> list[types.Tool]:
             annotations=READ_ANNOTATIONS,
         ),
     ]
+    for name, title, description in (
+        (
+            "list_directories",
+            "List S-notes directory catalog",
+            "List current formal S-notes categories from the published catalog. "
+            "Categories are candidates; note permissions still apply.",
+        ),
+        (
+            "list_tags",
+            "List S-notes tag catalog",
+            "List current formal S-notes tags from the published catalog.",
+        ),
+        (
+            "list_ai_metadata_options",
+            "List AI metadata options",
+            "List current AI visibility options and selectable actor stable IDs "
+            "from the published catalog. This tool does not change AI permissions.",
+        ),
+    ):
+        tools.append(types.Tool(
+            name=name,
+            title=title,
+            description=description,
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            annotations=READ_ANNOTATIONS,
+        ))
     if proposal_enabled:
         tools.extend(_cloud_proposal_tools(note_id_schema))
     return tools
@@ -133,6 +164,19 @@ def call_cloud_read_tool(
     proposal_service: CloudProposalService | None = None,
 ) -> dict:
     values = arguments or {}
+    catalog_tools = {"list_directories", "list_tags", "list_ai_metadata_options"}
+    if name in catalog_tools:
+        if (arguments is not None and not isinstance(arguments, dict)) or values:
+            return {"status": "failed", "reason": "invalid_request"}
+        try:
+            return getattr(service, name)()
+        except Exception:
+            response = {"status": "failed", "reason": "catalog_read_unavailable"}
+            if name == "list_ai_metadata_options":
+                response.update(ai_visibility_options=[], ai_targets=[])
+            else:
+                response["directories" if name == "list_directories" else "tags"] = []
+            return response
     proposal_names = {
         "create_note",
         "prepend_note",

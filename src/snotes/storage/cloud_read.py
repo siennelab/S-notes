@@ -7,6 +7,9 @@ import sqlite3
 from pathlib import Path
 from typing import Sequence
 
+from src.snotes.domain.actor_mirror import ActorMirrorError
+from src.snotes.storage.actor_mirror import validate_metadata_catalog
+
 
 class CloudMirrorReadError(RuntimeError):
     """The fixed actor mirror could not be read safely."""
@@ -35,7 +38,8 @@ class SQLiteCloudMirrorReader:
                 SELECT notes.source_note_id, notes.title, notes.safe_text,
                        notes.directory, notes.tags_json,
                        notes.source_updated_at, notes.source_version,
-                       notes.visibility
+                       notes.visibility, notes.main_category, notes.sub_category,
+                       notes.ai_visibility, notes.ai_targets_json
                 FROM mirror_notes_fts AS search
                 JOIN mirror_notes AS notes ON notes.mirror_note_id = search.rowid
                 WHERE mirror_notes_fts MATCH ?
@@ -57,7 +61,8 @@ class SQLiteCloudMirrorReader:
             row = connection.execute(
                 """
                 SELECT source_note_id, title, safe_text, directory, tags_json,
-                       source_updated_at, source_version, visibility
+                       source_updated_at, source_version, visibility,
+                       main_category, sub_category, ai_visibility, ai_targets_json
                 FROM mirror_notes
                 WHERE source_note_id = ?
                 """,
@@ -93,6 +98,20 @@ class SQLiteCloudMirrorReader:
         finally:
             connection.close()
 
+    def metadata_catalog(self) -> dict:
+        connection = self._open()
+        try:
+            row = connection.execute(
+                "SELECT meta_value FROM mirror_metadata WHERE meta_key = 'metadata_catalog'"
+            ).fetchone()
+            if row is None:
+                raise CloudMirrorReadError("catalog_read_failed")
+            return validate_metadata_catalog(json.loads(row["meta_value"]))
+        except (sqlite3.Error, ValueError, TypeError, ActorMirrorError) as error:
+            raise CloudMirrorReadError("catalog_read_failed") from error
+        finally:
+            connection.close()
+
     def _open(self) -> sqlite3.Connection:
         connection: sqlite3.Connection | None = None
         try:
@@ -115,12 +134,19 @@ class SQLiteCloudMirrorReader:
         tags = json.loads(row["tags_json"])
         if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
             raise CloudMirrorReadError("mirror_read_failed")
+        targets = json.loads(row["ai_targets_json"])
+        if not isinstance(targets, list) or not all(isinstance(target, str) for target in targets):
+            raise CloudMirrorReadError("mirror_read_failed")
         return {
             "note_id": int(row["source_note_id"]),
             "title": str(row["title"]),
             "safe_text": str(row["safe_text"]),
             "directory": str(row["directory"]),
+            "main_category": str(row["main_category"]),
+            "sub_category": str(row["sub_category"]),
             "tags": tags,
+            "ai_visibility": str(row["ai_visibility"]),
+            "ai_targets": targets,
             "updated_at": str(row["source_updated_at"]),
             "version": str(row["source_version"]),
             "visibility": str(row["visibility"]),

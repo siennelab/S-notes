@@ -154,11 +154,18 @@ class Step05CloudReadTests(unittest.TestCase):
         self.assertEqual(updated["safe_text"], "common aurora changed")
         self.assertEqual(updated["version"], "v-next")
 
-    def test_protocol_surface_has_exactly_three_read_tools_and_no_actor_input(self) -> None:
+    def test_protocol_surface_has_six_read_tools_and_no_actor_input(self) -> None:
         tools = cloud_read_tools()
         self.assertEqual(
             [tool.name for tool in tools],
-            ["search_notes", "get_note", "get_note_markdown"],
+            [
+                "search_notes",
+                "get_note",
+                "get_note_markdown",
+                "list_directories",
+                "list_tags",
+                "list_ai_metadata_options",
+            ],
         )
         for tool in tools:
             self.assertTrue(tool.annotations.readOnlyHint)

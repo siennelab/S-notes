@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-ACTOR_MIRROR_SCHEMA_VERSION = "1"
+ACTOR_MIRROR_SCHEMA_VERSION = "2"
 ACTOR_MIRROR_DIALECT = "snotes-markdown-v1"
 
 
@@ -29,4 +29,6 @@ class ActorMirrorRecord:
     redaction_count: int
     ai_visibility: str
     ai_targets: tuple[str, ...]
+    main_category: str = ""
+    sub_category: str = ""
     dialect: str = ACTOR_MIRROR_DIALECT
