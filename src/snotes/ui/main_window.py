@@ -608,8 +608,17 @@ class MainWindow(QMainWindow):
         self._pending_note = None
         self.is_loading_note = True
         try:
+            preserve_title_edit = (
+                self.current_note is not None
+                and self.current_note.id == note.id
+                and self.title_input.hasFocus()
+                and self.title_input.text() == note.title
+            )
             self.current_note = None if read_only else note
-            self.title_input.setText(note.title)
+            if not preserve_title_edit:
+                self.title_input.setText(note.title)
+                # Hydration starts at the left; normal editing can scroll freely.
+                self.title_input.setCursorPosition(0)
             self.shell.tags_input.setText(format_tags(parse_tags(note.tags)))
             populate_location_controls(self.shell, note, self.directory_service)
             if metadata is not None:
