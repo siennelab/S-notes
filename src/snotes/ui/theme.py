@@ -282,10 +282,11 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 #titleInput:focus {{ border: 0; background: {t.editor}; }}
 #titleSeparator {{ border: 0; min-height: 2px; max-height: 2px; background: {t.title_separator}; }}
 #metadataSummaryButton {{
+    border: 0; border-radius: 0;
     padding: 8px 0; background: {t.editor}; color: {t.text_muted};
     font-size: 12.5px; text-align: left;
 }}
-#metadataSummaryButton:hover {{ background: {t.editor}; color: {t.text}; }}
+#metadataSummaryButton:hover, #metadataSummaryButton:focus {{ background: {t.editor}; color: {t.text}; }}
 #metadataSummaryButton:pressed {{ background: {t.surface}; }}
 #metadataPanel {{ background: {t.surface}; color: {t.text}; border-radius: 8px; }}
 #metadataFieldLabel {{ color: {t.text_muted}; font-size: 12.5px; }}

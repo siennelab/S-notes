@@ -58,6 +58,7 @@ class ExportDialog(QDialog):
         form = QFormLayout()
         self.scope_combo = FloatingComboBox()
         self.scope_combo.configure_popup(240)
+        self.scope_combo.setMinimumWidth(240)
         self.scope_combo.setFixedHeight(32)
         if context.current_note_id is not None:
             self.scope_combo.addItem("当前笔记", "current")
@@ -73,6 +74,7 @@ class ExportDialog(QDialog):
         self.scope_combo.addItem("SQLite 数据库备份", "backup")
         self.format_combo = FloatingComboBox()
         self.format_combo.configure_popup(180)
+        self.format_combo.setMinimumWidth(240)
         self.format_combo.setFixedHeight(32)
         self.format_combo.addItem("Markdown", "markdown")
         self.format_combo.addItem("JSON", "json")

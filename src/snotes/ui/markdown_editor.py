@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
@@ -100,6 +100,7 @@ class MarkdownEditorWidget(QWidget):
         self.view.setAcceptDrops(False)
         self.profile = QWebEngineProfile(self)  # Unnamed profile is off-the-record.
         self.page = EditorPage(self.profile, self.view, QUrl.fromLocalFile(str(BUNDLE)))
+        self.page.setBackgroundColor(QColor(self._theme.editor_paper))
         self.page.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, False)
         self.view.setPage(self.page)
         self.channel = QWebChannel(self.page)
@@ -145,6 +146,7 @@ class MarkdownEditorWidget(QWidget):
 
     def setTheme(self, theme: ThemeTokens):
         self._theme = theme
+        self.page.setBackgroundColor(QColor(theme.editor_paper))
         if self.ready:
             self.bridge.setTheme.emit(asdict(theme))
 

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -29,6 +30,52 @@ from src.snotes.ui.link_drawer import LinkDrawer
 from src.snotes.ui.reminder_center import ReminderCenter
 from src.snotes.ui.sidebar import NoteSidebar
 from src.snotes.ui.theme import apply_selection_palette, repolish, themed_icon
+
+
+class _MetadataSummaryScrollArea(QScrollArea):
+    """Keep the complete summary button inside a layout-sized viewport."""
+
+    def __init__(self, content: QPushButton) -> None:
+        super().__init__()
+        self._summary_button = content
+        self.setFrameShape(QFrame.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.horizontalScrollBar().setSingleStep(32)
+        content.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        content.setFocusPolicy(Qt.StrongFocus)
+        content.setFocusProxy(self)
+        self.setWidget(content)
+
+    def sizeHint(self) -> QSize:
+        # Only height may depend on the content. Its full width belongs inside
+        # the scroll area, never in an ancestor layout's minimum width.
+        return QSize(0, self.widget().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def keyPressEvent(self, event) -> None:
+        if self.hasFocus() and event.key() in (Qt.Key_Left, Qt.Key_Right):
+            bar = self.horizontalScrollBar()
+            direction = 1 if event.key() == Qt.Key_Right else -1
+            bar.setValue(bar.value() + direction * bar.singleStep())
+            event.accept()
+            return
+        if self.hasFocus() and event.key() in (
+            Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter
+        ):
+            if not event.isAutoRepeat():
+                self._summary_button.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def reset_scroll(self) -> None:
+        self.horizontalScrollBar().setValue(0)
 
 
 class SnotesShell(QWidget):
@@ -157,7 +204,11 @@ class SnotesShell(QWidget):
         self.metadata_summary_button.setObjectName("metadataSummaryButton")
         self.metadata_summary_button.setToolTip("展开或收起笔记信息")
         self.metadata_summary_button.clicked.connect(self.toggle_metadata_panel)
-        metadata_layout.addWidget(self.metadata_summary_button)
+        self.metadata_summary_scroll = _MetadataSummaryScrollArea(
+            self.metadata_summary_button
+        )
+        self.metadata_summary_scroll.setAccessibleName("笔记元信息")
+        metadata_layout.addWidget(self.metadata_summary_scroll)
 
         self.metadata_panel = QWidget()
         self.metadata_panel.setObjectName("metadataPanel")
@@ -370,10 +421,8 @@ class SnotesShell(QWidget):
                 )
             if not target_names:
                 targets_text = "无"
-            elif len(target_names) <= 3:
-                targets_text = " / ".join(target_names)
             else:
-                targets_text = f"{' / '.join(target_names[:3])} 等 {len(target_names)} 项"
+                targets_text = " / ".join(target_names)
             visibility_text = self.ai_visibility_combo.currentText()
         else:
             targets_text = "未接线"
@@ -409,6 +458,8 @@ class SnotesShell(QWidget):
             self.sidebar.note_list.viewport(),
             self.sidebar.trash_tree,
             self.sidebar.trash_tree.viewport(),
+            self.metadata_summary_scroll,
+            self.metadata_summary_scroll.viewport(),
             self.body_editor,
             self.empty_label,
             self.status_label,

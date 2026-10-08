@@ -6,7 +6,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer, Slot
+from PySide6.QtCore import QEvent, QThread, QTimer, Slot
 from PySide6.QtWidgets import QApplication, QInputDialog, QMainWindow, QMessageBox
 
 from src.snotes.application.ai_access_metadata_service import (
@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
         self.has_unsaved_changes = False
         self.conflict_active = False
         self.autosave_retry_count = 0
+        self._width_before_links: int | None = None
 
         self.setWindowTitle("S-notes")
         self.resize(1420, 880)
@@ -231,6 +232,7 @@ class MainWindow(QMainWindow):
         self.shell.export_button.clicked.connect(self.open_export_dialog)
         self.shell.delete_button.clicked.connect(self.delete_current_note)
         self.shell.link_drawer.closeRequested.connect(self.toggle_links)
+        self.shell.link_drawer.installEventFilter(self)
         self.shell.link_drawer.noteSelected.connect(self.open_related_note)
 
     def open_ai_center(self) -> None:
@@ -617,6 +619,7 @@ class MainWindow(QMainWindow):
                     metadata.legacy_target_names,
                 )
             self.shell.update_metadata_summary()
+            self.shell.metadata_summary_scroll.reset_scroll()
             self.has_unsaved_changes = False
             self.conflict_active = False
             self.autosave_retry_count = 0
@@ -964,12 +967,38 @@ class MainWindow(QMainWindow):
 
     def toggle_links(self) -> None:
         visible = self.shell.link_drawer.isHidden()
+        if visible and self._width_before_links is None:
+            if not self.isMaximized() and not self.isFullScreen():
+                self._width_before_links = self.width()
         self.shell.link_drawer.setVisible(visible)
         self.shell.links_button.setProperty("active", visible)
         self.shell.links_button.setToolTip("关闭关联抽屉" if visible else "打开关联抽屉")
         self.shell.repolish_action(self.shell.links_button)
         if visible:
             self._refresh_links()
+
+    def eventFilter(self, watched, event) -> bool:
+        if (
+            watched is self.shell.link_drawer
+            and event.type() == QEvent.Hide
+            and watched.isHidden()
+        ):
+            # Restore after the hide event has completed.
+            QTimer.singleShot(0, self._restore_width_after_links)
+        return super().eventFilter(watched, event)
+
+    def _restore_width_after_links(self) -> None:
+        if not self.shell.link_drawer.isHidden():
+            return
+        width, self._width_before_links = self._width_before_links, None
+        if width is not None and not self.isMaximized() and not self.isFullScreen():
+            # Release cached minimum sizes from the drawer out to the window.
+            self.shell.main_content.layout().activate()
+            self.shell.content_stack.layout().activate()
+            self.shell.splitter.refresh()
+            self.shell.layout().activate()
+            self.layout().activate()
+            self.resize(width, self.height())
 
     def _refresh_links(self) -> None:
         if not self.shell.link_drawer.isHidden():
