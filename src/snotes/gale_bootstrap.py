@@ -152,6 +152,7 @@ def compose_gale_control(
         publish, pull, settings,
         greencloud_pull=GreenCloudPullService(cloud_transport, receipts, audit),
         greencloud_followup=followup.flush,
+        greencloud_publish=lambda: publisher.publish_actor("gale"),
     )
 
 

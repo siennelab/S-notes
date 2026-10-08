@@ -119,8 +119,12 @@ class Step11StartupTests(unittest.TestCase):
             QTest.qWait(50)
             self.assertTrue(window.isVisible())
             control.release.set()
-            self._wait(lambda: not window.ai_center_dialog._gale_threads)
-            window.ai_center_dialog.close()
+            self._wait(
+                lambda: window.ai_center_dialog is None
+                or not window.ai_center_dialog._gale_threads
+            )
+            if window.ai_center_dialog is not None:
+                window.ai_center_dialog.close()
             self._wait(lambda: not window.isVisible())
 
 

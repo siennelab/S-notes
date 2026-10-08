@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from deploy.greencloud.outbox.transport import dispatch as cloud_dispatch
@@ -31,6 +32,7 @@ from src.snotes.application.gale_service import GreenCloudPullService
 from src.snotes.application.greencloud_receipt_service import GreenCloudReceiptService
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
+from src.snotes.gale_bootstrap import compose_gale_control
 from src.snotes.domain.ai_receipts import GaleReceiptImport
 from src.snotes.domain.models import NoteLocation
 from src.snotes.storage.cloud_mirror_receiver import receive_publish
@@ -123,6 +125,16 @@ class FakeSshOutbox:
         )
 
 
+class RecordingActorPublisher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.result = SimpleNamespace(actor="gale", status="published")
+
+    def publish_actor(self, actor: str):
+        self.calls.append(actor)
+        return self.result
+
+
 class Step11FollowupIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
@@ -207,6 +219,22 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
         return SQLiteCloudMirrorReader(
             self.root / "cloud" / "mirror" / actor / "current.db"
         )
+
+    def test_composition_reuses_publisher_for_manual_gale_publish(self) -> None:
+        publisher = RecordingActorPublisher()
+        control = compose_gale_control(
+            self.root / "local",
+            self.note_repository,
+            self.receipts,
+            self.audit,
+            greencloud_transport=self.cloud_transport,
+            actor_publisher=publisher,
+        )
+
+        followup_owner = control._greencloud_followup.__self__
+        self.assertIs(followup_owner._publisher, publisher)
+        self.assertIs(control.publish_greencloud_mirror_now(), publisher.result)
+        self.assertEqual(publisher.calls, ["gale"])
 
     def _proposal(self, actor: str) -> CloudProposalService:
         return CloudProposalService(

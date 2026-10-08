@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 from datetime import datetime
 from collections.abc import Sequence
 from dataclasses import replace
 from difflib import unified_diff
+from pathlib import Path
 from shiboken6 import isValid
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QThread, QTimer, Signal, Slot
@@ -55,6 +58,13 @@ from src.snotes.ui.floating_combo import FloatingComboBox
 from src.snotes.ui.theme import apply_selection_palette, current_theme, repolish
 
 
+# These values mirror src.app_paths.APP_NAME and DATA_ROOT_ENV_NAME. Importing
+# that module solely for constants would initialize DEFAULT_PATHS and perform a
+# write probe when the data-root override is set; this status view stays read-only.
+_APP_NAME = "S-notes"
+_DATA_ROOT_ENV_NAME = "S_NOTES_DATA_ROOT"
+
+
 def _display_timestamp(value: str, empty_text: str) -> str:
     if not value:
         return empty_text
@@ -65,6 +75,57 @@ def _display_timestamp(value: str, empty_text: str) -> str:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone()
     return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _default_actor_mirror_state_path() -> Path:
+    # Resolve the application root when the dialog is created so temporary
+    # S_NOTES_DATA_ROOT/HOME fixtures do not inherit an import-time path. The
+    # app composition root has already validated an explicit data root.
+    override = os.environ.get(_DATA_ROOT_ENV_NAME)
+    data_root = (
+        Path(override)
+        if override is not None
+        else Path.home() / "Library" / "Application Support" / _APP_NAME
+    )
+    return data_root / "config" / "actor_mirror_publish_state.json"
+
+
+def _greencloud_publish_status_text(state_path: Path) -> str:
+    path = Path(state_path)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "状态文件不存在"
+    except (OSError, UnicodeError):
+        return "状态读取失败"
+    try:
+        payload = json.loads(raw)
+        actors = payload.get("actors")
+        gale_state = actors.get("gale") if isinstance(actors, dict) else None
+        value = (
+            gale_state.get("last_success_time")
+            if isinstance(gale_state, dict)
+            else None
+        )
+    except (AttributeError, json.JSONDecodeError):
+        return "状态读取失败"
+    if not isinstance(value, str) or not value.strip():
+        return "尚无发布记录"
+    displayed = _display_timestamp(value.strip(), "")
+    return displayed or "时间记录无效"
+
+
+def _safe_publish_error_code(value: object) -> str:
+    text = str(value or "").strip()
+    if (
+        text
+        and len(text) <= 64
+        and all(character.isascii() and (
+            character.islower() or character.isdigit() or character == "_"
+        ) for character in text)
+    ):
+        return text
+    return "unexpected_failure"
 
 
 AUDIT_OPERATION_LABELS = {
@@ -1105,6 +1166,7 @@ class AiCenterDialog(QWidget):
         parent: QWidget | None = None,
         *,
         gale: GaleControlService | None = None,
+        actor_mirror_state_path: Path | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
         self.setObjectName("aiCenterDialog")
@@ -1124,6 +1186,11 @@ class AiCenterDialog(QWidget):
         self.reminder_log_offset = 0
         self.reminder_log_limit = 50
         self.gale = gale
+        self._actor_mirror_state_path = (
+            Path(actor_mirror_state_path)
+            if actor_mirror_state_path is not None
+            else _default_actor_mirror_state_path()
+        )
         self._gale_threads: list[QThread] = []
         self._gale_workers: list[GaleWorker] = []
         self._greencloud_followup_running = False
@@ -1178,25 +1245,28 @@ class AiCenterDialog(QWidget):
         controls.setColumnStretch(1, 1)
         self.gale_controls_layout = controls
         self.gale_publish_button = QPushButton("立即更新镜像")
-        self.gale_last_publish = QLabel("上次发布：尚未发布")
-        self.gale_last_publish.setObjectName("galeLastPublishLabel")
-        self.gale_pull_button = QPushButton("立即检查投稿")
-        self.gale_last_pull = QLabel("上次检查：尚未检查")
-        self.gale_last_pull.setObjectName("galeLastPullLabel")
-        self.gale_auto_publish = QCheckBox("自动更新 Gale 安全镜像")
-        self.gale_auto_pull = QCheckBox("自动接收 Gale 投稿")
-        auto_publish_help = QLabel(
-            "内容停止变化约 15 分钟后发布；持续变化时最长约 30 分钟"
+        self.gale_last_publish = QLabel(
+            "Gale / GreenCloud 上次成功发布：尚无发布记录"
         )
-        auto_publish_help.setObjectName("galeAutoPublishHelp")
+        self.gale_last_publish.setObjectName("galeLastPublishLabel")
+        mirror_help = QLabel(
+            "Gale / GreenCloud 安全镜像由后台自动维护，每约 5 分钟检查一次；"
+            "内容无变化时不会重复上传。"
+        )
+        mirror_help.setObjectName("galeMirrorHelp")
+        self.gale_pull_button = QPushButton("立即检查投稿")
+        self.gale_last_pull = QLabel("上次投稿检查（多来源）：尚未检查")
+        self.gale_last_pull.setObjectName("galeLastPullLabel")
+        self.gale_auto_pull = QCheckBox("打开应用时检查投稿")
         auto_pull_help = QLabel(
-            "后台每 5 分钟检查；登录时启动，睡眠期间暂停并在唤醒后按系统计划继续"
+            "仅控制打开应用时的检查；后台已有约 5 分钟检查与回执同步"
+            "不受此开关影响。"
         )
         auto_pull_help.setObjectName("galeAutoPullHelp")
         for label in (
             self.gale_last_publish,
+            mirror_help,
             self.gale_last_pull,
-            auto_publish_help,
             auto_pull_help,
         ):
             label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -1206,40 +1276,51 @@ class AiCenterDialog(QWidget):
         left_alignment = Qt.AlignLeft | Qt.AlignVCenter
         controls.addWidget(self.gale_publish_button, 0, 0, left_alignment)
         controls.addWidget(self.gale_last_publish, 0, 1)
-        controls.addWidget(self.gale_pull_button, 1, 0, left_alignment)
-        controls.addWidget(self.gale_last_pull, 1, 1)
-        controls.addWidget(self.gale_auto_publish, 2, 0, left_alignment)
-        controls.addWidget(auto_publish_help, 2, 1)
+        controls.addWidget(mirror_help, 1, 0, 1, 2)
+        controls.addWidget(self.gale_pull_button, 2, 0, left_alignment)
+        controls.addWidget(self.gale_last_pull, 2, 1)
         controls.addWidget(self.gale_auto_pull, 3, 0, left_alignment)
         controls.addWidget(auto_pull_help, 3, 1)
         layout.addLayout(controls)
         layout.addStretch(1)
         enabled = self.gale is not None
+        publish_action = (
+            getattr(self.gale, "publish_greencloud_mirror_now", None)
+            if self.gale is not None
+            else None
+        )
+        self.gale_publish_button.setEnabled(callable(publish_action))
         for widget in (
-            self.gale_publish_button,
             self.gale_pull_button,
-            self.gale_auto_publish,
             self.gale_auto_pull,
         ):
             widget.setEnabled(enabled)
         if self.gale is not None:
-            self.gale_auto_publish.setChecked(self.gale.auto_publish_enabled())
             self.gale_auto_pull.setChecked(self.gale.auto_pull_enabled())
-            self.gale_publish_button.clicked.connect(
-                lambda: self._start_gale_action(
-                    self.gale.manual_update, "正在更新 Gale 安全镜像…"
+            if callable(publish_action):
+                self.gale_publish_button.clicked.connect(
+                    self.start_greencloud_publish
                 )
-            )
             self.gale_pull_button.clicked.connect(
                 self.start_submission_pull
-            )
-            self.gale_auto_publish.toggled.connect(
-                self.gale.set_auto_publish_enabled
             )
             self.gale_auto_pull.toggled.connect(
                 self.gale.set_auto_pull_enabled
             )
         return page
+
+    def start_greencloud_publish(self) -> bool:
+        if self.gale is None:
+            return False
+        action = getattr(self.gale, "publish_greencloud_mirror_now", None)
+        if not callable(action):
+            return False
+        self._start_gale_action(
+            action,
+            "正在更新 Gale / GreenCloud 安全镜像…",
+            action_kind="greencloud_publish",
+        )
+        return True
 
     def start_submission_pull(self) -> bool:
         """Start the existing multi-source pull without blocking the Qt thread."""
@@ -1247,7 +1328,7 @@ class AiCenterDialog(QWidget):
             return False
         self._start_gale_action(
             self.gale.check_submissions_now,
-            "正在检查 Gale 投稿…",
+            "正在检查投稿与回执…",
             refresh_receipts=True,
         )
         return True
@@ -1256,13 +1337,11 @@ class AiCenterDialog(QWidget):
         if self.gale is None or self.gale_page is None:
             return
         self.gale_last_publish.setText(
-            "上次发布："
-            + _display_timestamp(
-                self.gale.last_successful_publish_at(), "尚未发布"
-            )
+            "Gale / GreenCloud 上次成功发布："
+            + _greencloud_publish_status_text(self._actor_mirror_state_path)
         )
         self.gale_last_pull.setText(
-            "上次检查："
+            "上次投稿检查（多来源）："
             + _display_timestamp(
                 self.gale.last_completed_pull_at(), "尚未检查"
             )
@@ -1274,6 +1353,7 @@ class AiCenterDialog(QWidget):
         pending_text: str,
         *,
         refresh_receipts: bool = False,
+        action_kind: str = "controls",
     ) -> None:
         self.gale_status.setText(pending_text)
         self.gale_publish_button.setEnabled(False)
@@ -1281,7 +1361,7 @@ class AiCenterDialog(QWidget):
         self._launch_gale_worker(
             action,
             refresh_receipts=refresh_receipts,
-            action_kind="controls",
+            action_kind=action_kind,
         )
 
     def _launch_gale_worker(
@@ -1391,6 +1471,26 @@ class AiCenterDialog(QWidget):
                 self.gale_status.setText("云端回执与镜像已同步")
             if self._close_pending:
                 QTimer.singleShot(0, self._finish_deferred_close)
+            return
+        if action_kind == "greencloud_publish":
+            status = str(getattr(_result, "status", ""))
+            if error is not None or status not in {"published", "unchanged"}:
+                code = _safe_publish_error_code(
+                    error
+                    if error is not None
+                    else getattr(_result, "reason", "publish_failed")
+                )
+                self.gale_status.setText(
+                    "Gale / GreenCloud 镜像更新失败"
+                    f"（安全错误：{code}）"
+                )
+            elif status == "published":
+                self.gale_status.setText("Gale / GreenCloud 镜像更新成功")
+            else:
+                self.gale_status.setText("内容未变化，已跳过上传")
+            self.gale_publish_button.setEnabled(True)
+            self.gale_pull_button.setEnabled(True)
+            self.refresh_gale_runtime_status()
             return
         self.gale_status.setText(
             "操作完成" if error is None else f"操作失败：{error}"

@@ -585,6 +585,7 @@ class GaleControlService:
         *,
         greencloud_pull: GreenCloudPullService | None = None,
         greencloud_followup: Callable[[], object] | None = None,
+        greencloud_publish: Callable[[], object] | None = None,
         clock=time.time,
     ) -> None:
         self._publish = publish
@@ -592,10 +593,16 @@ class GaleControlService:
         self._settings = settings
         self._greencloud_pull = greencloud_pull
         self._greencloud_followup = greencloud_followup
+        self._greencloud_publish = greencloud_publish
         self._clock = clock
 
     def manual_update(self) -> GalePublishResult:
         return self._publish.publish_manual()
+
+    def publish_greencloud_mirror_now(self) -> object:
+        if self._greencloud_publish is None:
+            raise GaleError("greencloud_publish_unavailable")
+        return self._greencloud_publish()
 
     def check_submissions_now(
         self,
