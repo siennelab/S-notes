@@ -1120,9 +1120,8 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(self._submissions_pulled)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(self._submission_pull_finished)
-        thread.finished.connect(thread.deleteLater)
         self._submission_pull_thread = thread
         self._submission_pull_worker = worker
         thread.start()
@@ -1134,8 +1133,13 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _submission_pull_finished(self) -> None:
+        # The same GaleWorker owner rule as AI Center: finished is emitted
+        # before DeferredDelete, so join before releasing either Qt wrapper.
+        thread = self._submission_pull_thread
+        thread.wait()
         self._submission_pull_thread = None
         self._submission_pull_worker = None
+        thread.deleteLater()
         if self._close_pending:
             QTimer.singleShot(0, self.close)
 

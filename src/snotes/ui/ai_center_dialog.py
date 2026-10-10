@@ -1382,11 +1382,10 @@ class AiCenterDialog(QWidget):
 
         worker.actionFinished.connect(self._gale_action_finished)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        # Keep cleanup on the dialog's GUI-thread receiver, and release the
-        # tracked worker before scheduling destruction of its QThread.
+        thread.finished.connect(worker.deleteLater)
+        # finished precedes native DeferredDelete cleanup. Keep the Python
+        # worker and QThread alive until that cleanup has actually returned.
         thread.finished.connect(self._gale_thread_finished)
-        thread.finished.connect(thread.deleteLater)
         self._gale_threads.append(thread)
         self._gale_workers.append(worker)
         thread.start()
@@ -1395,9 +1394,11 @@ class AiCenterDialog(QWidget):
     def _gale_thread_finished(self) -> None:
         thread = self.sender()
         if thread in self._gale_threads:
+            thread.wait()
             index = self._gale_threads.index(thread)
             self._gale_threads.pop(index)
             self._gale_workers.pop(index)
+            thread.deleteLater()
         if self._gale_threads:
             return
         if self._greencloud_followup_queued:
