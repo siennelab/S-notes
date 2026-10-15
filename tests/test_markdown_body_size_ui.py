@@ -140,12 +140,18 @@ class MarkdownBodySizeUiTests(unittest.TestCase):
             )
         )
         self.assertEqual(commands, ["H1", "H2", "H3", "15", "17", "20", "24"])
-        self.assertEqual(self.js("getComputedStyle(document.querySelector('.ProseMirror')).fontSize"), "17px")
+        self.assertEqual(self.js("getComputedStyle(document.querySelector('.ProseMirror')).fontSize"), "20px")
+        self.assertEqual(self.js("document.querySelector('[data-command=\"20\"]').getAttribute('aria-pressed')"), "true")
+        self.assertEqual(self.js("document.querySelector('[data-command=\"17\"]').getAttribute('aria-pressed')"), "false")
+        self.assertNotIn(":size[", self.editor.latest_markdown)
 
-        for size in (15, 20, 24):
+        # Explicit legacy size=20 remains a supported mark and roundtrips
+        # unchanged; clicking 20 below still creates ordinary unmarked text.
+        for size in (15, 17, 20, 24):
             with self.subTest(roundtrip=size):
                 source = f':size[roundtrip]{chr(123)}size="{size}"{chr(125)}'
                 canonical = self.load(source)
+                self.assertIn(f'size="{size}"', canonical)
                 self.assertEqual(self.load(canonical), canonical)
                 self.assertEqual(
                     self.js(
@@ -163,15 +169,20 @@ class MarkdownBodySizeUiTests(unittest.TestCase):
                     f"{size}px",
                 )
 
-        self.set_paragraph_size(24)
-        self.select_text('.ProseMirror [data-body-size="24"]', 0, 5)
-        self.click("17")
+        self.load("- plain")
+        self.assertTrue(self.js("Boolean(document.querySelector('[data-marker-style=\"body20\"]'))"))
+        self.load('- plain:size[small]{size="17"}')
+        self.assertTrue(self.js("Boolean(document.querySelector('[data-marker-style=\"body20\"]'))"))
+
+        self.set_paragraph_size(17)
+        self.select_text('.ProseMirror [data-body-size="17"]', 0, 5)
+        self.click("20")
         self.wait(lambda: ":size[" not in self.editor.latest_markdown)
         self.assertFalse(self.js("Boolean(document.querySelector('[data-body-size]'))"))
-        self.assertEqual(self.computed_size_for_text("alpha"), "17px")
+        self.assertEqual(self.computed_size_for_text("alpha"), "20px")
 
     def test_full_paragraph_tail_typing_inherits_after_right_key_and_reload_click(self):
-        for size in (15, 20, 24):
+        for size in (15, 17, 24):
             with self.subTest(size=size):
                 self.set_paragraph_size(size)
                 target = self.editor.view.focusProxy() or self.editor.view
@@ -201,14 +212,19 @@ class MarkdownBodySizeUiTests(unittest.TestCase):
                     self.assertIn(f':size[{expected}]', self.editor.latest_markdown)
                     self.assertEqual(self.computed_size_for_text(expected), f"{size}px")
 
-    def test_caret_17_explicitly_returns_to_default_but_plain_typing_stays_default(self):
-        self.set_paragraph_size(20)
-        self.select_text('.ProseMirror [data-body-size="20"]', 5)
+    def test_caret_20_returns_to_default_and_plain_typing_stays_default(self):
+        self.load("plain")
+        self.select_text(".ProseMirror p", 5)
         self.click("17")
+        self.insert("S")
+        self.wait(lambda: 'size="17"' in self.editor.latest_markdown)
+        self.assertEqual(self.computed_size_for_text("S"), "17px")
+
+        self.click("20")
         self.insert("D")
         self.wait(lambda: self.editor.latest_markdown.strip().endswith("D"))
-        self.assertEqual(self.editor.latest_markdown.strip(), ':size[alpha]{size="20"}D')
-        self.assertEqual(self.computed_size_for_text("D"), "17px")
+        self.assertEqual(self.editor.latest_markdown.strip(), 'plain:size[S]{size="17"}D')
+        self.assertEqual(self.computed_size_for_text("D"), "20px")
 
         self.load("plain")
         self.select_text(".ProseMirror p", 5)
@@ -216,7 +232,7 @@ class MarkdownBodySizeUiTests(unittest.TestCase):
         self.wait(lambda: self.editor.latest_markdown.strip() == "plainD")
         self.assertEqual(self.editor.latest_markdown.strip(), "plainD")
         self.assertNotIn(":size[", self.editor.latest_markdown)
-        self.assertEqual(self.computed_size_for_text("plainD"), "17px")
+        self.assertEqual(self.computed_size_for_text("plainD"), "20px")
 
     def test_heading_body_size_semantics_remain_intact(self):
         self.load("## heading")
@@ -234,6 +250,17 @@ class MarkdownBodySizeUiTests(unittest.TestCase):
         self.wait(lambda: self.editor.latest_markdown.startswith("## headingZ"))
         self.assertNotIn(":size[", self.editor.latest_markdown)
         self.assertFalse(self.js("Boolean(document.querySelector('[data-body-size]'))"))
+
+        self.load("## default")
+        self.select_text(".ProseMirror h2", 7)
+        self.click("20")
+        self.wait(lambda: not self.editor.latest_markdown.startswith("#"))
+        self.assertNotIn(":size[", self.editor.latest_markdown)
+        self.assertEqual(self.computed_size_for_text("default"), "20px")
+        self.insert("D")
+        self.wait(lambda: self.editor.latest_markdown.strip() == "defaultD")
+        self.assertNotIn(":size[", self.editor.latest_markdown)
+        self.assertEqual(self.computed_size_for_text("defaultD"), "20px")
 
     @classmethod
     def tearDownClass(cls):

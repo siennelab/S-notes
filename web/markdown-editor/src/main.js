@@ -52,7 +52,10 @@ const changes = $prose(ctx => new Plugin({
   filterTransaction: tr => !tr.docChanged || Boolean(writable()),
   view: () => ({ update(current, previous) {
     updateToolbar(current.state);
-    if (!current.state.doc.eq(previous.doc)) changed(ctx.get(serializerCtx)(current.state.doc), activeId);
+    if (!current.state.doc.eq(previous.doc)) {
+      matches();
+      changed(ctx.get(serializerCtx)(current.state.doc), activeId);
+    }
   }}),
 }));
 async function ensureEditor() {
@@ -143,6 +146,7 @@ async function load(markdown, id) {
   if (id !== requestedId || closing) return;
   loading = false;
   controls();
+  matches();
 }
 // Toolbar state is presentation derived from the current selection only.
 const icons = {
@@ -182,7 +186,7 @@ function updateToolbar(state) {
   const hasMark = name => marks.length > 0 && marks.every(set => set.some(mark => mark.type.name === name));
   for (const level of [1, 2, 3]) pressed(`H${level}`, block.type.name === 'heading' && block.attrs.level === level);
   for (const size of [15, 17, 20, 24]) pressed(String(size), block.type.name === 'paragraph' && marks.length > 0
-    && marks.every(set => (set.find(mark => mark.type.name === 'body_size')?.attrs.size || '17') === String(size)));
+    && marks.every(set => (set.find(mark => mark.type.name === 'body_size')?.attrs.size || '20') === String(size)));
   for (const [key, name] of [['Bold','strong'], ['Italic','emphasis'], ['Strike','strike_through'], ['Inline code','inlineCode'], ['Link','link']]) pressed(key, hasMark(name));
   for (const [key, name] of [['Bullet list','bullet_list'], ['Ordered list','ordered_list'], ['Quote','blockquote'], ['Code block','code_block']]) pressed(key, nodes.some(node => node.type.name === name));
 }
@@ -269,7 +273,10 @@ pressed('Search', false);
 const foldSearchText = value => value.replace(/[A-Z]/g, char => char.toLowerCase());
 function matches() {
   const needle = $('find').value;
-  if (!editor || !needle) return [];
+  if (!editor || loading || !needle) {
+    $('find-status').textContent = '';
+    return [];
+  }
   const foldedNeedle = foldSearchText(needle);
   const found = [];
   editor.action(ctx => ctx.get(editorViewCtx).state.doc.descendants((node, pos) => {
@@ -343,6 +350,7 @@ try {
       requestedId = id;
       loading = true;
       controls();
+      matches();
       hideLink();
       queue = queue.then(() => load(markdown, id));
     },

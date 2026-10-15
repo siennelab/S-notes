@@ -39,14 +39,14 @@ def check_list_styles(editor, load, js, click, wait, passed):
 
     for kind, tag, gate in [('Ordered list', 'ol', 'ORDERED'), ('Bullet list', 'ul', 'BULLET')]:
         for size in ('15', '17', '20', '24'):
-            body = 'Sized item' if size == '17' else f':size[Sized item]{{size="{size}"}}'
+            body = 'Sized item' if size == '20' else f':size[Sized item]{{size="{size}"}}'
             load(body)
             caret()
             click(kind)
             assert has(f'{tag} p') and marker() == f'{size}px'
             raw = stable()
             assert marker() == f'{size}px'
-            assert (':size[' not in raw) if size == '17' else (f'size="{size}"' in raw)
+            assert (':size[' not in raw) if size == '20' else (f'size="{size}"' in raw)
             passed(f'{gate}_{size}')
 
     # Existing list -> heading, then the previously approved direct size cycle.
@@ -56,13 +56,13 @@ def check_list_styles(editor, load, js, click, wait, passed):
     assert has('ol h1') and marker() == '32px'
     click('20')
     assert has('ol p') and not has('h1') and marker() == '20px'
-    assert 'size="20"' in editor.latest_markdown
+    assert ':size[' not in editor.latest_markdown
     passed('H1_LIST_TO_20_LIST')
     click('H2')
     assert has('ol h2') and marker() == '26px' and ':size[' not in editor.latest_markdown
     passed('20_LIST_TO_H2_LIST')
     click('17')
-    assert has('ol p') and marker() == '17px' and ':size[' not in editor.latest_markdown
+    assert has('ol p [data-body-size="17"]') and marker() == '17px' and 'size="17"' in editor.latest_markdown
     passed('H2_LIST_TO_17_LIST')
 
     for kind, prefix in [('Ordered list', '1.'), ('Bullet list', '-')]:
@@ -80,10 +80,10 @@ def check_list_styles(editor, load, js, click, wait, passed):
     passed('REMOVE_LIST_PRESERVES_SIZE')
 
     for prefix in ('1.', '-'):
-        load(f'{prefix} ordinary :size[large]{{size="20"}} word')
-        assert marker() == '17px'
+        load(f'{prefix} ordinary :size[large]{{size="24"}} word')
+        assert marker() == '20px'
         load(f'{prefix} :size[small]{{size="15"}} :size[large]{{size="20"}}')
-        assert marker() == '17px'
+        assert marker() == '20px'
         # Uniform size across bold/italic spans still counts as one body size.
         load(f'{prefix} :size[**all** *large*]{{size="20"}}')
         assert marker() == '20px'
@@ -94,7 +94,7 @@ def check_list_styles(editor, load, js, click, wait, passed):
 
     # Adjacent item numbering and nested marker independence.
     load('1. ## Heading\n2. Next\n\n   - :size[Nested]{size="15"}')
-    assert js("[...document.querySelectorAll('.label-wrapper')].map(e=>getComputedStyle(e).fontSize).join(',')") == '26px,17px,15px'
+    assert js("[...document.querySelectorAll('.label-wrapper')].map(e=>getComputedStyle(e).fontSize).join(',')") == '26px,20px,15px'
     caret()
     click('Bullet list')
     assert has('ul h2') and not has('ol')

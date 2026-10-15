@@ -142,7 +142,11 @@ def run_smoke(app, window):
             assert js("!document.querySelector('.ProseMirror') || document.querySelector('.ProseMirror').contentEditable === 'false'")
             js("for (const [name, fn] of Object.entries(window.originalDom)) Node.prototype[name]=fn; delete window.originalDom")
             passed('LOAD_FAILURE_SAFE')
-            for size in ('15', '20', '24'):
+            load('默认字号正文')
+            assert ':size[' not in editor.latest_markdown
+            assert js("getComputedStyle(document.querySelector('.ProseMirror p')).fontSize") == '20px'
+            passed('DEFAULT_FONT_20_NO_DIRECTIVE')
+            for size in ('15', '17', '24'):
                 load('字号 roundtrip')
                 select_all()
                 click(size)
@@ -159,16 +163,32 @@ def run_smoke(app, window):
                 wait(lambda: 'continued' in editor.latest_markdown)
                 assert js(f"document.querySelector('[data-body-size=\"{size}\"]').textContent") == '字号 roundtrip continued'
                 passed(f'FONT_{size}_CONTINUATION')
+            legacy_20 = ':size[旧显式 20]{size="20"}'
+            canonical_20 = load(legacy_20)
+            assert legacy_20 in canonical_20
+            assert load(canonical_20) == canonical_20
+            assert js("document.querySelector('[data-body-size=\"20\"]').textContent") == '旧显式 20'
+            assert js("getComputedStyle(document.querySelector('[data-body-size=\"20\"]')).fontSize") == '20px'
+            passed('LEGACY_FONT_20_ROUNDTRIP')
             select_all()
-            click('17')
+            click('20')
             wait(lambda: ':size[' not in editor.latest_markdown)
             assert not js("document.querySelector('[data-body-size]') !== null")
-            passed('BACK_TO_17_CLEANS_MARKUP')
+            passed('BACK_TO_20_CLEANS_MARKUP')
             click('Undo')
-            wait(lambda: 'size="24"' in editor.latest_markdown)
+            wait(lambda: 'size="20"' in editor.latest_markdown)
             click('Redo')
             wait(lambda: ':size[' not in editor.latest_markdown)
             passed('UNDO_REDO')
+            load('17 与默认 20 切换')
+            select_all()
+            click('17')
+            wait(lambda: 'size="17"' in editor.latest_markdown)
+            click('20')
+            wait(lambda: ':size[' not in editor.latest_markdown)
+            assert js("document.querySelector('.ProseMirror').textContent") == '17 与默认 20 切换'
+            assert js("getComputedStyle(document.querySelector('.ProseMirror p')).fontSize") == '20px'
+            passed('FONT_20_TO_17_TO_20')
             def select_text(start, end=None):
                 end = start if end is None else end
                 js(f"""(() => {{ const e=document.querySelector('.ProseMirror'); e.focus();
@@ -177,14 +197,15 @@ def run_smoke(app, window):
                 const selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); }})()""")
                 QTest.qWait(30)
 
-            for heading, size, gate in [('H1', '17', 'H1_TO_17'), ('H1', '15', 'H1_TO_15'), ('H2', '20', 'H2_TO_20'), ('H3', '24', 'H3_TO_24')]:
+            for heading, size, gate in [('H1', '20', 'H1_TO_20'), ('H1', '15', 'H1_TO_15'), ('H2', '17', 'H2_TO_17'), ('H3', '24', 'H3_TO_24')]:
                 load('#' * int(heading[1]) + ' heading text')
                 select_text(3)
                 click(size)
                 assert js("document.querySelector('.ProseMirror').firstElementChild.tagName") == 'P'
                 assert not editor.latest_markdown.startswith('#')
-                if size == '17':
+                if size == '20':
                     assert ':size[' not in editor.latest_markdown
+                    assert js("getComputedStyle(document.querySelector('.ProseMirror p')).fontSize") == '20px'
                 else:
                     assert js(f"document.querySelector('[data-body-size=\"{size}\"]').textContent") == 'heading text'
                 passed(gate)
@@ -192,7 +213,7 @@ def run_smoke(app, window):
             select_text(2)
             click('H1')
             assert editor.latest_markdown.startswith('# plain text')
-            passed('17_TO_H1')
+            passed('20_TO_H1')
             load(':size[sized text]{size="20"}')
             select_all()
             click('H2')
@@ -206,7 +227,8 @@ def run_smoke(app, window):
             load('# heading text')
             select_text(2)
             click('20')
-            assert 'size="20"' in editor.latest_markdown
+            assert ':size[' not in editor.latest_markdown
+            assert js("getComputedStyle(document.querySelector('.ProseMirror p')).fontSize") == '20px'
             click('H1')
             assert editor.latest_markdown.startswith('# heading text') and ':size[' not in editor.latest_markdown
             passed('H1_TO_20_TO_H1_CLEARS_SIZE')
@@ -223,7 +245,8 @@ def run_smoke(app, window):
             select_text(2, 4)
             click('20')
             assert js("document.querySelector('.ProseMirror').firstElementChild.tagName") == 'P'
-            assert js("document.querySelector('[data-body-size]').textContent") == 'cd'
+            assert ':size[' not in editor.latest_markdown
+            assert js("getComputedStyle(document.querySelector('.ProseMirror p')).fontSize") == '20px'
             click('H1')
             assert ':size[' not in editor.latest_markdown
             passed('HEADING_SELECTION_SIZE_AND_BLOCK_CLEANUP')
@@ -233,6 +256,13 @@ def run_smoke(app, window):
             check_code_button(editor, load, js, click, select_all, passed)
             from src.snotes.ui.markdown_list_smoke import check_list_styles
             check_list_styles(editor, load, js, click, wait, passed)
+            load(' '.join(['keyword'] * 9))
+            js("document.getElementById('find').value='keyword'; document.getElementById('find').dispatchEvent(new Event('input',{bubbles:true}))")
+            assert js("document.getElementById('find-status').textContent") == '9 处匹配'
+            load('A different body without that term')
+            assert js("document.getElementById('find').value") == 'keyword'
+            assert js("document.getElementById('find-status').textContent") == '0 处匹配'
+            passed('FIND_COUNT_REFRESHES_ON_LOAD')
             load('find **me** and find me')
             js("document.getElementById('find').value='find me'; document.getElementById('replacement').value='found'; document.getElementById('replace-all').click()")
             wait(lambda: 'found' in editor.latest_markdown)
@@ -255,7 +285,7 @@ def run_smoke(app, window):
                 wait(lambda: js("getComputedStyle(document.documentElement).getPropertyValue('--text').trim()") == theme.text)
             passed('THEMES')
             assert js("document.getElementById('raw').readOnly")
-            assert js("getComputedStyle(document.querySelector('.ProseMirror')).fontSize") == '17px'
+            assert js("getComputedStyle(document.querySelector('.ProseMirror')).fontSize") == '20px'
             passed('RAW_READ_ONLY')
             class UrlReceiver(QObject):
                 def __init__(self):
@@ -346,16 +376,16 @@ def check_code_button(editor, load, js, click, select_all, passed):
 
     source = 'alpha\n\n```js\none\ntwo\n```\n\nomega\n'
     load(source)
-    for size in ('15', '20', '17'):
+    for size in ('15', '17', '24', '20'):
         select_all()
         click(size)
-        text = lambda s: s if size == '17' else f':size[{s}]{{size="{size}"}}'
+        text = lambda s: s if size == '20' else f':size[{s}]{{size="{size}"}}'
         exact(text('alpha') + '\n\n```js\none\ntwo\n```\n\n' + text('omega') + '\n')
-    for size in ('15', '20', '17'):
+    for size in ('15', '17', '20', '24'):
         select('pre code', 2)
         click(size)
         exact(source)
-    passed('CODE_SKIPPED_BY_SIZE_15_20_17_AND_CARET_NOOP')
+    passed('CODE_SKIPPED_BY_ALL_BODY_SIZES_AND_CARET_NOOP')
 
     toggle_case('TEXT_SELECTION', '**alpha**\n\n## beta', '```\nalpha\nbeta\n```\n', 'p', 2, 2, 'h2')
     toggle_case('CODE_SELECTION', '```js\none\ntwo\n```', 'one\n\ntwo\n')

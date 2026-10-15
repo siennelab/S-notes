@@ -36,7 +36,7 @@ button:disabled { opacity: .4; cursor: default; }
 .ProseMirror {
   outline: none;
   min-height: 560px;
-  font-size: 17px;
+  font-size: 20px;
   line-height: var(--line-height);
   overflow-wrap: anywhere;
 }
@@ -108,6 +108,9 @@ button:disabled { opacity: .4; cursor: default; }
 .ProseMirror [data-body-size="15"] {
   font-size: 15px;
 }
+.ProseMirror [data-body-size="17"] {
+  font-size: 17px;
+}
 .ProseMirror [data-body-size="20"] {
   font-size: 20px;
 }
@@ -121,12 +124,13 @@ button:disabled { opacity: .4; cursor: default; }
 .ProseMirror a { color: var(--accent, #5f768b); }
 /* Marker decorations are derived from the first block; never persisted. */
 .milkdown-list-item-block[data-marker-style] {
-  --marker-size: 17px;
+  --marker-size: 20px;
   --marker-weight: 400;
   --marker-leading: 1.9;
   --marker-top: 0px;
 }
 .milkdown-list-item-block[data-marker-style="body15"] { --marker-size: 15px; }
+.milkdown-list-item-block[data-marker-style="body17"] { --marker-size: 17px; }
 .milkdown-list-item-block[data-marker-style="body20"] { --marker-size: 20px; }
 .milkdown-list-item-block[data-marker-style="body24"] { --marker-size: 24px; }
 .milkdown-list-item-block[data-marker-style^="h"] {

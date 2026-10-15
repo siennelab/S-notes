@@ -74,7 +74,7 @@ class MarkdownCoreTests(unittest.TestCase):
                 safe = reader.read_for_export_target(AI_TARGET_COMMON_ID, AiSafeReadSource(1, 'test', body, 'redacted', (AI_TARGET_COMMON_ID,)))
                 self.assertEqual(safe.content, '[MASKED]')
                 self.assertEqual(safe.redaction_count, 1)
-        for size in (15, 20, 24):
+        for size in (15, 17, 20, 24):
             with self.subTest(size=size):
                 self.assertEqual(markdown_to_plain_text(f':size[se**cr**et]{{size="{size}"}}'), 'secret')
         self.assertEqual(markdown_to_plain_text('`**secret**`'), '**secret**')

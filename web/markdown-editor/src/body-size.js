@@ -1,7 +1,7 @@
 import { $command, $markSchema, $remark } from "@milkdown/kit/utils";
 import remarkDirective from "remark-directive";
 
-const supported = (size) => size === "15" || size === "20" || size === "24";
+const supported = (size) => ["15", "17", "20", "24"].includes(size);
 const directives = $remark("bodySizeDirective", () => remarkDirective);
 const validSize = (node) => node.type === "textDirective" && node.name === "size"
   && supported(node.attributes?.size) && Object.keys(node.attributes).length === 1;
@@ -28,12 +28,12 @@ const literalDirectives = $remark("literalUnknownDirectives", () => () => (tree,
 export const bodySize = $markSchema("body_size", () => ({
   priority: 40,
   // Keep the mark active at its trailing edge so normal ProseMirror typing
-  // continues a sized run. Choosing 17 at a caret explicitly clears it below.
+  // continues a sized run. Choosing the default 20 at a caret clears it below.
   inclusive: true,
   attrs: {
     size: {
       validate: (value) => {
-        if (!supported(value)) throw new Error("Body size must be 15, 20, or 24");
+        if (!supported(value)) throw new Error("Body size must be 15, 17, 20, or 24");
       },
     },
   },
@@ -84,7 +84,7 @@ export const setBodySize = $command(
     const tr = state.tr;
     if (empty && !headings.length) {
       tr.removeStoredMark(type);
-      if (size !== 17) tr.addStoredMark(type.create({ size: String(size) }));
+      if (size !== 20) tr.addStoredMark(type.create({ size: String(size) }));
       dispatch?.(tr.scrollIntoView());
       return true;
     }
@@ -96,14 +96,14 @@ export const setBodySize = $command(
       const blockEnd = Math.min(end, pos + 1 + node.content.size);
       if (blockStart >= blockEnd) continue;
       tr.removeMark(blockStart, blockEnd, type);
-      if (size !== 17) tr.addMark(blockStart, blockEnd, type.create({ size: String(size) }));
+      if (size !== 20) tr.addMark(blockStart, blockEnd, type.create({ size: String(size) }));
     }
     // A caret stays a caret when a heading is converted, so make its next
     // input agree with the body size just applied to that whole block. Range
     // selections can rely on the marks at whichever edge the user collapses.
     if (empty) {
       tr.removeStoredMark(type);
-      if (size !== 17) tr.addStoredMark(type.create({ size: String(size) }));
+      if (size !== 20) tr.addStoredMark(type.create({ size: String(size) }));
     }
     dispatch?.(tr.scrollIntoView());
     return true;

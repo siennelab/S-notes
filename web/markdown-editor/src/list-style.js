@@ -38,15 +38,15 @@ export const toggleList = $command("ToggleContentList", () => kind => (state, di
 
 // Derived presentation only. No node attributes, Markdown fields, or bridge data.
 // The first block is the item's main style. Only a uniformly sized paragraph
-// changes its marker; a mixed inline-size paragraph always uses default 17px.
+// changes its marker; a mixed inline-size paragraph always uses default 20px.
 function markerStyle(block) {
   if (block?.type.name === "heading") return `h${block.attrs.level}`;
-  if (block?.type.name !== "paragraph") return "body17";
+  if (block?.type.name !== "paragraph") return "body20";
   const sizes = new Set();
   block.descendants(node => {
-    if (node.isInline) sizes.add(node.marks.find(mark => mark.type.name === "body_size")?.attrs.size || "17");
+    if (node.isInline) sizes.add(node.marks.find(mark => mark.type.name === "body_size")?.attrs.size || "20");
   });
-  return sizes.size === 1 ? `body${[...sizes][0]}` : "body17";
+  return sizes.size === 1 ? `body${[...sizes][0]}` : "body20";
 }
 function decorations(doc) {
   const result = [];

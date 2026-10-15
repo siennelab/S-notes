@@ -189,6 +189,58 @@ class MarkdownEditorSearchUiTests(unittest.TestCase):
         self.assertEqual(text.count("中文"), 2)
         self.wait(lambda: self.editor.latest_markdown.count("符号") == 2)
 
+    def test_search_count_refreshes_when_switching_documents_without_next(self):
+        self.load(" ".join(["keyword"] * 9))
+        self.search("keyword")
+        self.assertEqual(self.js("document.getElementById('find-status').textContent"), "9 处匹配")
+        self.assertEqual(self.js("document.activeElement.id"), "find")
+
+        self.load("a different note without the term")
+
+        self.assertEqual(self.js("document.getElementById('find').value"), "keyword")
+        self.assertEqual(self.js("document.getElementById('find-status').textContent"), "0 处匹配")
+        self.assertEqual(self.js("document.activeElement.id"), "find")
+        self.assertEqual(self.js("window.getSelection().toString()"), "")
+
+    def test_search_count_tracks_edits_and_clears_with_empty_query(self):
+        self.load("hit hit")
+        self.search("hit")
+        self.assertEqual(self.js("document.getElementById('find-status').textContent"), "2 处匹配")
+
+        self.js("""(() => {
+            const root = document.querySelector('.ProseMirror');
+            const text = root.querySelector('p').firstChild;
+            const range = document.createRange();
+            range.setStart(text, text.length); range.collapse(true);
+            const selection = window.getSelection();
+            selection.removeAllRanges(); selection.addRange(range);
+            root.focus();
+            document.execCommand('insertText', false, ' hit');
+            return true;
+        })()""")
+        self.wait(lambda: self.editor.latest_markdown.strip() == "hit hit hit")
+        self.wait(lambda: self.js("document.getElementById('find-status').textContent") == "3 处匹配")
+
+        self.js("""(() => {
+            const root = document.querySelector('.ProseMirror');
+            const range = document.createRange(); range.selectNodeContents(root.querySelector('p'));
+            const selection = window.getSelection();
+            selection.removeAllRanges(); selection.addRange(range);
+            root.focus();
+            document.execCommand('insertText', false, 'hit');
+            return true;
+        })()""")
+        self.wait(lambda: self.editor.latest_markdown.strip() == "hit")
+        self.wait(lambda: self.js("document.getElementById('find-status').textContent") == "1 处匹配")
+
+        self.js("""(() => {
+            const input = document.getElementById('find');
+            input.value = '';
+            input.dispatchEvent(new Event('input', {bubbles: true}));
+            return true;
+        })()""")
+        self.assertEqual(self.js("document.getElementById('find-status').textContent"), "")
+
 
 if __name__ == "__main__":
     unittest.main()
