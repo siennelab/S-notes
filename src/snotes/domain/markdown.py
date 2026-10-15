@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from markdown_it import MarkdownIt
 
-_SIZE_ATTRIBUTES = re.compile(r'\{size=(?:"(15|20)"|\'(15|20)\'|(15|20))\}')
+_SIZE_ATTRIBUTES = re.compile(r'\{size=(?:"(15|20|24)"|\'(15|20|24)\'|(15|20|24))\}')
 
 
 def _size_directive(state, silent: bool) -> bool:

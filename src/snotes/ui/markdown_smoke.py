@@ -142,7 +142,7 @@ def run_smoke(app, window):
             assert js("!document.querySelector('.ProseMirror') || document.querySelector('.ProseMirror').contentEditable === 'false'")
             js("for (const [name, fn] of Object.entries(window.originalDom)) Node.prototype[name]=fn; delete window.originalDom")
             passed('LOAD_FAILURE_SAFE')
-            for size in ('15', '20'):
+            for size in ('15', '20', '24'):
                 load('字号 roundtrip')
                 select_all()
                 click(size)
@@ -151,13 +151,21 @@ def run_smoke(app, window):
                 assert load(canonical) == canonical
                 assert js(f"getComputedStyle(document.querySelector('[data-body-size=\"{size}\"]')).fontSize") == f'{size}px'
                 passed(f'FONT_{size}_ROUNDTRIP')
+                js("""(() => { const block=document.querySelector('.ProseMirror p'); block.closest('.ProseMirror').focus();
+                const range=document.createRange(); range.selectNodeContents(block); range.collapse(false);
+                const selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); })()""")
+                QTest.qWait(30)
+                js("document.execCommand('insertText',false,' continued')")
+                wait(lambda: 'continued' in editor.latest_markdown)
+                assert js(f"document.querySelector('[data-body-size=\"{size}\"]').textContent") == '字号 roundtrip continued'
+                passed(f'FONT_{size}_CONTINUATION')
             select_all()
             click('17')
             wait(lambda: ':size[' not in editor.latest_markdown)
             assert not js("document.querySelector('[data-body-size]') !== null")
             passed('BACK_TO_17_CLEANS_MARKUP')
             click('Undo')
-            wait(lambda: 'size="20"' in editor.latest_markdown)
+            wait(lambda: 'size="24"' in editor.latest_markdown)
             click('Redo')
             wait(lambda: ':size[' not in editor.latest_markdown)
             passed('UNDO_REDO')
@@ -169,8 +177,8 @@ def run_smoke(app, window):
                 const selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range); }})()""")
                 QTest.qWait(30)
 
-            for heading, size, gate in [('H1', '17', 'H1_TO_17'), ('H1', '15', 'H1_TO_15'), ('H2', '20', 'H2_TO_20')]:
-                load(('#' if heading == 'H1' else '##') + ' heading text')
+            for heading, size, gate in [('H1', '17', 'H1_TO_17'), ('H1', '15', 'H1_TO_15'), ('H2', '20', 'H2_TO_20'), ('H3', '24', 'H3_TO_24')]:
+                load('#' * int(heading[1]) + ' heading text')
                 select_text(3)
                 click(size)
                 assert js("document.querySelector('.ProseMirror').firstElementChild.tagName") == 'P'
@@ -190,6 +198,11 @@ def run_smoke(app, window):
             click('H2')
             assert editor.latest_markdown.startswith('## sized text') and ':size[' not in editor.latest_markdown
             passed('20_TO_H2_CLEARS_SIZE')
+            load(':size[sized text]{size="24"}')
+            select_all()
+            click('H3')
+            assert editor.latest_markdown.startswith('### sized text') and ':size[' not in editor.latest_markdown
+            passed('24_TO_H3_CLEARS_SIZE')
             load('# heading text')
             select_text(2)
             click('20')
@@ -215,7 +228,7 @@ def run_smoke(app, window):
             assert ':size[' not in editor.latest_markdown
             passed('HEADING_SELECTION_SIZE_AND_BLOCK_CLEANUP')
             assert not js("[...document.querySelectorAll('#toolbar button')].some(b=>b.dataset.command==='正文')")
-            assert js("[...document.querySelectorAll('#toolbar button')].slice(0,6).map(b=>b.textContent).join('|')") == 'H1|H2|H3|15|17|20'
+            assert js("[...document.querySelectorAll('#toolbar button')].slice(0,7).map(b=>b.textContent).join('|')") == 'H1|H2|H3|15|17|20|24'
             passed('BODY_BUTTON_REMOVED')
             check_code_button(editor, load, js, click, select_all, passed)
             from src.snotes.ui.markdown_list_smoke import check_list_styles

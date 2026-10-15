@@ -181,7 +181,7 @@ function updateToolbar(state) {
   if (!empty) state.doc.nodesBetween(from, to, node => { if (node.isText) marks.push(node.marks); });
   const hasMark = name => marks.length > 0 && marks.every(set => set.some(mark => mark.type.name === name));
   for (const level of [1, 2, 3]) pressed(`H${level}`, block.type.name === 'heading' && block.attrs.level === level);
-  for (const size of [15, 17, 20]) pressed(String(size), block.type.name === 'paragraph' && marks.length > 0
+  for (const size of [15, 17, 20, 24]) pressed(String(size), block.type.name === 'paragraph' && marks.length > 0
     && marks.every(set => (set.find(mark => mark.type.name === 'body_size')?.attrs.size || '17') === String(size)));
   for (const [key, name] of [['Bold','strong'], ['Italic','emphasis'], ['Strike','strike_through'], ['Inline code','inlineCode'], ['Link','link']]) pressed(key, hasMark(name));
   for (const [key, name] of [['Bullet list','bullet_list'], ['Ordered list','ordered_list'], ['Quote','blockquote'], ['Code block','code_block']]) pressed(key, nodes.some(node => node.type.name === name));
@@ -189,6 +189,7 @@ function updateToolbar(state) {
 const commands = [
   ['H1', 'H1', '一级标题', setHeading, 1], ['H2', 'H2', '二级标题', setHeading, 2], ['H3', 'H3', '三级标题', setHeading, 3],
   ['15', '15', '正文 15px', setBodySize, 15], ['17', '17', '正文 17px', setBodySize, 17], ['20', '20', '正文 20px', setBodySize, 20],
+  ['24', '24', '正文 24px', setBodySize, 24],
   ['Bold', 'B', '加粗', cm.toggleStrongCommand], ['Italic', 'I', '斜体', cm.toggleEmphasisCommand], ['Strike', 'S', '删除线', toggleStrikethroughCommand],
   ['Bullet list', '', '无序列表', toggleList, 'bullet_list', 'bullet'], ['Ordered list', '', '有序列表', toggleList, 'ordered_list', 'ordered'],
   ['Quote', '', '引用', cm.wrapInBlockquoteCommand, undefined, 'quote'], ['Inline code', '', '行内代码', cm.toggleInlineCodeCommand, undefined, 'inline'],
@@ -265,14 +266,17 @@ pressed('Raw Markdown', false);
 pressed('Search', false);
 
 // Search textblocks with ProseMirror positions; inline formatting does not split matches.
+const foldSearchText = value => value.replace(/[A-Z]/g, char => char.toLowerCase());
 function matches() {
   const needle = $('find').value;
   if (!editor || !needle) return [];
+  const foldedNeedle = foldSearchText(needle);
   const found = [];
   editor.action(ctx => ctx.get(editorViewCtx).state.doc.descendants((node, pos) => {
     if (!node.isTextblock) return;
     const text = node.textBetween(0, node.content.size, '', '\ufffc');
-    for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + needle.length))
+    const foldedText = foldSearchText(text);
+    for (let i = foldedText.indexOf(foldedNeedle); i !== -1; i = foldedText.indexOf(foldedNeedle, i + needle.length))
       found.push({ from: pos + 1 + i, to: pos + 1 + i + needle.length });
     return false;
   }));
@@ -286,8 +290,8 @@ $('find-next').onclick = () => {
   editor.action(ctx => {
     const view = ctx.get(editorViewCtx);
     const hit = found.find(item => item.from >= view.state.selection.to) || found[0];
-    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, hit.from, hit.to)).scrollIntoView());
     view.focus();
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, hit.from, hit.to)).scrollIntoView());
   });
 };
 $('find').oninput = matches;

@@ -38,7 +38,7 @@ def check_list_styles(editor, load, js, click, wait, passed):
         passed(('ORDERED_' if tag == 'ol' else 'BULLET_') + heading)
 
     for kind, tag, gate in [('Ordered list', 'ol', 'ORDERED'), ('Bullet list', 'ul', 'BULLET')]:
-        for size in ('15', '17', '20'):
+        for size in ('15', '17', '20', '24'):
             body = 'Sized item' if size == '17' else f':size[Sized item]{{size="{size}"}}'
             load(body)
             caret()

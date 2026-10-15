@@ -1,7 +1,7 @@
 import { $command, $markSchema, $remark } from "@milkdown/kit/utils";
 import remarkDirective from "remark-directive";
 
-const supported = (size) => size === "15" || size === "20";
+const supported = (size) => size === "15" || size === "20" || size === "24";
 const directives = $remark("bodySizeDirective", () => remarkDirective);
 const validSize = (node) => node.type === "textDirective" && node.name === "size"
   && supported(node.attributes?.size) && Object.keys(node.attributes).length === 1;
@@ -27,11 +27,13 @@ const literalDirectives = $remark("literalUnknownDirectives", () => () => (tree,
 // A Markdown mark, not an HTML converter. DOM spans exist only for rendering.
 export const bodySize = $markSchema("body_size", () => ({
   priority: 40,
-  inclusive: false,
+  // Keep the mark active at its trailing edge so normal ProseMirror typing
+  // continues a sized run. Choosing 17 at a caret explicitly clears it below.
+  inclusive: true,
   attrs: {
     size: {
       validate: (value) => {
-        if (!supported(value)) throw new Error("Body size must be 15 or 20");
+        if (!supported(value)) throw new Error("Body size must be 15, 20, or 24");
       },
     },
   },
@@ -70,7 +72,7 @@ export const bodySize = $markSchema("body_size", () => ({
 export const setBodySize = $command(
   "SetBodySize",
   (ctx) => (size) => (state, dispatch) => {
-    if (![15, 17, 20].includes(size)) return false;
+    if (![15, 17, 20, 24].includes(size)) return false;
     const { from, to, empty } = state.selection;
     const blocks = [];
     state.doc.nodesBetween(from, to, (node, pos) => {
@@ -78,9 +80,14 @@ export const setBodySize = $command(
     });
     if (!blocks.length) return false;
     const headings = blocks.filter(({ node }) => node.type.name === "heading");
-    if (empty && !headings.length) return false;
     const type = bodySize.type(ctx);
     const tr = state.tr;
+    if (empty && !headings.length) {
+      tr.removeStoredMark(type);
+      if (size !== 17) tr.addStoredMark(type.create({ size: String(size) }));
+      dispatch?.(tr.scrollIntoView());
+      return true;
+    }
     for (const { pos } of headings) tr.setNodeMarkup(pos, state.schema.nodes.paragraph);
     const start = empty ? headings[0].pos + 1 : from;
     const end = empty ? start + headings[0].node.content.size : to;
@@ -91,8 +98,13 @@ export const setBodySize = $command(
       tr.removeMark(blockStart, blockEnd, type);
       if (size !== 17) tr.addMark(blockStart, blockEnd, type.create({ size: String(size) }));
     }
-    tr.removeStoredMark(type);
-    if (empty && start === end && size !== 17) tr.addStoredMark(type.create({ size: String(size) }));
+    // A caret stays a caret when a heading is converted, so make its next
+    // input agree with the body size just applied to that whole block. Range
+    // selections can rely on the marks at whichever edge the user collapses.
+    if (empty) {
+      tr.removeStoredMark(type);
+      if (size !== 17) tr.addStoredMark(type.create({ size: String(size) }));
+    }
     dispatch?.(tr.scrollIntoView());
     return true;
   },

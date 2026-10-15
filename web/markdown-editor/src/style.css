@@ -111,6 +111,9 @@ button:disabled { opacity: .4; cursor: default; }
 .ProseMirror [data-body-size="20"] {
   font-size: 20px;
 }
+.ProseMirror [data-body-size="24"] {
+  font-size: 24px;
+}
 
 
 .ProseMirror blockquote { color: var(--text-muted, #68737c); border-color: var(--accent, #5f768b); }
@@ -125,6 +128,7 @@ button:disabled { opacity: .4; cursor: default; }
 }
 .milkdown-list-item-block[data-marker-style="body15"] { --marker-size: 15px; }
 .milkdown-list-item-block[data-marker-style="body20"] { --marker-size: 20px; }
+.milkdown-list-item-block[data-marker-style="body24"] { --marker-size: 24px; }
 .milkdown-list-item-block[data-marker-style^="h"] {
   --marker-weight: 700;
   --marker-leading: 1.3;
