@@ -211,6 +211,7 @@ class MainWindow(QMainWindow):
         self.body_edit.loaded.connect(self._markdown_loaded)
         self.body_edit.loadFailed.connect(self._markdown_load_failed)
         self.body_edit.closeReady.connect(self._editor_close_ready)
+        self.body_edit.closeFailed.connect(self._editor_close_failed)
         self._note_load = None
         # Pending (note, metadata, load_id, read_only): shown only after loaded.
         self._pending_note = None
@@ -539,6 +540,7 @@ class MainWindow(QMainWindow):
             return
         # Reuse the composition/change delivery barrier before saving old note.
         self._pending_switch = note_id
+        self.save_timer.stop()
         self.body_edit.prepareClose()
 
     def _enter_note_navigation_mode(self) -> None:
@@ -687,7 +689,8 @@ class MainWindow(QMainWindow):
             self.shell.set_conflict_status(CONFLICT_MESSAGE)
             return
         self.shell.set_normal_status("未保存")
-        self.save_timer.start(self.AUTOSAVE_DELAY_MS)
+        if not self.body_edit.closing:
+            self.save_timer.start(self.AUTOSAVE_DELAY_MS)
 
     def _ai_visibility_changed(self, _index: int = -1) -> None:
         if (
@@ -1143,6 +1146,15 @@ class MainWindow(QMainWindow):
         if self._close_pending:
             QTimer.singleShot(0, self.close)
 
+    def _editor_close_failed(self, reason: str) -> None:
+        self._pending_switch = None
+        self._close_ready = self._close_pending = False
+        # No save or reload: Python's last body may precede the final IME input.
+        # Keep the live Web document; a retry must complete its own barrier.
+        self.save_timer.stop()
+        self._restore_sidebar_selection()
+        self.shell.set_normal_status(reason)
+
     def _editor_close_ready(self) -> None:
         if self._pending_switch is not None:
             note_id, self._pending_switch = self._pending_switch, None
@@ -1169,6 +1181,7 @@ class MainWindow(QMainWindow):
             if not self._close_pending:
                 self._close_pending = True
                 self._pending_switch = None
+                self.save_timer.stop()
                 if not self.body_edit.closing:
                     self.body_edit.prepareClose()
             return

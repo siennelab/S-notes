@@ -1,4 +1,4 @@
-// The complete desktop boundary: four incoming signals, five outgoing slots.
+// The complete desktop boundary, including cancellable close barriers.
 export async function connectQt(handlers) {
   await new Promise((resolve, reject) => {
     const script = document.createElement("script");
@@ -9,20 +9,55 @@ export async function connectQt(handlers) {
   });
   const channel = await new Promise(resolve => new QWebChannel(qt.webChannelTransport, resolve));
   const host = channel.objects.host;
-  const pending = new Set();
+  const pending = new Map();
+  let activeClose = null;
+  let retryPending = false;
   function send(method, ...args) {
-    const delivery = new Promise(resolve => host[method](...args, resolve));
-    pending.add(delivery);
-    delivery.finally(() => pending.delete(delivery));
-    return delivery;
+    const id = method === 'markdownChanged' ? args[1] : args[0];
+    const key = `${method}:${id}`;
+    const entry = {};
+    entry.delivery = new Promise(resolve => {
+      entry.deliver = () => host[method](...args, () => {
+        if (pending.get(key) === entry) pending.delete(key);
+        resolve();
+      });
+    });
+    // Qt slots are synchronous and channel messages are ordered. The newest
+    // body/ack covers earlier bodies for this load; never replay an older body
+    // after a newer one has already been acknowledged.
+    pending.set(key, entry);
+    entry.deliver();
+    return entry.delivery;
   }
   host.setMarkdown.connect(handlers.setMarkdown);
   host.setTheme.connect(handlers.setTheme);
   host.setReadOnly.connect(handlers.setReadOnly);
-  host.prepareClose.connect(async () => {
-    await handlers.prepareClose();
-    await Promise.all([...pending]);
-    host.closeReady();
+  host.cancelClose.connect(token => {
+    if (activeClose?.token !== token) return;
+    activeClose.cancel();
+    activeClose = null;
+    retryPending = true;
+    handlers.cancelClose();
+  });
+  host.prepareClose.connect(async token => {
+    const attempt = { token };
+    const cancelled = new Promise(resolve => { attempt.cancel = resolve; });
+    activeClose = attempt;
+    const isCurrent = () => activeClose === attempt;
+    try {
+      // Also unblock a queue awaiting loadComplete's missing acknowledgement.
+      // Retry the original message, never pull a possibly stale Python body.
+      if (retryPending) {
+        retryPending = false;
+        for (const entry of pending.values()) entry.deliver();
+      }
+      await Promise.race([handlers.prepareClose(isCurrent, cancelled), cancelled]);
+      if (!isCurrent()) return;
+      await Promise.race([Promise.all([...pending.values()].map(entry => entry.delivery)), cancelled]);
+      if (isCurrent()) host.closeReady(token);
+    } catch {
+      if (isCurrent()) host.closeFailed(token);
+    }
   });
   return {
     ready: () => host.editorReady(),

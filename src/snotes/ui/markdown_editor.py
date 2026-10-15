@@ -18,7 +18,8 @@ BUNDLE = Path(__file__).resolve().parents[3] / "web" / "markdown-editor" / "dist
 
 class MarkdownBridge(QObject):
     setMarkdown = Signal(str, str)
-    prepareClose = Signal()
+    prepareClose = Signal(str)
+    cancelClose = Signal(str)
     setTheme = Signal('QVariantMap')
     setReadOnly = Signal(bool)
 
@@ -42,10 +43,13 @@ class MarkdownBridge(QObject):
     def markdownChanged(self, markdown, load_id):
         self.owner._changed(markdown, load_id)
 
-    @Slot()
-    def closeReady(self):
-        if self.owner.closing:
-            self.owner.closeReady.emit()
+    @Slot(str)
+    def closeReady(self, token):
+        self.owner._close_succeeded(token)
+
+    @Slot(str)
+    def closeFailed(self, token):
+        self.owner._close_failed(token, "正文收尾失败，本次操作已取消，请重试")
 
 
 class EditorPage(QWebEnginePage):
@@ -80,6 +84,10 @@ class MarkdownEditorWidget(QWidget):
     changed = Signal(str, str)
     stateChanged = Signal()
     closeReady = Signal()
+    closeFailed = Signal(str)
+    # Chromium can throttle hidden-view timers to ~1 s. Allow ample grace for
+    # IME/delivery, but use a native Qt timer independent of the Web promises.
+    CLOSE_TIMEOUT_MS = 3000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,6 +98,13 @@ class MarkdownEditorWidget(QWidget):
         self.dirty = False
         self.read_only = False
         self.closing = False
+        self._close_generation = 0
+        self._close_token = None
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(
+            lambda: self._close_failed(self._close_token, "正文收尾超时，本次操作已取消，请重试")
+        )
         self.ready = False
         self._pending = None
         self._theme = current_theme()
@@ -160,11 +175,30 @@ class MarkdownEditorWidget(QWidget):
         if self.closing:
             return  # One composition/delivery barrier at a time.
         self.closing = True
+        self._close_generation += 1
+        self._close_token = str(self._close_generation)
+        self._close_timer.start(self.CLOSE_TIMEOUT_MS)
         if self.ready:
-            self.bridge.prepareClose.emit()
+            self.bridge.prepareClose.emit(self._close_token)
         else:
             # No editor could have accepted input yet.
-            self.closeReady.emit()
+            self._close_succeeded(self._close_token)
+
+    def _close_succeeded(self, token):
+        if token is None or token != self._close_token:
+            return
+        self._close_timer.stop()
+        self._close_token = None
+        self.closeReady.emit()
+
+    def _close_failed(self, token, reason):
+        if token is None or token != self._close_token:
+            return
+        self._close_timer.stop()
+        self._close_token = None  # Reject late ready/failed before allowing retry.
+        self.closing = False
+        self.bridge.cancelClose.emit(token)
+        self.closeFailed.emit(reason)
 
     def _ready(self):
         if self.ready:

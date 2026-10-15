@@ -37,12 +37,13 @@ function changed(markdown, id) {
 // paths, so the delivery barrier keeps a short grace period unless told the
 // composition state alone is sufficient (a load that follows a barrier).
 // The normal transaction observer sends Markdown. Closing never pulls a body.
-async function finishComposition(onlyWhenComposing = false) {
+async function finishComposition(onlyWhenComposing = false, isCurrent = () => true) {
   if (!editor) return;
   const current = editorView();
   const composing = current.composing;
   current.dom.blur();
   if (composing || !onlyWhenComposing) await new Promise(resolve => setTimeout(resolve, 30));
+  if (!isCurrent()) return;
   current.domObserver.flush();
 }
 // One Milkdown/ProseMirror stack for the life of the page. Note switches replace
@@ -347,9 +348,12 @@ try {
     },
     // Resume after an aborted close or a note-switch flush, using container state.
     setReadOnly(value) { closing = false; readOnly = value; controls(); },
-    async prepareClose() {
-      await queue;
-      await finishComposition();
+    cancelClose() { closing = false; controls(); },
+    async prepareClose(isCurrent, cancelled) {
+      await Promise.race([queue, cancelled]);
+      if (!isCurrent()) return;
+      await Promise.race([finishComposition(false, isCurrent), cancelled]);
+      if (!isCurrent()) return;
       closing = true;
       controls();
     },

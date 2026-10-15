@@ -523,6 +523,103 @@ class MarkdownEditorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.service.get_note(b.id).content_markdown, 'Original B')
         self.assertNotIn('中文输入', self.editor.latest_markdown)
 
+    def test_switch_hung_composition_cancels_preserves_body_and_retries(self):
+        first, second = self.create('Original A'), self.create('Original B')
+        self.load(first)
+        self.insert('未保存的最后输入')
+        self.window.save_timer.stop()
+        body = self.editor.latest_markdown
+        # Hold the actual Web composition grace timer forever, without blocking
+        # Qt or the renderer's event loop. Use the production timeout value.
+        self.js('''window.__normalSetTimeout = window.setTimeout;
+            window.__heldClose = [];
+            window.setTimeout = (fn, ms, ...args) => ms === 30
+                ? (window.__heldClose.push(() => fn(...args)), 0)
+                : window.__normalSetTimeout(fn, ms, ...args);''')
+        with patch.object(self.window, 'force_save_current_note', wraps=self.window.force_save_current_note) as save:
+            self.window.switch_note(second.id)
+            stale_token = self.editor._close_token
+            self.wait(lambda: self.js('window.__heldClose.length') == 1)
+            self.assertEqual(self.window._pending_switch, second.id)
+            self.wait(lambda: not self.editor.closing, timeout=5)
+            save.assert_not_called()
+        self.assertEqual(self.window.current_note.id, first.id)
+        self.assertEqual(self.editor.latest_markdown, body)
+        self.assertIn('未保存的最后输入', self.js("document.querySelector('.ProseMirror').textContent"))
+        self.assertEqual(self.service.get_note(first.id), first)
+        self.assertTrue(self.window.has_unsaved_changes)
+        self.assertFalse(self.window.save_timer.isActive())
+        self.assertIsNone(self.window._pending_switch)
+        self.assertFalse(self.window._close_pending)
+        self.assertFalse(self.window._close_ready)
+        self.assertIsNone(self.editor._close_token)
+        self.assertIn('正文收尾超时', self.window.status_label.text())
+        self.assertEqual(self.js("document.querySelector('.ProseMirror').contentEditable"), 'true')
+        self.js('window.setTimeout = window.__normalSetTimeout')
+        self.insert('恢复后继续输入')
+        self.window.switch_note(second.id)
+        current_token = self.editor._close_token
+        self.assertNotEqual(current_token, stale_token)
+        # A delayed ready/failure must not finish or cancel the new switch.
+        self.editor.bridge.closeReady(stale_token)
+        self.editor.bridge.closeFailed(stale_token)
+        self.assertEqual(self.window.current_note.id, first.id)
+        self.assertEqual(self.window._pending_switch, second.id)
+        self.assertEqual(self.editor._close_token, current_token)
+        self.wait(lambda: self.window.current_note.id == second.id and self.editor.can_save)
+        self.assertIn('未保存的最后输入', self.service.get_note(first.id).content_markdown)
+        self.assertIn('恢复后继续输入', self.service.get_note(first.id).content_markdown)
+        # Resume the abandoned Web continuation after the new document loaded.
+        self.js('window.__heldClose.forEach(fn => fn())')
+        QTest.qWait(80)
+        self.assertFalse(self.editor.closing)
+        self.assertEqual(self.js("document.querySelector('.ProseMirror').contentEditable"), 'true')
+        self.assertEqual(self.editor.latest_markdown.strip(), 'Original B')
+
+    def test_close_missing_ready_cancels_preserves_live_body_and_retries(self):
+        note = self.create('Original body')
+        self.load(note)
+        # Keep the latest input only in the real Web document. A timeout must
+        # never save Python's stale snapshot over it or reload that snapshot.
+        held = []
+        with patch.object(self.editor, '_changed', side_effect=lambda *args: held.append(args)):
+            self.js('document.querySelector(".ProseMirror").focus(); document.execCommand("insertText", false, "尚未送达的正文")')
+            self.wait(lambda: bool(held))
+        self.window.title_input.setText('unsaved title')
+        self.window.save_timer.stop()
+        self.assertNotIn('尚未送达的正文', self.editor.latest_markdown)
+        ready = []
+        # Let the real Web barrier lock editing, but lose its completion reply.
+        with patch.object(self.editor, '_close_succeeded', side_effect=lambda token: ready.append(token)):
+            with patch.object(self.window, 'force_save_current_note', wraps=self.window.force_save_current_note) as save:
+                self.window.close()
+                self.wait(lambda: bool(ready))
+                self.assertEqual(self.js("document.querySelector('.ProseMirror').contentEditable"), 'false')
+                self.wait(lambda: not self.window._close_pending, timeout=5)
+                save.assert_not_called()
+        self.assertTrue(self.window.isVisible())
+        self.assertFalse(self.editor.closing)
+        self.assertFalse(self.window._close_ready)
+        self.assertIsNone(self.window._pending_switch)
+        self.assertIsNone(self.editor._close_token)
+        self.assertFalse(self.window.save_timer.isActive())
+        self.assertEqual(self.service.get_note(note.id), note)
+        self.assertIn('正文收尾超时', self.window.status_label.text())
+        self.assertIn('尚未送达的正文', self.js("document.querySelector('.ProseMirror').textContent"))
+        self.assertEqual(self.js("document.querySelector('.ProseMirror').contentEditable"), 'true')
+        self.editor.bridge.closeReady(ready[0])
+        self.assertTrue(self.window.isVisible())
+        # The delayed body is accepted for the original load, then editing and
+        # a fresh, fully acknowledged close both work normally.
+        self.editor._changed(*held[-1])
+        self.insert('恢复后关闭')
+        self.window.close()
+        self.wait(lambda: not self.window.isVisible())
+        saved = self.service.get_note(note.id)
+        self.assertIn('尚未送达的正文', saved.content_markdown)
+        self.assertIn('恢复后关闭', saved.content_markdown)
+        self.assertEqual(saved.title, 'unsaved title')
+
     def test_close_cancels_pending_switch_and_saves_current_note(self):
         first, second = self.create(), self.create()
         self.load(first)
