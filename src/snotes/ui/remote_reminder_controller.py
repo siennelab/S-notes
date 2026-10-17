@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from shiboken6 import isValid
 
 from src.snotes.domain.reminder_remote_contract import (
     OUTCOME_UNKNOWN,
@@ -137,6 +138,8 @@ class RemoteReminderController(QObject):
         self._threads: set[QThread] = set()
         self._workers: dict[QThread, _RemoteReminderWorker] = {}
         self._closing = False
+        self._shutdown_finished_emitted = False
+        self._client_closed = False
         self.shutdownFinished.connect(self._close_client)
         if cache is not None:
             try:
@@ -222,17 +225,44 @@ class RemoteReminderController(QObject):
         worker.finished.connect(self._finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda current=thread: self._thread_finished(current))
+        thread.finished.connect(self._thread_finished)
         self._threads.add(thread)
         self._workers[thread] = worker
         thread.start()
 
-    def _thread_finished(self, thread: QThread) -> None:
+    @Slot()
+    def _thread_finished(self) -> None:
+        thread = self.sender()
+        if not isinstance(thread, QThread) or thread not in self._threads:
+            return
+        if not thread.wait():
+            return
+        self._forget_thread(thread)
+        if isValid(thread):
+            thread.deleteLater()
+
+    def _forget_thread(self, thread: QThread) -> None:
+        if thread not in self._threads:
+            return
         self._threads.discard(thread)
         self._workers.pop(thread, None)
         if self._closing and not self._threads:
-            self.shutdownFinished.emit()
+            self._finish_shutdown()
+
+    def _prune_threads(self) -> None:
+        for thread in tuple(self._threads):
+            if not isValid(thread):
+                self._forget_thread(thread)
+                continue
+            if thread.isFinished() and thread.wait():
+                self._forget_thread(thread)
+                thread.deleteLater()
+
+    def _finish_shutdown(self) -> None:
+        if self._shutdown_finished_emitted or self._threads:
+            return
+        self._shutdown_finished_emitted = True
+        self.shutdownFinished.emit()
 
     @Slot(object, object)
     def _finished(self, request: _Request, outcome: _Outcome) -> None:
@@ -341,6 +371,7 @@ class RemoteReminderController(QObject):
     def shutdown(self, *, timeout_ms: int = 5000) -> bool:
         """Stop accepting work and let in-flight network calls finish safely."""
         self._closing = True
+        self._prune_threads()
         deadline = max(0, int(timeout_ms))
         threads = tuple(self._threads)
         if not threads:
@@ -350,7 +381,17 @@ class RemoteReminderController(QObject):
         for thread in threads:
             thread.requestInterruption()
             thread.quit()
-        stopped = all(thread.wait(per_thread) for thread in threads)
+        stopped = True
+        for thread in threads:
+            if not isValid(thread):
+                self._forget_thread(thread)
+                continue
+            if not thread.wait(per_thread):
+                stopped = False
+                continue
+            self._forget_thread(thread)
+            if isValid(thread):
+                thread.deleteLater()
         if stopped:
             self._close_client()
         return stopped
@@ -358,14 +399,18 @@ class RemoteReminderController(QObject):
     def begin_shutdown(self) -> None:
         """Stop new work; emit shutdownFinished after workers return naturally."""
         self._closing = True
+        self._prune_threads()
         if not self._threads:
-            QTimer.singleShot(0, self.shutdownFinished.emit)
+            QTimer.singleShot(0, self._finish_shutdown)
             return
         for thread in tuple(self._threads):
             thread.requestInterruption()
             thread.quit()
 
     def _close_client(self) -> None:
+        if self._client_closed:
+            return
+        self._client_closed = True
         close = getattr(self.client, "close", None)
         if callable(close):
             close()
