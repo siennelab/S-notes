@@ -32,6 +32,11 @@ class Step05CloudReadTests(unittest.TestCase):
         self.redacted_id = 104
         self.full_id = 105
         self.hidden_id = 106
+        self.chinese_title_id = 107
+        self.chinese_body_id = 108
+        self.english_tokens_id = 109
+        self.newer_nonmatching_id = 110
+        self.c_only_decoy_id = 111
         common = self._record(
             self.common_id,
             title="Fictional common",
@@ -67,6 +72,46 @@ class Step05CloudReadTests(unittest.TestCase):
                 ),
                 redacted,
                 full,
+                self._record(
+                    self.chinese_title_id,
+                    title="S的熊点子们",
+                    safe_text="记录一些温柔又古怪的灵感",
+                    safe_markdown="# S的熊点子们\n\n记录一些温柔又古怪的灵感",
+                    targets=("common",),
+                    source_updated_at="2026-09-01T12:00:00+08:00",
+                ),
+                self._record(
+                    self.chinese_body_id,
+                    title="值班记录",
+                    safe_text="凌晨故障复盘与明日修复计划",
+                    safe_markdown="# 值班记录\n\n凌晨故障复盘与明日修复计划",
+                    targets=("common",),
+                    source_updated_at="2026-09-02T12:00:00+08:00",
+                ),
+                self._record(
+                    self.english_tokens_id,
+                    title="Async worker notes",
+                    safe_text="Node.js and C++ retry bridge for C# clients",
+                    safe_markdown="# Async worker notes\n\nNode.js and C++ retry bridge for C# clients",
+                    targets=("common",),
+                    source_updated_at="2026-09-03T12:00:00+08:00",
+                ),
+                self._record(
+                    self.newer_nonmatching_id,
+                    title="Newest unrelated note",
+                    safe_text="Nothing from the requested incident lives here",
+                    safe_markdown="# Newest unrelated note\n\nNothing relevant",
+                    targets=("common",),
+                    source_updated_at="2026-10-01T12:00:00+08:00",
+                ),
+                self._record(
+                    self.c_only_decoy_id,
+                    title="C bridge notes",
+                    safe_text="Node.js retry bridge for C clients",
+                    safe_markdown="# C bridge notes\n\nNode.js retry bridge for C clients",
+                    targets=("common",),
+                    source_updated_at="2026-09-04T12:00:00+08:00",
+                ),
             ),
             self.claude_path,
             actor="claude-code",
@@ -111,6 +156,33 @@ class Step05CloudReadTests(unittest.TestCase):
         self.assertEqual([row["note_id"] for row in clawbot["results"]], [self.clawbot_id])
         self.assertEqual(claude["results"][0]["safe_text"], "claude comet")
         self.assertNotIn("safe_markdown", claude["results"][0])
+
+    def test_search_uses_normalized_substrings_and_multi_keyword_and_semantics(self) -> None:
+        cases = (
+            ("熊点子", [self.chinese_title_id]),
+            ("S的熊点子们", [self.chinese_title_id]),
+            ("故障复盘", [self.chinese_body_id]),
+            ("绝对不存在的测试词", []),
+            ("ＡＳＹＮＣ retry", [self.english_tokens_id]),
+            ("node.js C++ C#", [self.english_tokens_id]),
+        )
+        for query, expected_ids in cases:
+            with self.subTest(query=query):
+                response = self.claude.search_notes(query)
+                self.assertEqual(
+                    [row["note_id"] for row in response["results"]],
+                    expected_ids,
+                )
+
+    def test_search_applies_limit_after_substring_matching(self) -> None:
+        response = self.claude.search_notes("故障复盘", limit=1)
+        self.assertEqual(
+            [row["note_id"] for row in response["results"]],
+            [self.chinese_body_id],
+        )
+        ranked_response = self.claude.search_notes("Fictional", limit=1)
+        self.assertEqual(ranked_response["result_count"], 1)
+        self.assertEqual(ranked_response["results"][0]["note_id"], self.full_id)
 
     def test_plain_text_and_markdown_semantics_are_distinct(self) -> None:
         redacted = self.claude.get_note(self.redacted_id)
@@ -205,6 +277,7 @@ class Step05CloudReadTests(unittest.TestCase):
         visibility: str = "full",
         redaction_count: int = 0,
         version: str | None = None,
+        source_updated_at: str = "2026-09-29T12:00:00+08:00",
     ) -> ActorMirrorRecord:
         return ActorMirrorRecord(
             source_note_id=note_id,
@@ -213,7 +286,7 @@ class Step05CloudReadTests(unittest.TestCase):
             safe_markdown=safe_markdown,
             directory="Fictional / Step5",
             tags=("fictional",),
-            source_updated_at="2026-09-29T12:00:00+08:00",
+            source_updated_at=source_updated_at,
             source_version=version or f"v-{note_id}",
             visibility=visibility,
             redaction_count=redaction_count,

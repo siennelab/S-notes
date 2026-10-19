@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from src.snotes.domain.actor_mirror import ActorMirrorError
+from src.snotes.domain.search_query import match_search_fields, parse_search_query
 from src.snotes.storage.actor_mirror import validate_metadata_catalog
 
 
@@ -26,30 +27,42 @@ class SQLiteCloudMirrorReader:
         self._mirror_path = Path(mirror_path).absolute()
 
     def search(self, tokens: Sequence[str], *, limit: int) -> list[dict]:
-        expression = " AND ".join(
-            f'"{str(token).replace(chr(34), chr(34) * 2)}"' for token in tokens
-        )
-        if not expression:
+        parsed_query = parse_search_query(" ".join(str(token) for token in tokens))
+        if not parsed_query.tokens:
             return []
         connection = self._open()
         try:
             rows = connection.execute(
                 """
                 SELECT notes.source_note_id, notes.title, notes.safe_text,
-                       notes.directory, notes.tags_json,
+                       notes.directory, notes.tags_json, notes.tags_text,
                        notes.source_updated_at, notes.source_version,
                        notes.visibility, notes.main_category, notes.sub_category,
                        notes.ai_visibility, notes.ai_targets_json
-                FROM mirror_notes_fts AS search
-                JOIN mirror_notes AS notes ON notes.mirror_note_id = search.rowid
-                WHERE mirror_notes_fts MATCH ?
-                ORDER BY bm25(mirror_notes_fts), notes.source_updated_at DESC,
-                         notes.source_note_id DESC
-                LIMIT ?
+                FROM mirror_notes AS notes
                 """,
-                (expression, int(limit)),
             ).fetchall()
-            return [self._safe_note(row) for row in rows]
+            ranked: list[tuple[int, str, int, sqlite3.Row]] = []
+            for row in rows:
+                match = match_search_fields(
+                    parsed_query,
+                    title=row["title"],
+                    body=row["safe_text"],
+                    directory=row["directory"],
+                    tags=row["tags_text"],
+                )
+                if match is None:
+                    continue
+                ranked.append(
+                    (
+                        match.score,
+                        str(row["source_updated_at"]),
+                        int(row["source_note_id"]),
+                        row,
+                    )
+                )
+            ranked.sort(key=lambda item: item[:3], reverse=True)
+            return [self._safe_note(item[3]) for item in ranked[: int(limit)]]
         except (sqlite3.Error, ValueError, TypeError, json.JSONDecodeError) as error:
             raise CloudMirrorReadError("mirror_read_failed") from error
         finally:
