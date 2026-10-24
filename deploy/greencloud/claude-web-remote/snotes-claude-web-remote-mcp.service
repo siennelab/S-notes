@@ -1,0 +1,34 @@
+[Unit]
+Description=S-notes Claude Web Notes MCP (fixed claude-code actor)
+After=network-online.target snotes-notes-outbox.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claude
+Group=claude
+WorkingDirectory=/srv/snotes/runtime
+# Reuse the installed public dependency vendor tree, never Gale config or credentials.
+Environment=PYTHONPATH=/srv/snotes/gale-remote/vendor:/srv/snotes/runtime
+Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=claude-web-oauth.json:/root/greencloud-secrets/claude-web-remote-oauth.json
+ExecStart=/srv/snotes/runtime/.venv/bin/python -B -m src.claude_web_remote_mcp
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/snotes/claude-web-remote/oauth
+# Notes uses the existing actor proposal token. Reminder is not a remote surface.
+
+[Install]
+WantedBy=multi-user.target

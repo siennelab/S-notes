@@ -118,11 +118,16 @@ class Auth0TokenVerifier(TokenVerifier):
         audience: str,
         jwks_url: str,
         allowed_subjects: Iterable[str],
+        access_scope: str = GALE_READ_SCOPE,
         jwks_client: Any | None = None,
     ) -> None:
-        super().__init__(required_scopes=RUNTIME_REQUIRED_SCOPES)
+        if not access_scope or access_scope in ALLOWED_IDENTITY_SCOPES:
+            raise ValueError("access_scope_invalid")
+        super().__init__(required_scopes=[access_scope])
         self.issuer = issuer
         self.audience = audience
+        self.access_scope = access_scope
+        self.allowed_access_scopes = {access_scope} | ALLOWED_IDENTITY_SCOPES
         self.allowed_subjects = frozenset(allowed_subjects)
         if not self.allowed_subjects:
             raise ValueError("allowed_subjects_missing")
@@ -161,10 +166,10 @@ class Auth0TokenVerifier(TokenVerifier):
                 _safe_auth_failure("subject_rejected")
                 return None
             scopes = _token_scopes(claims)
-            if GALE_READ_SCOPE not in scopes:
+            if self.access_scope not in scopes:
                 _safe_auth_failure("scope_missing")
                 return None
-            if not scopes.issubset(ALLOWED_ACCESS_SCOPES):
+            if not scopes.issubset(self.allowed_access_scopes):
                 _safe_auth_failure("scope_not_allowed")
                 return None
             client_id = str(claims.get("azp") or claims.get("client_id") or "")
@@ -194,17 +199,21 @@ class Auth0TokenVerifier(TokenVerifier):
 
 
 class RestrictedAuth0Provider(Auth0Provider):
-    """Auth0 proxy with Gale claim restrictions and RFC 9207 responses."""
+    """Auth0 proxy with fixed claim restrictions and RFC 9207 responses."""
 
     def __init__(
         self,
         *,
         allowed_subjects: Iterable[str],
+        access_scope: str = GALE_READ_SCOPE,
         jwks_client: Any | None = None,
         oidc_configuration: OIDCConfiguration | None = None,
         **kwargs: Any,
     ) -> None:
         self._allowed_subjects = frozenset(allowed_subjects)
+        if not access_scope or access_scope in ALLOWED_IDENTITY_SCOPES:
+            raise ValueError("access_scope_invalid")
+        self._access_scope = access_scope
         self._jwks_client = jwks_client
         self._oidc_configuration = oidc_configuration
         if not self._allowed_subjects:
@@ -212,8 +221,8 @@ class RestrictedAuth0Provider(Auth0Provider):
         super().__init__(**kwargs)
         if self.client_registration_options is None:
             raise ValueError("client_registration_options_missing")
-        self.client_registration_options.valid_scopes = [GALE_READ_SCOPE]
-        self.client_registration_options.default_scopes = [GALE_READ_SCOPE]
+        self.client_registration_options.valid_scopes = [self._access_scope]
+        self.client_registration_options.default_scopes = [self._access_scope]
 
     def get_oidc_configuration(
         self,
@@ -245,6 +254,7 @@ class RestrictedAuth0Provider(Auth0Provider):
             audience=audience,
             jwks_url=str(self.oidc_config.jwks_uri),
             allowed_subjects=self._allowed_subjects,
+            access_scope=self._access_scope,
             jwks_client=self._jwks_client,
         )
 
@@ -266,7 +276,7 @@ class RestrictedAuth0Provider(Auth0Provider):
     ) -> str:
         upstream_transaction = dict(transaction)
         requested_scopes = list(transaction.get("scopes") or [])
-        for scope in UPSTREAM_REQUESTED_SCOPES:
+        for scope in ("openid", "offline_access", self._access_scope):
             if scope not in requested_scopes:
                 requested_scopes.append(scope)
         upstream_transaction["scopes"] = requested_scopes
@@ -395,6 +405,26 @@ def build_auth0_provider(
 ) -> RestrictedAuth0Provider:
     """Build a provider; optional network objects support fictional tests only."""
     _validate_config_bindings(config)
+    return build_scoped_auth0_provider(
+        config=config,
+        expected_owner_uid=expected_owner_uid,
+        access_scope=GALE_READ_SCOPE,
+        jwks_client=jwks_client,
+        oidc_configuration=oidc_configuration,
+    )
+
+
+def build_scoped_auth0_provider(
+    *,
+    config: GreenCloudRemoteAuthConfig,
+    expected_owner_uid: int,
+    access_scope: str,
+    jwks_client: Any | None = None,
+    oidc_configuration: OIDCConfiguration | None = None,
+) -> RestrictedAuth0Provider:
+    """Build a scoped provider after the caller validates fixed bindings."""
+    if not access_scope or access_scope in ALLOWED_IDENTITY_SCOPES:
+        raise GreenCloudRemoteAuthError("access_scope_invalid")
     storage_directory = _validate_storage_directory(
         config.oauth_storage_directory,
         expected_owner_uid=expected_owner_uid,
@@ -431,7 +461,7 @@ def build_auth0_provider(
         base_url=config.proxy_base_url,
         resource_base_url=config.proxy_base_url,
         issuer_url=config.proxy_base_url,
-        required_scopes=RUNTIME_REQUIRED_SCOPES,
+        required_scopes=[access_scope],
         redirect_path=FIXED_AUTH_CALLBACK_PATH,
         allowed_client_redirect_uris=list(
             config.allowed_client_redirect_uris
@@ -441,6 +471,7 @@ def build_auth0_provider(
         require_authorization_consent=True,
         forward_resource=True,
         allowed_subjects=config.allowed_subjects,
+        access_scope=access_scope,
         jwks_client=jwks_client,
         oidc_configuration=oidc_configuration,
     )
