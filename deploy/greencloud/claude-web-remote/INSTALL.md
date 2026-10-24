@@ -64,6 +64,23 @@ Activation checks the independent credential, DNS and local OAuth metadata
 before adding its Caddy host. It starts only the new service and reloads Caddy
 to add the host. Gale, Notes outbox, publisher and Reminder are not restarted.
 
+## Independent OAuth acceptance
+
+The supplied `verify_oauth.py` uses a temporary registered MCP client and the
+normal authorization-code/PKCE flow. Keep local port 8878 forwarded to GreenCloud
+127.0.0.1:8769 while running it as root with the existing vendor/runtime Python.
+Supply one currently authorized mirror Note ID with `--allowed-note` and one
+existing unauthorized Note ID with `--denied-note`. `--submit-proposal` adds one
+idempotent test proposal; it never accepts or creates a formal Mac note.
+
+When the script prints `CLAUDE_WEB_OAUTH_BROWSER_STEP=WAITING`, S opens the
+root-only `claude-web-remote-verification/authorize-url` under
+`/root/greencloud-secrets` and completes S-notes/Auth0 consent. This requires no
+Claude.ai login. The script verifies localhost/public HTTPS MCP, Notes access,
+actor injection, no Reminder, proposal status and OAuth refresh. It removes only
+its temporary OAuth client and refresh metadata, leaving safe evidence in the
+same root-only verification directory. The access tokens expire normally.
+
 ## Claude.ai manual connection
 
 No Claude login is needed for development, deployment or independent MCP tests.

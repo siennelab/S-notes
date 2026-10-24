@@ -1,18 +1,19 @@
-# Claude Web → GreenCloud Notes MCP：预备验收
+# Claude Web → GreenCloud Notes MCP：部署与验收
 
 2026-10-23（S 本地日期）。本次源码所在提交为准。
 
 ## 当前阶段
 
-已实现并本地验证，GreenCloud 已安装预备文件；**尚未启用公开入口**。
-S 尚需配置独立 Auth0 App/API、DNS，并隐藏录入新凭据。没有登录 Claude.ai。
+已实现、部署并通过真实独立 MCP 客户端验收。S 已配置独立 Auth0 App/API、
+DNS 和新凭据，并亲自完成 Auth0 验收授权。没有登录 Claude.ai；最后的
+Claude.ai 添加连接/授权仍由 S 手工完成。
 
 - Branch：`codex/claude-web-greencloud-remote-mcp`。
 - 基线 main / origin/main：`def7cdac71254999591d4279e4117c69449b9d03`。
 - GreenCloud：实际主机 `optimal-living` / `109.94.170.215`。
-- 新 unit：`snotes-claude-web-remote-mcp.service`，disabled / inactive。
-- 入口：`src.claude_web_remote_mcp`，预留 `127.0.0.1:8770/mcp`。
-- 目标公开地址：`https://snotes-claude.ke-den.de/mcp`，Caddy 尚未添加此 host。
+- 新 unit：`snotes-claude-web-remote-mcp.service`，enabled / active / running。
+- 入口：`src.claude_web_remote_mcp`，`127.0.0.1:8770/mcp`。
+- 公开地址：`https://snotes-claude.ke-den.de/mcp`，Caddy 已添加独立 host。
 - 固定 OS 身份 `claude` / UID 2001，固定 Notes actor `claude-code`。
 - 不新增 actor、metadata option、mirror、Notes authority 或 Reminder 工具。
 
@@ -39,6 +40,19 @@ LaunchAgent 仍是 300 秒周期、最近 exit 0，working directory 未改变�
 - GreenCloud 实际 UID 2001 组合新 runtime 通过，不读取真实 Notes 正文。
 - Gale 生产最小 initialize + 25 tools discovery 通过；PID 950、启动时间
   `2026-10-23 23:01:01 UTC` 均未改变。未重启 Gale、outbox、Reminder 或 publisher。
+- 正常公开 HTTPS 证书验证、resource/server OAuth discovery，通过。
+- 真实 authorization-code + PKCE、精确 issuer、refresh，通过；临时验收
+  OAuth client / refresh metadata 已清理，access token 按原 TTL 过期。
+- localhost/public 的完整 12 tools contract 一致；无认证和错误 token 均 401。
+- 实际授权 Note 31 搜索/读取、实际 Gale-only Note 12 拒绝，通过。验收没有
+  输出正文、标题、搜索词、subject、code、token 或 secret。
+- query/header/top-level actor 篡改不能读取 Note 12，identity arguments 被拒，
+  Reminder 既不发现也不能调用，通过。
+- 真实测试投稿 `claudeweboauthverificationv1x9q7k3` 已进入现有 outbox；
+  Mac 通过原有 pull/import/receipt 链接收，远端状态为 `acknowledged`，
+  时间 `2026-10-24T01:31:58Z`。尚未创建正式 Notes，AI Center 留有一条待审测试稿。
+- 生产 client ID/secret、JWT signing key、storage encryption key 均与 Gale 不同；
+  `claude` 用户不能读取 Gale 的 root-only 凭据和私有 OAuth state。
 
 ## 生产安装记录
 
@@ -47,11 +61,13 @@ LaunchAgent 仍是 300 秒周期、最近 exit 0，working directory 未改变�
 - 仅替换原有 shared auth 文件，其余 runtime/unit 文件为新增。
 - 恢复文件：`/root/greencloud-backups/claude-web-remote-l8x2cm8C/greencloud_remote_auth.py.before`。
 - 实际安装源文件哈希：`/srv/snotes/claude-web-remote/source-manifest.json`。
-- 新凭据目标：`/root/greencloud-secrets/claude-web-remote-oauth.json`，尚未录入。
+- 独立凭据：`/root/greencloud-secrets/claude-web-remote-oauth.json`，root `0600`，
+  仅由新服务通过 systemd LoadCredential 注入。
+- Caddy 恢复文件：`/root/greencloud-backups/claude-web-caddy-WP76g5Bh/Caddyfile.before`。
+- 真实协议验收记录：`/root/greencloud-secrets/claude-web-remote-verification/verification.json`。
 
 ## 待完成
 
-按 `deploy/greencloud/claude-web-remote/INSTALL.md` 完成 DNS、独立 Auth0 App/API
-和隐藏凭据注入，再启用新服务/Caddy host。之后执行真实 public OAuth、授权
-Notes 读/拒绝及一次 proposal 链验收；这些生产项目目前仍是 **PENDING**。
-最后由 S 手工在 Claude.ai 添加连接并授权。尚不能称为已上线可连接。
+由 S 手工在 Claude.ai 添加 `https://snotes-claude.ke-den.de/mcp`，选择 OAuth
+和 Register automatically（有该选项时），不填 Gale 或上游 Auth0 client secret。
+使用本次获准的 S 账号完成授权，再在 Claude 对话里启用连接器。

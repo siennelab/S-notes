@@ -30,7 +30,7 @@ for file in src/claude_web_remote_mcp.py \
 do
     install -m 0644 "$source_root/$file" "/srv/snotes/runtime/$file"
 done
-for file in config.json claude.Caddyfile snotes-claude-web-remote-mcp.service provision_credentials.py activate.sh INSTALL.md
+for file in config.json claude.Caddyfile snotes-claude-web-remote-mcp.service provision_credentials.py verify_oauth.py activate.sh INSTALL.md
 do
     install -m 0644 "$source_root/deploy/greencloud/claude-web-remote/$file" "$unit_dir/deploy/$file"
 done
