@@ -92,9 +92,9 @@ class Package4AiAccessMetadataCoreTests(unittest.TestCase):
             (("通用",), ("common",), ("通用",)),
             (("Ke",), ("ke-den",), ("Ke",)),
             (
-                ("Claude Code", "Gale", "Clawbot", "Ke"),
+                ("Claude", "Gale", "Clawbot", "Ke"),
                 ("gale", "clawbot", "claude-code", "ke-den"),
-                ("Gale", "Clawbot", "Claude Code", "Ke"),
+                ("Gale", "Clawbot", "Claude", "Ke"),
             ),
         )
         revision = self.note.revision

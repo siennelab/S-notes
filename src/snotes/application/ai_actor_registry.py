@@ -35,7 +35,7 @@ AI_TARGET_REGISTRY = (
         aliases=("微信 clawde",),
     ),
     AiTargetDefinition("antigravity", "Antigravity", "antigravity"),
-    AiTargetDefinition("claude-code", "Claude Code", "claude_code"),
+    AiTargetDefinition("claude-code", "Claude", "claude_code"),
     AiTargetDefinition(
         "ke-den",
         "Ke",

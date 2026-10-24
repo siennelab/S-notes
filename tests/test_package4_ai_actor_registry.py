@@ -27,7 +27,7 @@ class Package4AiActorRegistryTests(unittest.TestCase):
                 ("yan", "砚"),
                 ("clawbot", "Clawbot"),
                 ("antigravity", "Antigravity"),
-                ("claude-code", "Claude Code"),
+                ("claude-code", "Claude"),
                 ("ke-den", "Ke"),
             ),
         )
@@ -69,7 +69,7 @@ class Package4AiActorRegistryTests(unittest.TestCase):
 
     def test_claude_code_is_distinct_and_legacy_ids_are_never_remapped(self) -> None:
         self.assertIn("claude-code", AI_ACTOR_IDS)
-        self.assertNotEqual(resolve_target_id("Claude Code"), "codex")
+        self.assertEqual(resolve_target_id("Claude"), "claude-code")
         self.assertEqual(resolve_target_id("Codex"), "codex")
         self.assertEqual(resolve_target_id("Gemini"), "gemini")
         self.assertFalse(target_definition("codex").selectable)

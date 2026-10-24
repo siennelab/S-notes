@@ -344,7 +344,7 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
                 ("砚", "yan"),
                 ("Clawbot", "clawbot"),
                 ("Antigravity", "antigravity"),
-                ("Claude Code", "claude-code"),
+                ("Claude", "claude-code"),
                 ("Ke", "ke-den"),
             ),
         )

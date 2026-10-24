@@ -162,7 +162,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
                 ("yan", "砚"),
                 ("clawbot", "Clawbot"),
                 ("antigravity", "Antigravity"),
-                ("claude-code", "Claude Code"),
+                ("claude-code", "Claude"),
                 ("ke-den", "Ke"),
             ),
         )
