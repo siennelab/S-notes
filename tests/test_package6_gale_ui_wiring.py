@@ -186,7 +186,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
 
     def _close_dialog(self) -> None:
         for _attempt in range(100):
-            if not self.dialog._gale_threads:
+            if not self.dialog.gale_tasks.has_dialog_tasks:
                 break
             QTest.qWait(10)
         self.dialog.close()
@@ -240,7 +240,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.assertIsNot(self.gale.pull_thread, self.application.thread())
         self.gale.pull_release.set()
         self._wait_for(lambda: self.gale.pull_calls == 1)
-        self._wait_for(lambda: not self.dialog._gale_threads)
+        self._wait_for(lambda: not self.dialog.gale_tasks.has_dialog_tasks)
         self.assertTrue(self.dialog.gale_publish_button.isEnabled())
         self.assertTrue(self.dialog.gale_pull_button.isEnabled())
         self.assertRegex(
@@ -260,7 +260,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.assertIsNot(self.gale.publish_thread, self.application.thread())
         self.gale.publish_release.set()
         self._wait_for(lambda: self.gale.publish_calls == 1)
-        self._wait_for(lambda: not self.dialog._gale_threads)
+        self._wait_for(lambda: not self.dialog.gale_tasks.has_dialog_tasks)
 
         expected = datetime.fromisoformat(self.gale.publish_at).astimezone().strftime(
             "%Y-%m-%d %H:%M"
@@ -291,7 +291,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.gale.publish_status = "unchanged"
         self.dialog.gale_publish_button.click()
         self._wait_for(lambda: self.gale.publish_calls == 1)
-        self._wait_for(lambda: not self.dialog._gale_threads)
+        self._wait_for(lambda: not self.dialog.gale_tasks.has_dialog_tasks)
         self.assertEqual(self.dialog.gale_status.text(), "内容未变化，已跳过上传")
         self.assertEqual(self.dialog.gale_last_publish.text(), previous_label)
 
@@ -299,7 +299,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.gale.publish_reason = "transport_unavailable"
         self.dialog.gale_publish_button.click()
         self._wait_for(lambda: self.gale.publish_calls == 2)
-        self._wait_for(lambda: not self.dialog._gale_threads)
+        self._wait_for(lambda: not self.dialog.gale_tasks.has_dialog_tasks)
         self.assertEqual(
             self.dialog.gale_status.text(),
             "Gale / GreenCloud 镜像更新失败"
@@ -310,7 +310,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
         self.gale.publish_error = RuntimeError("FICTIONAL_PRIVATE_EXCEPTION")
         self.dialog.gale_publish_button.click()
         self._wait_for(lambda: self.gale.publish_calls == 3)
-        self._wait_for(lambda: not self.dialog._gale_threads)
+        self._wait_for(lambda: not self.dialog.gale_tasks.has_dialog_tasks)
         self.assertEqual(
             self.dialog.gale_status.text(),
             "Gale / GreenCloud 镜像更新失败"
@@ -494,7 +494,7 @@ class Package6GaleUiWiringTests(unittest.TestCase):
             self.assertIs(self.application.activeWindow(), self.dialog)
             self.gale.pull_release.set()
             self._wait_for(lambda: self.gale.pull_calls == expected_calls)
-            self._wait_for(lambda: not self.dialog._gale_threads)
+            self._wait_for(lambda: not self.dialog.gale_tasks.has_dialog_tasks)
             self.assertTrue(self.dialog.isVisible())
             self.assertTrue(self.dialog.isActiveWindow())
             self.assertIs(self.application.activeWindow(), self.dialog)

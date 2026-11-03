@@ -83,7 +83,7 @@ class Step11StartupTests(unittest.TestCase):
             window.show()
             QTest.qWait(100)
             self.assertFalse(window._automatic_submission_pull)
-            self.assertIsNone(window._submission_pull_thread)
+            self.assertFalse(window.gale_tasks.is_running("startup_pull"))
             window.close()
             self._wait(lambda: not window.isVisible())
 
@@ -103,7 +103,7 @@ class Step11StartupTests(unittest.TestCase):
             QTest.qWait(50)
             self.assertTrue(window.isVisible())
             control.release.set()
-            self._wait(lambda: window._submission_pull_thread is None)
+            self._wait(lambda: not window.gale_tasks.is_running("startup_pull"))
             self._wait(lambda: not window.isVisible())
 
     def test_main_window_close_waits_for_greencloud_receipt_worker(self):
@@ -121,7 +121,7 @@ class Step11StartupTests(unittest.TestCase):
             control.release.set()
             self._wait(
                 lambda: window.ai_center_dialog is None
-                or not window.ai_center_dialog._gale_threads
+                or not window.ai_center_dialog.gale_tasks.has_dialog_tasks
             )
             if window.ai_center_dialog is not None:
                 window.ai_center_dialog.close()

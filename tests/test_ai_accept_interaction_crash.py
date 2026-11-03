@@ -116,14 +116,14 @@ class AiAcceptInteractionCrashTests(unittest.TestCase):
             event.set()
         dialog = self.window.ai_center_dialog
         if dialog is not None and isValid(dialog):
-            self._wait(lambda: not dialog._gale_threads, "AI worker did not finish")
+            self._wait(lambda: not dialog.gale_tasks.has_dialog_tasks, "AI worker did not finish")
             dialog.close()
             self._wait(
                 lambda: self.window.ai_center_dialog is None,
                 "AI Center did not close",
             )
         self._wait(
-            lambda: self.window._submission_pull_thread is None,
+            lambda: not self.window.gale_tasks.is_running("startup_pull"),
             "startup pull did not finish",
         )
         if isValid(self.window):
@@ -366,7 +366,7 @@ class AiAcceptInteractionCrashTests(unittest.TestCase):
 
         self.control.followup_release.set()
         self._wait(
-            lambda: not self.window.ai_center_dialog._gale_threads,
+            lambda: not self.window.ai_center_dialog.gale_tasks.has_dialog_tasks,
             "create follow-up worker did not finish",
         )
         self._select_title_and_body("Local", "Edited")
@@ -437,7 +437,7 @@ class AiAcceptInteractionCrashTests(unittest.TestCase):
 
         self.control.followup_release.set()
         self._wait(
-            lambda: not self.window.ai_center_dialog._gale_threads,
+            lambda: not self.window.ai_center_dialog.gale_tasks.has_dialog_tasks,
             "prepend follow-up worker did not finish",
         )
         self._select_title_and_body("10-08", "Local")
@@ -483,22 +483,21 @@ class AiAcceptInteractionCrashTests(unittest.TestCase):
             release_action.wait(timeout=10)
             return object()
 
-        dialog._launch_gale_worker(
-            action, refresh_receipts=False, action_kind="controls"
-        )
+        self.assertIs(dialog.gale_tasks, self.window.gale_tasks)
+        dialog.gale_tasks.start(action, action_kind="controls")
         self._wait(action_started.is_set, "AI worker did not start")
-        thread = dialog._gale_threads[0]
-        worker = dialog._gale_workers[0]
+        owner = dialog.gale_tasks
+        thread, worker = next(iter(owner._workers.items()))
         observations, timer = self._native_finish_snapshot(
             thread,
             worker,
             lambda current_thread, current_worker: (
-                dialog._gale_threads == [current_thread],
-                dialog._gale_workers == [current_worker],
+                current_thread in owner._workers,
+                owner._workers.get(current_thread) is current_worker,
             ),
         )
         release_action.set()
-        self._wait(lambda: not dialog._gale_threads, "AI owner did not release worker")
+        self._wait(lambda: not dialog.gale_tasks.has_dialog_tasks, "AI owner did not release worker")
         timer.join(timeout=2)
         self.assertEqual(observations, [(True, True, True, True, True)])
         self._wait(lambda: not isValid(thread), "AI QThread was not deleted")
@@ -506,19 +505,19 @@ class AiAcceptInteractionCrashTests(unittest.TestCase):
     def test_startup_pull_retains_worker_and_thread_until_native_finish_returns(self) -> None:
         self.window._pull_submissions_on_open()
         self._wait(self.control.pull_started.is_set, "startup pull worker did not start")
-        thread = self.window._submission_pull_thread
-        worker = self.window._submission_pull_worker
+        owner = self.window.gale_tasks
+        thread, worker = next(iter(owner._workers.items()))
         observations, timer = self._native_finish_snapshot(
             thread,
             worker,
             lambda current_thread, current_worker: (
-                self.window._submission_pull_thread is current_thread,
-                self.window._submission_pull_worker is current_worker,
+                current_thread in owner._workers,
+                owner._workers.get(current_thread) is current_worker,
             ),
         )
         self.control.pull_release.set()
         self._wait(
-            lambda: self.window._submission_pull_thread is None,
+            lambda: not self.window.gale_tasks.is_running("startup_pull"),
             "startup pull owner did not release worker",
         )
         timer.join(timeout=2)

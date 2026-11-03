@@ -11,7 +11,7 @@ from difflib import unified_diff
 from pathlib import Path
 from shiboken6 import isValid
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEventLoop, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QCloseEvent,
@@ -55,6 +55,7 @@ from src.snotes.domain.notes_operation_result import OperationStatus, HandlingMo
 from src.snotes.domain.ai_receipts import AiReceiptInboxItem
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.floating_combo import FloatingComboBox
+from src.snotes.ui.gale_task_owner import GaleTaskOwner
 from src.snotes.ui.theme import apply_selection_palette, current_theme, repolish
 
 
@@ -1118,39 +1119,6 @@ class ReceiptInboxView(QWidget):
             host.activateWindow()
 
 
-class GaleWorker(QObject):
-    finished = Signal(object, object, bool)
-    actionFinished = Signal(object, object, bool, str)
-
-    def __init__(
-        self,
-        action,
-        *,
-        refresh_receipts: bool,
-        action_kind: str = "controls",
-    ) -> None:
-        super().__init__()
-        self.action = action
-        self.refresh_receipts = refresh_receipts
-        self.action_kind = action_kind
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            result = self.action()
-        except Exception as error:
-            reason = str(getattr(error, "code", "unexpected_failure"))
-            self.actionFinished.emit(
-                None, reason, self.refresh_receipts, self.action_kind
-            )
-            self.finished.emit(None, reason, self.refresh_receipts)
-            return
-        self.actionFinished.emit(
-            result, None, self.refresh_receipts, self.action_kind
-        )
-        self.finished.emit(result, None, self.refresh_receipts)
-
-
 class AiCenterDialog(QWidget):
     finished = Signal(int)
     receiptAccepted = Signal(int)
@@ -1167,6 +1135,7 @@ class AiCenterDialog(QWidget):
         *,
         gale: GaleControlService | None = None,
         actor_mirror_state_path: Path | None = None,
+        gale_tasks: GaleTaskOwner | None = None,
     ) -> None:
         super().__init__(parent, Qt.Window)
         self.setObjectName("aiCenterDialog")
@@ -1191,11 +1160,11 @@ class AiCenterDialog(QWidget):
             if actor_mirror_state_path is not None
             else _default_actor_mirror_state_path()
         )
-        self._gale_threads: list[QThread] = []
-        self._gale_workers: list[GaleWorker] = []
-        self._greencloud_followup_running = False
-        self._greencloud_followup_queued = False
-        self._close_pending = False
+        self.gale_tasks = gale_tasks if gale_tasks is not None else GaleTaskOwner(self)
+        self.gale_tasks.actionFinished.connect(self._gale_action_finished)
+        self.gale_tasks.followupStarted.connect(self._greencloud_followup_started)
+        self.gale_tasks.dialogIdle.connect(self.backgroundIdle)
+        self.gale_tasks.dialogCloseReady.connect(self.close)
         title = QLabel("AI中心")
         title.setObjectName("receiptInboxTitle")
         layout.addWidget(title)
@@ -1358,102 +1327,21 @@ class AiCenterDialog(QWidget):
         self.gale_status.setText(pending_text)
         self.gale_publish_button.setEnabled(False)
         self.gale_pull_button.setEnabled(False)
-        self._launch_gale_worker(
+        self.gale_tasks.start(
             action,
             refresh_receipts=refresh_receipts,
             action_kind=action_kind,
         )
-
-    def _launch_gale_worker(
-        self,
-        action,
-        *,
-        refresh_receipts: bool,
-        action_kind: str,
-    ) -> None:
-        thread = QThread(self)
-        worker = GaleWorker(
-            action,
-            refresh_receipts=refresh_receipts,
-            action_kind=action_kind,
-        )
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-
-        worker.actionFinished.connect(self._gale_action_finished)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        # finished precedes native DeferredDelete cleanup. Keep the Python
-        # worker and QThread alive until that cleanup has actually returned.
-        thread.finished.connect(self._gale_thread_finished)
-        self._gale_threads.append(thread)
-        self._gale_workers.append(worker)
-        thread.start()
-
-    @Slot()
-    def _gale_thread_finished(self) -> None:
-        thread = self.sender()
-        if thread in self._gale_threads:
-            thread.wait()
-            index = self._gale_threads.index(thread)
-            self._gale_threads.pop(index)
-            self._gale_workers.pop(index)
-            thread.deleteLater()
-        if self._gale_threads:
-            return
-        if self._greencloud_followup_queued:
-            QTimer.singleShot(0, self._drain_greencloud_followup_queue)
-        elif not self._greencloud_followup_running:
-            self.backgroundIdle.emit()
-            if self._close_pending:
-                QTimer.singleShot(0, self._finish_deferred_close)
 
     @Slot()
     def _queue_greencloud_followup(self) -> None:
-        if self.gale is None or not callable(
-            getattr(self.gale, "flush_greencloud_decisions", None)
-        ):
-            return
-        if self._gale_threads or self._greencloud_followup_running:
-            self._greencloud_followup_queued = True
-            self.gale_status.setText("决定已保存，等待云端同步…")
-            return
-        self._start_greencloud_followup()
-
-    def _drain_greencloud_followup_queue(self) -> None:
-        if (
-            not self._greencloud_followup_queued
-            or self._gale_threads
-            or self._greencloud_followup_running
-        ):
-            return
-        self._greencloud_followup_queued = False
-        self._start_greencloud_followup()
-
-    def _finish_deferred_close(self) -> None:
-        if not self._close_pending:
-            return
-        if self._gale_threads or self._greencloud_followup_running:
-            return
-        if self._greencloud_followup_queued:
-            self._drain_greencloud_followup_queue()
-            return
-        self._close_pending = False
-        self.close()
-
-    def _start_greencloud_followup(self) -> None:
-        if self.gale is None:
-            return
         action = getattr(self.gale, "flush_greencloud_decisions", None)
-        if not callable(action):
-            return
-        self._greencloud_followup_running = True
+        if callable(action) and self.gale_tasks.queue_followup(action):
+            self.gale_status.setText("决定已保存，等待云端同步…")
+
+    @Slot()
+    def _greencloud_followup_started(self) -> None:
         self.gale_status.setText("决定已保存，正在同步云端回执与镜像…")
-        self._launch_gale_worker(
-            action,
-            refresh_receipts=False,
-            action_kind="greencloud_followup",
-        )
 
     @Slot(object, object, bool, str)
     def _gale_action_finished(
@@ -1463,15 +1351,14 @@ class AiCenterDialog(QWidget):
         refresh_receipts: bool,
         action_kind: str,
     ) -> None:
+        if action_kind == "startup_pull":
+            return
         if action_kind == "greencloud_followup":
-            self._greencloud_followup_running = False
             failed_count = int(getattr(_result, "failed_count", 0) or 0)
             if error is not None or failed_count > 0:
                 self.gale_status.setText("决定已保存，云端同步待重试")
             else:
                 self.gale_status.setText("云端回执与镜像已同步")
-            if self._close_pending:
-                QTimer.singleShot(0, self._finish_deferred_close)
             return
         if action_kind == "greencloud_publish":
             status = str(getattr(_result, "status", ""))
@@ -1769,19 +1656,13 @@ class AiCenterDialog(QWidget):
         self.reminder_log_table.setVisible(self.reminder_log_table.rowCount() > 0)
 
     def showEvent(self, event: QShowEvent) -> None:
-        self._close_pending = False
+        self.gale_tasks.cancel_dialog_close()
         super().showEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if (
-            self._gale_threads
-            or self._greencloud_followup_running
-            or self._greencloud_followup_queued
-        ):
-            self._close_pending = True
+        if not self.gale_tasks.request_dialog_close():
             self.hide()
             event.ignore()
             return
-        self._close_pending = False
         self.finished.emit(0)
         super().closeEvent(event)

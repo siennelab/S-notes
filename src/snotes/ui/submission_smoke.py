@@ -67,7 +67,7 @@ def main() -> int:
         if outcome["status"] != "passed":
             def exit_failed_fixture() -> None:
                 dialog = window.ai_center_dialog
-                if dialog is not None and isValid(dialog) and dialog._gale_threads:
+                if dialog is not None and isValid(dialog) and dialog.gale_tasks.has_dialog_tasks:
                     QTimer.singleShot(50, exit_failed_fixture)
                     return
                 app.exit(2)

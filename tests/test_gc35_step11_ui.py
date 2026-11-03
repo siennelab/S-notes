@@ -192,7 +192,7 @@ class GC35Step11UiTests(unittest.TestCase):
         self.fail(message)
 
     def _close_dialog(self, dialog: AiCenterDialog) -> None:
-        self._wait_for(lambda: not dialog._gale_threads)
+        self._wait_for(lambda: not dialog.gale_tasks.has_dialog_tasks)
         dialog.close()
         self.app.processEvents()
 
@@ -377,10 +377,10 @@ class GC35Step11UiTests(unittest.TestCase):
         self._wait_for(gale.followup_started.is_set)
         self.assertTrue(dialog.isEnabled())
         dialog.receipt_view.terminalDecisionSaved.emit()
-        self.assertTrue(dialog._greencloud_followup_queued)
+        self.assertTrue(dialog.gale_tasks.followup_queued)
         gale.followup_release.set()
         self._wait_for(
-            lambda: gale.followup_calls == 2 and not dialog._gale_threads,
+            lambda: gale.followup_calls == 2 and not dialog.gale_tasks.has_dialog_tasks,
             "queued GreenCloud follow-up was lost",
         )
         self.assertEqual(dialog.gale_status.text(), "云端回执与镜像已同步")
@@ -388,7 +388,7 @@ class GC35Step11UiTests(unittest.TestCase):
         gale.failed_count = 1
         dialog.receipt_view.terminalDecisionSaved.emit()
         self._wait_for(
-            lambda: gale.followup_calls == 3 and not dialog._gale_threads
+            lambda: gale.followup_calls == 3 and not dialog.gale_tasks.has_dialog_tasks
         )
         self.assertEqual(dialog.gale_status.text(), "决定已保存，云端同步待重试")
 
@@ -417,7 +417,7 @@ class GC35Step11UiTests(unittest.TestCase):
         dialog.show()
         dialog.receipt_view.terminalDecisionSaved.emit()
         self._wait_for(gale.followup_started.is_set)
-        self.assertTrue(dialog._gale_threads)
+        self.assertTrue(dialog.gale_tasks.has_dialog_tasks)
 
         dialog.close()
         self.app.processEvents()
@@ -425,8 +425,8 @@ class GC35Step11UiTests(unittest.TestCase):
         self.assertTrue(host.isVisible())
         self.assertTrue(isValid(dialog))
         self.assertFalse(dialog.isVisible())
-        self.assertTrue(dialog._close_pending)
-        self.assertTrue(dialog._gale_threads[0].isRunning())
+        self.assertTrue(dialog.gale_tasks.dialog_close_pending)
+        self.assertTrue(dialog.gale_tasks.has_dialog_tasks)
 
         gale.followup_release.set()
         self._wait_for(lambda: bool(destroyed), "AI Center deferred close did not finish")

@@ -111,7 +111,7 @@ class AiCenterDeferredCloseTests(unittest.TestCase):
             control.release.set()
             self._wait(
                 lambda: window.ai_center_dialog is None
-                or not window.ai_center_dialog._gale_threads,
+                or not window.ai_center_dialog.gale_tasks.has_dialog_tasks,
                 "AI Center worker did not finish during cleanup",
             )
             if window.ai_center_dialog is not None:
@@ -173,16 +173,15 @@ class AiCenterDeferredCloseTests(unittest.TestCase):
         self.assertFalse(dialog.isVisible())
         self.assertTrue(window.isVisible())
         self.assertFalse(window._close_pending)
-        self.assertTrue(dialog._greencloud_followup_running)
+        self.assertTrue(dialog.gale_tasks.is_running("greencloud_followup"))
         self._switch_note(window, notes[1])
 
         control.release.set()
         self._wait(lambda: window.ai_center_dialog is None,
                    "AI Center deferred close did not finish")
-        self.assertEqual(dialog._gale_threads, [])
-        self.assertEqual(dialog._gale_workers, [])
-        self.assertFalse(dialog._greencloud_followup_running)
-        self.assertFalse(dialog._greencloud_followup_queued)
+        self.assertFalse(dialog.gale_tasks.has_dialog_tasks)
+        self.assertFalse(dialog.gale_tasks.is_running("greencloud_followup"))
+        self.assertFalse(dialog.gale_tasks.followup_queued)
         self.assertFalse(window._close_pending)
         self._switch_note(window, notes[0])
         window.close()
@@ -204,22 +203,22 @@ class AiCenterDeferredCloseTests(unittest.TestCase):
             deadline = time.monotonic() + 0.25
             self._wait(lambda: time.monotonic() >= deadline, "GUI loop did not run")
             self.assertTrue(window.isVisible())
-            self.assertTrue(dialog._greencloud_followup_running)
+            self.assertTrue(dialog.gale_tasks.is_running("greencloud_followup"))
             self.assertLessEqual(len(close_events), 2, "Close is polling the busy worker")
             control.release.set()
             self._wait(lambda: not window.isVisible(), "Worker completion did not close main")
         self.assertFalse(window._close_pending)
         self.assertTrue(not isValid(dialog) or not dialog.isVisible())
-        self.assertEqual(dialog._gale_threads, [])
-        self.assertFalse(dialog._greencloud_followup_running)
-        self.assertFalse(dialog._greencloud_followup_queued)
+        self.assertFalse(dialog.gale_tasks.has_dialog_tasks)
+        self.assertFalse(dialog.gale_tasks.is_running("greencloud_followup"))
+        self.assertFalse(dialog.gale_tasks.followup_queued)
 
     def test_quit_drains_queued_followup_before_reporting_idle(self):
         window, control, _notes = self._make_window()
         dialog = self._accept_greencloud_create(window, control)
         idle = QSignalSpy(dialog.backgroundIdle)
         dialog.receipt_view.terminalDecisionSaved.emit()
-        self.assertTrue(dialog._greencloud_followup_queued)
+        self.assertTrue(dialog.gale_tasks.followup_queued)
         window.close()
         self._wait(lambda: window._close_ready, "Editor close barrier did not finish")
         self.assertTrue(window.isVisible())
@@ -228,10 +227,9 @@ class AiCenterDeferredCloseTests(unittest.TestCase):
         self._wait(lambda: not window.isVisible(), "Queued follow-up did not allow close")
         self.assertEqual(control.calls, 2)
         self.assertEqual(idle.count(), 1)
-        self.assertEqual(dialog._gale_threads, [])
-        self.assertEqual(dialog._gale_workers, [])
-        self.assertFalse(dialog._greencloud_followup_running)
-        self.assertFalse(dialog._greencloud_followup_queued)
+        self.assertFalse(dialog.gale_tasks.has_dialog_tasks)
+        self.assertFalse(dialog.gale_tasks.is_running("greencloud_followup"))
+        self.assertFalse(dialog.gale_tasks.followup_queued)
         self.assertFalse(window._close_pending)
 
     def test_main_window_survives_ai_center_close_while_followup_runs(self) -> None:
@@ -251,7 +249,7 @@ class AiCenterDeferredCloseTests(unittest.TestCase):
                 self._wait(
                     lambda: (
                         window.ai_center_dialog is None
-                        or not window.ai_center_dialog._gale_threads
+                        or not window.ai_center_dialog.gale_tasks.has_dialog_tasks
                     ),
                     "AI Center worker did not finish during cleanup",
                 )
@@ -278,7 +276,7 @@ class AiCenterDeferredCloseTests(unittest.TestCase):
         self.assertTrue(window.isVisible())
         self.assertTrue(isValid(dialog))
         self.assertFalse(dialog.isVisible())
-        self.assertTrue(dialog._gale_threads[0].isRunning())
+        self.assertTrue(dialog.gale_tasks.has_dialog_tasks)
 
         control.release.set()
         self._wait(

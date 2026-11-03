@@ -7,7 +7,7 @@ import re
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QThread, QTimer, Slot
+from PySide6.QtCore import QEvent, QTimer, Slot
 from PySide6.QtWidgets import QApplication, QInputDialog, QMainWindow, QMessageBox
 
 from src.snotes.application.ai_access_metadata_service import (
@@ -28,7 +28,8 @@ from src.snotes.domain.models import Note, NoteLocation
 from src.snotes.domain.reminders import ReminderQuery
 from src.snotes.domain.tags import format_tags, parse_tags
 from src.snotes.ui.directory_dialog import DirectoryUiWorkflow
-from src.snotes.ui.ai_center_dialog import AiCenterDialog, GaleWorker
+from src.snotes.ui.ai_center_dialog import AiCenterDialog
+from src.snotes.ui.gale_task_owner import GaleTaskOwner
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
 from src.snotes.ui.location_controls import (
     location_from_path,
@@ -87,8 +88,9 @@ class MainWindow(QMainWindow):
         self.gale_control_service = gale_control_service
         self._automatic_submission_pull = automatic_submission_pull
         self._submission_pull_started = False
-        self._submission_pull_thread = None
-        self._submission_pull_worker = None
+        self.gale_tasks = GaleTaskOwner(self)
+        self.gale_tasks.actionFinished.connect(self._submissions_pulled)
+        self.gale_tasks.idle.connect(self._gale_background_idle)
         self.remote_reminder_controller = remote_reminder_controller
         self.reminder_service = remote_reminder_controller or reminder_service
         self.ai_center_dialog: AiCenterDialog | None = None
@@ -256,13 +258,13 @@ class MainWindow(QMainWindow):
             self.reminder_service,
             self,
             gale=self.gale_control_service,
+            gale_tasks=self.gale_tasks,
         )
         self.ai_center_dialog = dialog
         dialog.receiptAccepted.connect(self._receipt_note_created)
         dialog.pendingCountChanged.connect(
             self.shell.sidebar.set_ai_center_pending_count
         )
-        dialog.backgroundIdle.connect(self._ai_center_background_idle)
         dialog.destroyed.connect(lambda: setattr(self, "ai_center_dialog", None))
         self.refresh_ai_center_badge()
         dialog.show()
@@ -1124,34 +1126,16 @@ class MainWindow(QMainWindow):
         control = self.gale_control_service
         if control is None or not control.auto_pull_enabled() or self._close_pending:
             return
-        thread = QThread(self)
-        worker = GaleWorker(control.check_submissions_now, refresh_receipts=True)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._submissions_pulled)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._submission_pull_finished)
-        self._submission_pull_thread = thread
-        self._submission_pull_worker = worker
-        thread.start()
+        self.gale_tasks.start(
+            control.check_submissions_now,
+            refresh_receipts=True,
+            action_kind="startup_pull",
+        )
 
-    @Slot(object, object, bool)
-    def _submissions_pulled(self, _result, error, _refresh) -> None:
-        if error is None:
+    @Slot(object, object, bool, str)
+    def _submissions_pulled(self, _result, error, _refresh, action_kind) -> None:
+        if action_kind == "startup_pull" and error is None:
             self.refresh_external_receipts()
-
-    @Slot()
-    def _submission_pull_finished(self) -> None:
-        # The same GaleWorker owner rule as AI Center: finished is emitted
-        # before DeferredDelete, so join before releasing either Qt wrapper.
-        thread = self._submission_pull_thread
-        thread.wait()
-        self._submission_pull_thread = None
-        self._submission_pull_worker = None
-        thread.deleteLater()
-        if self._close_pending:
-            QTimer.singleShot(0, self.close)
 
     def _editor_close_failed(self, reason: str) -> None:
         self._pending_switch = None
@@ -1178,7 +1162,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     @Slot()
-    def _ai_center_background_idle(self) -> None:
+    def _gale_background_idle(self) -> None:
         if self._close_pending:
             QTimer.singleShot(0, self.close)
 
@@ -1193,17 +1177,10 @@ class MainWindow(QMainWindow):
                     self.body_edit.prepareClose()
             return
         if self.force_save_current_note():
-            if self._submission_pull_thread is not None:
+            if self.gale_tasks.has_tasks:
                 event.ignore()
                 return
             dialog = self.ai_center_dialog
-            if dialog is not None and (
-                dialog._gale_threads
-                or dialog._greencloud_followup_running
-                or dialog._greencloud_followup_queued
-            ):
-                event.ignore()
-                return
             controller = self.remote_reminder_controller
             if controller is not None and getattr(controller, "_threads", None):
                 event.ignore()
