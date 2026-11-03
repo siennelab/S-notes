@@ -9,11 +9,14 @@ from src.app_paths import DEFAULT_PATHS
 from src.services.gale_publish_service import (
     GalePublishConfig,
     GalePublishError,
-    activate_remote_mirror,
     load_publish_state,
+    publish_gale_mirror,
+)
+
+from src.services.gale_remote_activation import (
+    activate_remote_mirror,
     operator_rollback_remote_mirror,
     production_remote_activation_config,
-    publish_gale_mirror,
 )
 
 DEFAULT_MIRROR_PATH = DEFAULT_PATHS.exports / "gale" / "gale-mirror.db"

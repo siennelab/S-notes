@@ -29,7 +29,10 @@ EXTERNAL_ROLES = {
     "src.services.gale_submission_outbox": "remote-persistence",
     "src.services.gale_remote_service": "remote-persistence",
     "src.services.gale_mirror_service": "remote-persistence",
+    # Local publish retains source snapshot SQL; server transactions have their own owner.
     "src.services.gale_publish_service": "remote-operator",
+    "src.services.gale_publish_contract": "pure-support",
+    "src.services.gale_remote_activation": "remote-operator",
     "src.services.gale_oauth": "remote-adapter",
     # Python scripts installed as runtime commands, not installers or probes.
     "deploy.greencloud.outbox.transport": "remote-adapter",

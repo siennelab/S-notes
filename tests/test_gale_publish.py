@@ -10,6 +10,7 @@ import os
 import shutil
 import sqlite3
 import stat
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -559,7 +560,7 @@ class GalePublishTest(unittest.TestCase):
             real_replace(source, destination)
 
         with patch(
-            "src.services.gale_publish_service.os.replace",
+            "src.services.gale_remote_activation.os.replace",
             side_effect=fail_only_rollback,
         ):
             result = activate_remote_mirror(
@@ -895,7 +896,7 @@ class GalePublishTest(unittest.TestCase):
             real_replace(source, destination)
 
         with patch(
-            "src.services.gale_publish_service.os.replace",
+            "src.services.gale_remote_activation.os.replace",
             side_effect=fail_second_replace_once,
         ):
             result = self.run_operator_rollback(
@@ -976,7 +977,7 @@ class GalePublishTest(unittest.TestCase):
         self.addCleanup(logger.setLevel, previous_level)
 
         with patch(
-            "src.services.gale_publish_service.subprocess.run"
+            "src.services.gale_remote_activation.subprocess.run"
         ) as system_logger:
             result = operator_rollback_remote_mirror(
                 config,
@@ -1092,6 +1093,90 @@ class GalePublishTest(unittest.TestCase):
                 "needs_retry",
             },
         )
+
+    def test_remote_cli_executes_new_owner_with_existing_arguments(self) -> None:
+        from src import gale_publish as cli
+        from src.services import gale_remote_activation as remote
+
+        config = self.remote_layout()
+        old_hash = sha256_file(config.current_mirror)
+        digest, count, _ = self.stage_candidate(config)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(cli.os, "umask"))
+            stack.enter_context(patch.object(cli.os, "geteuid", return_value=0))
+            stack.enter_context(patch.object(cli, "production_remote_activation_config", return_value=config))
+            output = stack.enter_context(patch.object(cli, "_print_fields"))
+            for name in ("_restart_system_service", "_start_system_service", "_stop_system_service", "_system_service_is_active"):
+                stack.enter_context(patch.object(remote, name, return_value=True))
+            stack.enter_context(patch.object(remote, "_probe_activated_service", side_effect=self.probe))
+            stack.enter_context(patch.object(remote, "_log_remote_event"))
+            stack.enter_context(patch.object(remote, "_log_operator_rollback_event"))
+            self.assertEqual(cli.main(["remote-activate", "--expected-sha256", digest, "--expected-note-count", str(count)]), 0)
+            self.assertEqual(output.call_args.args[0], {
+                "GALE_ACTIVATE_STATUS": "SUCCESS", "REASON": "none",
+                "SHA256": digest, "NOTE_COUNT": count, "ROLLED_BACK": "NO",
+                "PREVIOUS_PRESERVED": "YES",
+            })
+            self.assertEqual(sha256_file(config.current_mirror), digest)
+            self.assertEqual(cli.main(["remote-rollback", "--expected-current-sha256", digest, "--expected-previous-sha256", old_hash]), 0)
+            self.assertEqual(output.call_args.args[0], {
+                "GALE_ROLLBACK_STATUS": "SUCCESS", "REASON": "none",
+                "CURRENT_SHA256": old_hash, "CURRENT_NOTE_COUNT": 3,
+                "PREVIOUS_SHA256": digest, "PREVIOUS_NOTE_COUNT": count,
+                "AUTO_RESTORED": "NO",
+            })
+            self.assertEqual(sha256_file(config.current_mirror), old_hash)
+            self.assertEqual(sha256_file(config.previous_mirror), digest)
+
+    def test_activation_transport_and_cli_exit_contract(self) -> None:
+        from src import gale_publish as cli
+        from src.services.gale_publish_service import SystemSshTransport
+        from src.snotes.transport.gale.remote import SystemOraclePublishTransport
+
+        digest = "a" * 64
+        legacy = SystemSshTransport(upload_timeout_seconds=17, activation_timeout_seconds=29)
+        formal = SystemOraclePublishTransport(upload_timeout_seconds=17, activation_timeout_seconds=29)
+        for code, status, reason, rolled_back, preserved in (
+            (0, "success", "none", False, True),
+            (3, "duplicate", "same_hash", False, True),
+            (10, "failed", "publisher_busy", False, True),
+            (20, "failed", "remote_validation_failed", False, True),
+            (30, "failed", "activation_failed_rolled_back", True, True),
+            (31, "failed", "rollback_failed", True, False),
+        ):
+            with self.subTest(code=code), patch("subprocess.run", return_value=subprocess.CompletedProcess([], code)) as run:
+                result = legacy.activate(digest, 3)
+                self.assertEqual((result.status, result.reason, result.rolled_back, result.previous_preserved), (status, reason, rolled_back, preserved))
+                self.assertEqual((result.sha256, result.note_count), (digest, 3))
+                self.assertEqual(run.call_args.args[0], ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "oracle-a1", "sudo", "-n", "/usr/local/sbin/snotes-gale-activate", digest, "3"])
+                self.assertEqual(run.call_args.kwargs["timeout"], 29)
+                formal_result = formal.activate_candidate(digest, 3)
+                self.assertEqual((formal_result.status, formal_result.reason, formal_result.rolled_back, formal_result.previous_preserved), (status, reason, rolled_back, preserved))
+                self.assertEqual(cli._activation_exit_code(reason, status), code)
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            legacy.upload(self.mirror_v2, digest)
+            self.assertEqual(run.call_args.args[0], ["/usr/bin/scp", "-q", "-p", "--", str(self.mirror_v2), f"oracle-a1:/var/lib/snotes-gale-mcp/mirror/incoming/{digest}.db"])
+            self.assertEqual(run.call_args.kwargs["timeout"], 17)
+        for reason, code in (("none", 0), ("publisher_busy", 10), ("remote_validation_failed", 20), ("health_check_failed_restored", 30), ("service_stop_failed", 30), ("swap_failed_restored", 30), ("rollback_failed", 31)):
+            self.assertEqual(cli._operator_rollback_exit_code(reason, "success" if code == 0 else "failed"), code)
+
+    def test_owner_boundary_and_deployment_entrypoint(self) -> None:
+        import ast
+        from src.services import gale_publish_service as local
+        from src.services import gale_remote_activation as remote
+
+        self.assertIs(local.activate_remote_mirror, remote.activate_remote_mirror)
+        self.assertIs(local.operator_rollback_remote_mirror, remote.operator_rollback_remote_mirror)
+        local_defs = {node.name for node in ast.parse(inspect.getsource(local)).body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+        self.assertNotIn("activate_remote_mirror", local_defs)
+        self.assertNotIn("operator_rollback_remote_mirror", local_defs)
+        self.assertNotIn("_atomic_swap_current_previous", local_defs)
+        self.assertNotIn("gale_publish_service", inspect.getsource(remote))
+        script = (Path(__file__).resolve().parents[1] / "deploy/oracle/snotes-gale-activate").read_text()
+        self.assertIn('exec .venv/bin/python -m src.gale_publish remote-rollback "$@"', script)
+        self.assertIn('exec .venv/bin/python -m src.gale_publish remote-activate', script)
+        self.assertIn('--expected-sha256 "$expected_sha256"', script)
+        self.assertIn('--expected-note-count "$expected_note_count"', script)
 
     def test_publisher_has_no_real_database_or_materialization_dependency(self) -> None:
         source = inspect.getsource(publish_gale_mirror)
