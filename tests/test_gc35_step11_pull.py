@@ -6,12 +6,15 @@ import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import gale_production_pull_helper
 
 from src.snotes.application.gale_service import (
     GaleControlService,
     GreenCloudPullService,
 )
+from src.snotes.application.greencloud_receipt_service import GreenCloudFollowupResult
 from src.snotes.domain.gale import GalePullResult, GalePublishResult
 from src.snotes.domain.greencloud import (
     GreenCloudError,
@@ -288,6 +291,93 @@ class GC35Step11PullTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "fictional"):
             failing.check_submissions_now()
+
+    def test_control_consumes_followup_failures_and_preserves_raw_gui_result(self) -> None:
+        for failed_count in (0, 2):
+            with self.subTest(failed_count=failed_count):
+                followup_result = GreenCloudFollowupResult(
+                    2, 2 - failed_count, 0, failed_count
+                )
+                followup = Mock(return_value=followup_result)
+                gale_result = GalePullResult(0, 0, 0, 0)
+                cloud_result = GreenCloudPullResult(0, 0, 0, 0)
+                control = GaleControlService(
+                    PublishStub(), PullStub(result=gale_result), FakeSettings(),
+                    greencloud_pull=PullStub(result=cloud_result),
+                    greencloud_followup=followup,
+                )
+                self.assertEqual(
+                    control.check_submissions_now(),
+                    MultiSourcePullResult(
+                        gale_result, cloud_result,
+                        ("greencloud_followup",) if failed_count else (),
+                    ),
+                )
+                followup.assert_called_once_with()
+                self.assertIs(control.flush_greencloud_decisions(), followup_result)
+
+    def test_scheduled_followup_reports_failure_without_auto_pull(self) -> None:
+        cases = ((0, None), (2, None), (0, RuntimeError("fictional")))
+        for failed_count, error in cases:
+            with self.subTest(failed_count=failed_count, error=error):
+                gale = PullStub(result=GalePullResult(0, 0, 0, 0))
+                cloud = PullStub(result=GreenCloudPullResult(0, 0, 0, 0))
+                followup = Mock(
+                    return_value=GreenCloudFollowupResult(
+                        2, 2 - failed_count, 0, failed_count
+                    ),
+                    side_effect=error,
+                )
+                publish = PublishStub()
+                publish.publish_automatic = Mock(wraps=publish.publish_automatic)
+                control = GaleControlService(
+                    publish, gale, FakeSettings(),
+                    greencloud_pull=cloud, greencloud_followup=followup,
+                )
+                control.set_auto_pull_enabled(False)
+                control.set_auto_publish_enabled(True)
+                pull_result, publish_result = control.scheduled_once()
+                self.assertEqual(
+                    pull_result,
+                    MultiSourcePullResult(None, None, ("greencloud_followup",))
+                    if failed_count or error else None,
+                )
+                self.assertEqual((gale.calls, cloud.calls), (0, 0))
+                followup.assert_called_once_with()
+                publish.publish_automatic.assert_called_once_with()
+                self.assertEqual(publish_result.status, "duplicate")
+                self.assertEqual(control.last_completed_pull_at(), "")
+
+    def test_helper_exit_reflects_followup_results_for_both_pull_settings(self) -> None:
+        for scheduled in (False, True):
+            for auto_pull in (False, True):
+                for failed_count in (0, 2):
+                    with self.subTest(
+                        scheduled=scheduled,
+                        auto_pull=auto_pull,
+                        failed_count=failed_count,
+                    ):
+                        followup = Mock(return_value=GreenCloudFollowupResult(
+                            2, 2 - failed_count, 0, failed_count
+                        ))
+                        control = GaleControlService(
+                            PublishStub(), PullStub(result=GalePullResult(0, 0, 0, 0)),
+                            FakeSettings(),
+                            greencloud_pull=PullStub(
+                                result=GreenCloudPullResult(0, 0, 0, 0)
+                            ),
+                            greencloud_followup=followup,
+                        )
+                        control.set_auto_pull_enabled(auto_pull)
+                        with patch.object(
+                            gale_production_pull_helper, "build_gale_control_service",
+                            return_value=control,
+                        ):
+                            code = gale_production_pull_helper.main(
+                                ["--scheduled"] if scheduled else []
+                            )
+                        self.assertEqual(code, 2 if failed_count else 0)
+                        followup.assert_called_once_with()
 
     def test_scheduled_followup_retries_when_auto_pull_is_disabled(self) -> None:
         followups: list[str] = []

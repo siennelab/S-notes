@@ -10,6 +10,8 @@ from subprocess import CompletedProcess
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import gale_production_pull_helper
+
 from deploy.greencloud.outbox.transport import dispatch as cloud_dispatch
 from src.services.actor_mirror_publish_service import (
     ActorMirrorPublisher,
@@ -511,6 +513,75 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
             ],
             "accepted",
         )
+
+    def test_scheduled_helper_failure_keeps_decision_retryable_until_delivery(self) -> None:
+        for auto_pull in (False, True):
+            for failure in ("mirror", "receipt"):
+                with self.subTest(auto_pull=auto_pull, failure=failure):
+                    request_id = f"helper-retry-{auto_pull}-{failure}"
+                    self._queue_append("claude-code", request_id, request_id)
+                    self._pull_once()
+                    receipt = self.receipts.list_pending_receipts()[0]
+                    self.assertTrue(self._accept(receipt.id).outcome.accepted)
+                    accepted_note = self.notes.get_note(self.note.id)
+                    control = compose_gale_control(
+                        self.root / "local", self.note_repository,
+                        self.receipts, self.audit,
+                        outbox_transport=SimpleNamespace(
+                            export_unacknowledged=lambda: ()
+                        ),
+                        greencloud_transport=self.cloud_transport,
+                        actor_publisher=self.publisher,
+                    )
+                    control.set_auto_pull_enabled(auto_pull)
+                    if failure == "mirror":
+                        self.receiver.fail_next_actor = "claude-code"
+                    with patch(
+                        "src.snotes.transport.greencloud.outbox.subprocess.run",
+                        side_effect=self.ssh,
+                    ), patch.object(
+                        gale_production_pull_helper, "build_gale_control_service",
+                        return_value=control,
+                    ):
+                        with patch.object(
+                            self.cloud_transport, "write_terminal_receipt",
+                            wraps=self.cloud_transport.write_terminal_receipt,
+                        ) as write_receipt:
+                            if failure == "receipt":
+                                write_receipt.side_effect = RuntimeError(
+                                    "fictional receipt outage"
+                                )
+                            self.assertEqual(
+                                gale_production_pull_helper.main(["--scheduled"]), 2
+                            )
+                        pending = self.receipts.pending_greencloud_terminal_receipts()
+                        self.assertEqual(len(pending), 1)
+                        self.assertEqual(pending[0].receipt_id, receipt.id)
+                        self.assertEqual(pending[0].mirror_published, failure == "receipt")
+                        self.assertEqual(
+                            self._proposal("claude-code").get_operation_status(
+                                request_id
+                            )["delivery_state"],
+                            "acknowledged",
+                        )
+                        calls_before_retry = len(self.receiver.calls)
+                        self.assertEqual(
+                            gale_production_pull_helper.main(["--scheduled"]), 0
+                        )
+                    self.assertEqual(
+                        self.receipts.pending_greencloud_terminal_receipts(), ()
+                    )
+                    self.assertEqual(
+                        self._proposal("claude-code").get_operation_status(
+                            request_id
+                        )["delivery_state"],
+                        "accepted",
+                    )
+                    self.assertEqual(
+                        len(self.receiver.calls) - calls_before_retry,
+                        1 if failure == "mirror" else 0,
+                    )
+                    self.assertEqual(self.notes.get_note(self.note.id), accepted_note)
 
     def test_same_cloud_request_id_two_actors_keep_independent_terminal_states(self) -> None:
         request_id = "same-cloud-request-two-actors"

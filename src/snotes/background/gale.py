@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from src.snotes.application.gale_service import GaleControlService
+from src.snotes.domain.greencloud import MultiSourcePullResult
 
 
 HELPER_VERSION = "1"
@@ -19,11 +20,13 @@ LAUNCH_AGENT_INTERVAL_SECONDS = 300
 def run_one_shot(control: GaleControlService, *, scheduled: bool = False) -> int:
     try:
         if scheduled:
-            _pull_result, publish_result = control.scheduled_once()
+            pull_result, publish_result = control.scheduled_once()
             if publish_result is not None and publish_result.status == "failed":
                 return 3
         else:
-            control.check_submissions_now()
+            pull_result = control.check_submissions_now()
+        if isinstance(pull_result, MultiSourcePullResult) and pull_result.failures:
+            return 2
         return 0
     except Exception:
         return 2

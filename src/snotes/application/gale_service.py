@@ -21,6 +21,7 @@ from src.snotes.application.ai_safe_read_service import (
     RedactionUnavailableError,
 )
 from src.snotes.application.directory_service import DirectoryService
+from src.snotes.application.greencloud_receipt_service import GreenCloudFollowupResult
 from src.snotes.application.local_mcp_write_service import note_version_token
 from src.snotes.application.ports import (
     GaleMirrorWriter,
@@ -584,7 +585,7 @@ class GaleControlService:
         settings: GaleRuntimeSettings,
         *,
         greencloud_pull: GreenCloudPullService | None = None,
-        greencloud_followup: Callable[[], object] | None = None,
+        greencloud_followup: Callable[[], GreenCloudFollowupResult | None] | None = None,
         greencloud_publish: Callable[[], object] | None = None,
         clock=time.time,
     ) -> None:
@@ -628,10 +629,7 @@ class GaleControlService:
             if first_pull_error is None:
                 first_pull_error = error
             failures.append("greencloud")
-        try:
-            self.flush_greencloud_decisions()
-        except Exception:
-            failures.append("greencloud_followup")
+        failures.extend(self._greencloud_followup_failures())
         if gale_result is None and greencloud_result is None:
             assert first_pull_error is not None
             raise first_pull_error
@@ -644,10 +642,18 @@ class GaleControlService:
             failures=tuple(failures),
         )
 
-    def flush_greencloud_decisions(self) -> object | None:
+    def flush_greencloud_decisions(self) -> GreenCloudFollowupResult | None:
         if self._greencloud_followup is None:
             return None
         return self._greencloud_followup()
+
+    def _greencloud_followup_failures(self) -> tuple[str, ...]:
+        try:
+            result = self.flush_greencloud_decisions()
+            failed = result is not None and result.failed_count > 0
+        except Exception:
+            failed = True
+        return ("greencloud_followup",) if failed else ()
 
     def last_successful_publish_at(self) -> str:
         return self._settings.get_text(self.LAST_PUBLISH_AT_KEY)
@@ -673,14 +679,13 @@ class GaleControlService:
         GalePullResult | MultiSourcePullResult | None,
         GalePublishResult | None,
     ]:
-        pull_result = (
-            self.check_submissions_now() if self.auto_pull_enabled() else None
-        )
-        if not self.auto_pull_enabled():
-            try:
-                self.flush_greencloud_decisions()
-            except Exception:
-                pass
+        if self.auto_pull_enabled():
+            pull_result = self.check_submissions_now()
+        else:
+            failures = self._greencloud_followup_failures()
+            pull_result = (
+                MultiSourcePullResult(None, None, failures) if failures else None
+            )
         publish_result = (
             self._publish.publish_automatic()
             if self.auto_publish_enabled()
