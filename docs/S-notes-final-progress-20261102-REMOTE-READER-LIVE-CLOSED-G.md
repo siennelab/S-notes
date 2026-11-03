@@ -1,14 +1,12 @@
-# S-notes 最终进度书｜Claude Web + S Remote Reader + Note ID 搜索｜LIVE / CLOSED
+# S-notes 最终进度书｜Claude Web + S Remote Reader｜LIVE / CLOSED
 
 **原始记录：2026-10-23 PT / 2026-10-24 北京时间**
 
 **本次补充：2026-11-02 America/Los_Angeles**
 
-**状态：Claude Web Remote MCP、Claude 显示名、S Remote Reader，以及底栏 Note ID / 精确 ID 搜索均已完成各自工单范围内的施工与验收；相关实现已合入 main 并 push 到 GitHub。正式 Mac App 源码为 `9337152`，Reader 正式入口为 https://notes.ke-den.de。没有剩余施工或待 S 补做的验收项。**
+**状态：Claude Web Remote MCP、Claude 显示名以及 S Remote Reader 均已完成当前工单范围内的施工与验收；相关代码和收口记录已合入 main 并 push 到 GitHub。Reader 正式入口为 https://notes.ke-den.de。没有剩余施工或待 S 补做的验收项。**
 
 本版基于 S 提供的 `S-notes-final-progress-20261023-CLAUDE-WEB-GREENCLOUD-REMOTE-MCP-LIVE-G.md` 补写，原上传文件保留不变。原文末尾的 merge / push 待办已由下文的实际收口记录替代。
-
-本次在 S 上传的 `S-notes-final-progress-20261102-REMOTE-READER-LIVE-CLOSED-G.md` 基础上补入 Note ID 小工单的正式封口记录；上传原件保留不变，仓库内本文件为更新版本。
 
 ---
 
@@ -20,10 +18,9 @@
 A. Claude Web → GreenCloud Remote MCP
 B. Claude actor UI display label: Claude Code → Claude
 C. S mirror actor + private Remote Reader
-D. Mac 底栏显示当前 note_id + #数字精确定位
 ```
 
-第 2–9 节保留 2026-10-23 已记录的 Claude Web / 显示名验收事实；第 10–17 节保留 Reader 的施工、部署与真人验收结果，第 18 节补入 Note ID 工单封口。旧 Git / 构建版本为当时记录，当前正式 App 版本见第 12、18 节；后续文档提交不改变 App 源码版本。
+第 2–9 节保留 2026-10-23 已记录的 Claude Web / 显示名验收事实；第 10 节起补入最终 Git 状态及 Reader 的施工、部署与真人验收结果。旧构建版本为当时记录，当前运行版本见第 12 节。
 
 不重做 GreenCloud 3.5，不修改 Notes / Reminder authority，不扩 Reminder 到 Claude Web，不迁移既有 actor ID。
 
@@ -481,12 +478,12 @@ S_MIRROR_FILE_MODE=0640
 READER_USER=snotes-reader
 
 FORMAL_APP=/Users/s/Documents/项目/S-notes/dist/S-notes.app
-FORMAL_APP_SOURCE=9337152498a4409db7f796bc699163d64f5816bf
+FORMAL_APP_SOURCE=51150fcf3bac316e6c9f86fd73464fe4dba5e3ae
 PUBLISHER_PIN=51150fcf3bac316e6c9f86fd73464fe4dba5e3ae
 PUBLISHER_INTERVAL_SECONDS=300
 ```
 
-Reader 工单收口时的正式 App 源码为 `51150fcf3bac316e6c9f86fd73464fe4dba5e3ae`；当时后续目录与搜索修复仅涉及 Reader。本次 Note ID 工单已从合并后的干净 main `9337152` 重建正式 App，通过 arm64 构建、codesign、实际窗口启动及正常退出检查，详见第 18 节。publisher pin 与 Reader 部署版本没有因本工单变更。
+正式 App 已从干净源码重建，通过 arm64 构建、codesign 和实际 App 的隔离 smoke。后续目录与搜索修复仅涉及 Reader，不要求重新构建 Mac App。
 
 Mac publisher 使用 Application Support 下的固定源码导出及对应 venv，不从开发工作区运行。收口时 LaunchAgent 已恢复正常，最近退出码为 0，四个 mirror actor 的 `needs_retry` 均为 NO。
 
@@ -642,40 +639,3 @@ REMAINING_CONSTRUCTION=NONE
 旧版第 7 节中虚构 Claude OAuth proposal 的最终 review 状态没有新证据，本版仍不补写为已接受或已拒绝；它不构成 Reader 剩余施工项。
 
 > 砚，S-notes 的 Claude Web Remote MCP、Claude 显示名与 S Remote Reader 已完成当前范围施工、生产部署、真人验收和 GitHub 收口。Reader 为 `https://notes.ke-den.de`，只读 `/srv/snotes/mirror/s/current.db`，Mac 继续是 Notes authority。462 的实际脱敏与撤权验收通过，S / Gale 授权已恢复、规则未修改。S mirror 使用既有五分钟 publisher；“立即更新镜像”当前仍为 Gale-only。没有待补验收或待继续施工，不要把旧版进度书中的 merge / push 待办重新执行，也不要扩成相邻优化。
-
----
-
-# 18. 底栏 Note ID / 精确 ID 搜索｜正式封口 CLOSED
-
-2026-11-02（America/Los_Angeles），S 已真人验收 `codex/note-id-search` / `9337152`，随后明确授权按最小流程合入 main、重建正式 App、实际启动并 push。
-
-交付行为：
-
-- 正文底栏顺序为 `垃圾桶图标  笔记 ID：xxx  已保存/保存状态`，沿用原状态栏样式；ID 与当前正文加载一起更新，未选择笔记时隐藏。
-- 整个搜索内容严格符合 `#` + ASCII 纯数字时，按真实 `note_id` 精确定位，并走现有笔记切换 / 保存 / 打开路径；不存在或超出整数范围时正常显示无匹配结果，不创建内容。
-- `#abc`、`#449 abc` 以及普通文字搜索继续走原路径。左侧列表、标题格式、ID 生成、schema、MCP contract、AI 权限、mirror、Reader 与 Reminder 均未因本工单改动。
-
-```text
-TASK_BRANCH=codex/note-id-search
-IMPLEMENTATION_COMMIT=9337152498a4409db7f796bc699163d64f5816bf
-HUMAN_GATE=PASS
-TARGETED_TESTS=10_PASS
-CANDIDATE_BUILD=PASS
-CANDIDATE_CODESIGN=PASS
-MERGE=FAST_FORWARD_ONLY
-
-FORMAL_APP=/Users/s/Documents/项目/S-notes/dist/S-notes.app
-FORMAL_APP_SOURCE=9337152498a4409db7f796bc699163d64f5816bf
-FORMAL_APP_SOURCE_DIRTY=NO
-FORMAL_BUILD=PASS_ARM64
-CODESIGN=PASS_AD_HOC
-FORMAL_APP_LAUNCH=PASS
-FORMAL_APP_NORMAL_EXIT=PASS_EXIT_0
-CODE_PUSH=PASS_ORIGIN_MAIN
-TASK=CLOSED
-REMAINING_CONSTRUCTION=NONE
-```
-
-10 项针对性测试与 Candidate 真人 Gate 是此前已完成的验收，本次封口没有重跑全量测试，也没有新增代码修改。正式构建使用项目原有脚本；启动检查直接运行新构建的正式可执行文件，使用临时 HOME / 数据库，确认进程完成启动并有一个可见主窗口，再仅对该验收进程请求正常退出，退出码为 0。S 原有正式版和 Candidate 实例均保留。
-
-功能提交已 push 后再补写本进度书；后续提交仅涉及本文件，不改变正式 App 的 `9337152` 源码标记。文档提交 push 后再次核对 `HEAD == main == origin/main`、远端 main 与本地一致、worktree clean，以最终 Git 状态为准。上传原件未改写。
