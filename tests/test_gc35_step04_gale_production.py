@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from src.snotes.application.ai_actor_registry import selectable_target_definitions
+
 
 BASELINE_COMMIT = "46a02082f698f1989defa3f80530edf03120a6d1"
 
@@ -49,7 +51,21 @@ class Step04GaleProductionRegressionTests(unittest.TestCase):
             current["metadata_without_generated_at"],
             baseline["metadata_without_generated_at"],
         )
-        self.assertEqual(current["payload"], baseline["payload"])
+        current_payload = dict(current["payload"])
+        baseline_payload = dict(baseline["payload"])
+        current_targets = current_payload.pop("mirror_ai_targets")
+        baseline_payload.pop("mirror_ai_targets")
+        self.assertEqual(current_payload, baseline_payload)
+        self.assertEqual(
+            current_targets,
+            sorted(
+                [
+                    [definition.target_id, definition.display_name]
+                    for definition in selectable_target_definitions()
+                ],
+                key=lambda item: item[0],
+            ),
+        )
         self.assertEqual(current["result"], baseline["result"])
         self.assertEqual(current["verification"], baseline["verification"])
 

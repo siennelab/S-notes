@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.snotes.bootstrap import build_application
+from src.snotes.application.ai_actor_registry import selectable_target_definitions
 from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.reminders import REMINDER_ACTIVE, ReminderDraft
 from src.snotes.domain.models import NoteLocation
@@ -301,7 +302,10 @@ class Package3UiTests(unittest.TestCase):
         self.assertLess(next(iter(first_row_y)), next(iter(second_row_y)))
         self.assertTrue(shell.ai_visibility_combo.isEnabled())
         self.assertTrue(shell.ai_targets_widget.isEnabled())
-        self.assertEqual(len(shell.ai_target_checks), 7)
+        self.assertEqual(
+            tuple(shell.ai_target_checks),
+            tuple(item.target_id for item in selectable_target_definitions()),
+        )
         self.assertIsInstance(shell.ai_visibility_combo, FloatingComboBox)
         self.assertIsInstance(shell.main_combo, FloatingComboBox)
         self.assertIsInstance(shell.sub_combo, FloatingComboBox)

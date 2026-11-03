@@ -115,16 +115,91 @@ class Step07SelectiveDeploymentTests(unittest.TestCase):
         exec(compile(source, "<remote-worker>", "exec"), namespace)
         self.assertEqual(namespace["ROOT"], deploy.RUNTIME_ROOT)
 
-    def test_payload_uses_packager_closure_and_sends_only_fixed_allowlist(self):
-        payload = deploy.build_payload(require_clean=False)
-        self.assertEqual(set(payload["patches"]), deploy.PATCH_FILES)
-        self.assertEqual(len(payload["expected_files"]), 25)
-        self.assertEqual(set(deploy._source_files()), set(payload["expected_files"]))
-        contract = payload["patches"]["src/snotes/domain/reminder_remote_contract.py"]
-        self.assertIsNone(contract["before"])
-        self.assertEqual(payload["source_revision"], subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=deploy.ROOT, text=True
-        ).strip())
+    def test_historical_builder_uses_isolated_fixed_closure_and_patch_hashes(self):
+        with tempfile.TemporaryDirectory(dir="/private/tmp") as temporary:
+            root = Path(temporary)
+            contract = "src/snotes/domain/reminder_remote_contract.py"
+            expected_patch_files = frozenset(
+                {
+                    "src/snotes/domain/reminder_schedule.py",
+                    "src/snotes/domain/reminders.py",
+                    contract,
+                    "src/snotes/application/reminder_service.py",
+                    "src/snotes/transport/reminder_http.py",
+                }
+            )
+            self.assertEqual(deploy.PATCH_FILES, expected_patch_files)
+            self.assertEqual(deploy.EXPECTED_CLOSURE_SIZE, 25)
+            source_files = sorted(expected_patch_files) + [
+                f"src/snotes/fixture/dependency_{index:02d}.py"
+                for index in range(
+                    deploy.EXPECTED_CLOSURE_SIZE - len(expected_patch_files)
+                )
+            ]
+            current_sources: dict[str, bytes] = {}
+            baseline_sources: dict[str, bytes | None] = {}
+            for index, name in enumerate(source_files):
+                current = f"VALUE = 'current-{index}'\n".encode()
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(current)
+                current_sources[name] = current
+                if name == contract:
+                    baseline_sources[name] = None
+                elif name in expected_patch_files:
+                    baseline_sources[name] = f"VALUE = 'baseline-{index}'\n".encode()
+                else:
+                    baseline_sources[name] = current
+
+            revision = "7" * 40
+
+            def check_output(command, **_kwargs):
+                if command[1:3] == ["status", "--porcelain"]:
+                    return ""
+                if command[1:3] == ["rev-parse", "HEAD"]:
+                    return revision + "\n"
+                raise AssertionError(command)
+
+            def git_bytes(_revision, name, *, missing_ok=False):
+                self.assertEqual(_revision, deploy.BASELINE_REVISION)
+                self.assertTrue(missing_ok)
+                return baseline_sources[name]
+
+            with (
+                patch.object(deploy, "ROOT", root),
+                patch.object(deploy, "_source_files", return_value=source_files),
+                patch.object(deploy, "_git_bytes", side_effect=git_bytes),
+                patch.object(
+                    deploy.subprocess,
+                    "check_output",
+                    side_effect=check_output,
+                ),
+            ):
+                payload = deploy.build_payload()
+
+            self.assertEqual(payload["schema"], 1)
+            self.assertEqual(payload["source_revision"], revision)
+            self.assertEqual(payload["entrypoint"], deploy.ENTRYPOINT)
+            self.assertEqual(set(payload["expected_files"]), set(source_files))
+            self.assertEqual(len(payload["expected_files"]), 25)
+            self.assertEqual(set(payload["patches"]), expected_patch_files)
+            for name in source_files:
+                self.assertEqual(
+                    payload["expected_files"][name],
+                    digest(current_sources[name]),
+                )
+            for name in expected_patch_files:
+                row = payload["patches"][name]
+                baseline = baseline_sources[name]
+                self.assertEqual(
+                    row["before"],
+                    None if baseline is None else digest(baseline),
+                )
+                self.assertEqual(row["after"], digest(current_sources[name]))
+                self.assertEqual(
+                    base64.b64decode(row["source"], validate=True),
+                    current_sources[name],
+                )
 
     def test_success_writes_actual_closure_manifest_and_historical_assets(self):
         with tempfile.TemporaryDirectory() as temporary:

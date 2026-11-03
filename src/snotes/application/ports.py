@@ -553,6 +553,17 @@ class ActorMirrorSource(Protocol):
     def source_schema(self) -> str: ...
 
 
+class ActorMirrorPublishResult(Protocol):
+    @property
+    def status(self) -> str: ...
+
+
+class ActorMirrorPublishPort(Protocol):
+    """Publish one actor's derived mirror without exposing its transport."""
+
+    def publish_actor(self, actor: str) -> ActorMirrorPublishResult: ...
+
+
 class GalePublishTransport(Protocol):
     """The existing Oracle incoming/current/previous activation boundary."""
 

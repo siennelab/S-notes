@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
+from src.snotes.application.ai_actor_registry import selectable_target_definitions
 from src.snotes.bootstrap import build_application
 from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.domain.models import NoteLocation
@@ -70,14 +71,9 @@ class Package4AiCenterReceiptLifecycleUiTests(unittest.TestCase):
                 (target_id, checkbox.text())
                 for target_id, checkbox in card.target_checks.items()
             ),
-            (
-                ("common", "通用"),
-                ("gale", "Gale"),
-                ("yan", "砚"),
-                ("clawbot", "Clawbot"),
-                ("antigravity", "Antigravity"),
-                ("claude-code", "Claude Code"),
-                ("ke-den", "Ke"),
+            tuple(
+                (item.target_id, item.display_name)
+                for item in selectable_target_definitions()
             ),
         )
         card.title_input.setText("Accepted from UI")

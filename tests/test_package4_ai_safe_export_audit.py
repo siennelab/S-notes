@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QHeaderView
 
 from src.snotes.bootstrap import build_application
+from src.snotes.application.ai_actor_registry import selectable_target_definitions
 from src.snotes.reminder_authority import LOCAL_REMINDER_AUTHORITY
 from src.snotes.ui.export_dialog import ExportContext, ExportDialog
 from src.snotes.ui.floating_combo import FloatingComboBox
@@ -338,14 +339,9 @@ class Package4AiSafeExportAuditTests(unittest.TestCase):
                 )
                 for index in range(dialog.ai_target_combo.count())
             ),
-            (
-                ("通用", "common"),
-                ("Gale", "gale"),
-                ("砚", "yan"),
-                ("Clawbot", "clawbot"),
-                ("Antigravity", "antigravity"),
-                ("Claude", "claude-code"),
-                ("Ke", "ke-den"),
+            tuple(
+                (item.display_name, item.target_id)
+                for item in selectable_target_definitions()
             ),
         )
         dialog.ai_target_combo.setCurrentIndex(

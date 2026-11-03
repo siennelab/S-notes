@@ -12,9 +12,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from src.snotes.storage.cloud_read import SQLiteCloudMirrorReader
+from src.snotes.application.reader_service import ReaderService
 from src.snotes.transport.reader_auth import (
-    Auth0OIDC, LoginError, MIRROR_PATH, ORIGIN, ReaderLogin, ReaderSettings,
+    Auth0OIDC, LoginError, ORIGIN, ReaderLogin, ReaderSettings,
     SESSION_COOKIE, SESSION_TTL, TRANSACTION_COOKIE, TRANSACTION_TTL,
 )
 from src.snotes.transport.reader_render import render_markdown, render_redacted
@@ -90,10 +90,9 @@ async def _form(request: Request) -> dict[str, list[str]]:
 
 
 def create_reader_app(
-    settings: ReaderSettings, *, reader: SQLiteCloudMirrorReader | None = None,
+    settings: ReaderSettings, service: ReaderService, *,
     login: ReaderLogin | None = None, oidc: Auth0OIDC | None = None,
 ):
-    reader = reader or SQLiteCloudMirrorReader(MIRROR_PATH)
     login = login or ReaderLogin(settings)
     oidc = oidc or Auth0OIDC(settings)
 
@@ -118,13 +117,12 @@ def create_reader_app(
         session = current(request)
         if session is None:
             return _page('<h1>S-notes</h1><p>登录后阅读你的笔记。</p><a class="button" href="/login">登录</a>')
-        snapshot = reader.snapshot_info()
-        directories = reader.metadata_catalog()["directories"]
+        snapshot, directories, recent = service.home()
         content = ('<h1>你的笔记</h1><p class="snapshot">内容快照生成于：'
             + escape(snapshot["generated_at"]) + '</p>' + _search_form(session.csrf))
         content += '<h2>目录</h2><ul class="directory-list">' + "".join(
             f'<li><a href="/directory/{item["directory_id"]}">{escape(" / ".join(item["path"]))}</a></li>'
-            for item in directories) + '</ul><h2>最近更新</h2>' + _notes_list(reader.list_recent(50))
+            for item in directories) + '</ul><h2>最近更新</h2>' + _notes_list(recent)
         return _page(content, csrf=session.csrf)
 
     async def search(request):
@@ -139,25 +137,24 @@ def create_reader_app(
             query = query_values[0].strip()
         except (ValueError, UnicodeError):
             return PlainTextResponse("请求无效。", status_code=400)
-        notes = reader.search([query], limit=200)
+        notes = service.search(query)
         return _page('<h1>搜索结果</h1>' + _search_form(session.csrf, query) + _notes_list(notes), csrf=session.csrf)
 
     async def directory(request):
         session = current(request)
         if session is None:
             return RedirectResponse("/", status_code=303)
-        item = next((item for item in reader.metadata_catalog()["directories"]
-                     if item["directory_id"] == request.path_params["directory_id"]), None)
-        if item is None:
+        result = service.directory(request.path_params["directory_id"])
+        if result is None:
             return PlainTextResponse("Not Found", status_code=404)
-        notes = reader.list_by_location(item["main_category"], item["sub_category"], 200)
+        item, notes = result
         return _page('<h1>' + escape(" / ".join(item["path"])) + '</h1>' + _notes_list(notes), csrf=session.csrf)
 
     async def note(request):
         session = current(request)
         if session is None:
             return RedirectResponse("/", status_code=303)
-        item = reader.get(request.path_params["note_id"], include_markdown=True)
+        item = service.note(request.path_params["note_id"])
         if item is None:
             return PlainTextResponse("Not Found", status_code=404)
         if item["visibility"] == "full" and item["safe_markdown"] is not None:

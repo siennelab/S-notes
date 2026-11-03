@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -16,6 +17,7 @@ import httpx
 import jwt
 from starlette.testclient import TestClient
 
+from src.snotes.application.reader_service import ReaderService
 from src.snotes.domain.actor_mirror import ActorMirrorRecord
 from src.snotes.storage.actor_mirror import EMPTY_METADATA_CATALOG, write_actor_mirror
 from src.snotes.storage.cloud_read import SQLiteCloudMirrorReader
@@ -52,8 +54,35 @@ class ReaderTests(unittest.TestCase):
         self.records = [self.full, self.redacted]
         self.publish()
         self.reader = SQLiteCloudMirrorReader(self.path)
-        self.client = TestClient(create_reader_app(self.settings, reader=self.reader, login=self.login, oidc=self.oidc), base_url=ORIGIN)
+        self.service = ReaderService(self.reader)
+        self.client = TestClient(
+            create_reader_app(
+                self.settings, self.service, login=self.login, oidc=self.oidc
+            ),
+            base_url=ORIGIN,
+        )
         self.addCleanup(self.client.close)
+
+    def test_production_entry_composes_read_only_service_without_starting_server(self):
+        from src import remote_reader
+
+        before = self.path.read_bytes()
+        with (
+            patch.object(remote_reader, "load_settings", return_value=self.settings),
+            patch.object(remote_reader, "MIRROR_PATH", self.path),
+            patch.object(remote_reader, "create_reader_app", wraps=create_reader_app) as factory,
+            patch("uvicorn.run") as serve,
+        ):
+            remote_reader.main()
+        settings, service = factory.call_args.args
+        self.assertIs(settings, self.settings)
+        self.assertEqual(service.note(self.full.source_note_id)["safe_text"], self.full.safe_text)
+        self.assertIsNone(service.note(999))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(serve.call_args.kwargs, {
+            "host": "127.0.0.1", "port": self.settings.port, "workers": 1,
+            "access_log": False, "server_header": False, "log_level": "warning",
+        })
 
     def publish(self):
         catalog = {**EMPTY_METADATA_CATALOG, "directories": [

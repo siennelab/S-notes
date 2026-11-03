@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.services.actor_mirror_publish_service import ActorMirrorPublisher
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptInboxService
-from src.snotes.application.ports import GreenCloudOutboxTransport
+from src.snotes.application.ports import (
+    ActorMirrorPublishPort,
+    GreenCloudOutboxTransport,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +24,7 @@ class GreenCloudReceiptService:
         self,
         receipts: AiReceiptInboxService,
         transport: GreenCloudOutboxTransport,
-        publisher: ActorMirrorPublisher,
+        publisher: ActorMirrorPublishPort,
     ) -> None:
         self._receipts = receipts
         self._transport = transport

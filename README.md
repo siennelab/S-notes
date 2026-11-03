@@ -49,8 +49,12 @@ created integrated terminals activate that environment automatically.
 ## Test
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -B scripts/run_tests.py
 ```
+
+The runner gives each test module an isolated temporary HOME and database, then
+reports the aggregate passed, failed, error, and skipped counts. This keeps Qt
+and WebEngine process state from leaking between otherwise independent modules.
 
 ## Project Documents
 

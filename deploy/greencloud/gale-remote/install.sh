@@ -21,7 +21,8 @@ install -d -o snotes-gale -g snotes-gale -m 0700 "$unit_dir/oauth"
 )
 for file in src/greencloud_remote_mcp.py \
     src/snotes/transport/mcp/greencloud_remote_transport.py \
-    src/snotes/transport/mcp/greencloud_remote_auth.py
+    src/snotes/transport/mcp/greencloud_remote_auth.py \
+    src/snotes/transport/mcp/remote_auth_support.py
 do
     install -m 0644 "$source_root/$file" "/srv/snotes/runtime/$file"
 done

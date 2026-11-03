@@ -177,6 +177,16 @@ class SingleLineMetadataScrollUiTests(unittest.TestCase):
             target_ids,
         )
 
+        # Hold the unrelated footer constant while comparing metadata length.
+        # Note ID digits have proportional widths (e.g. 1 vs 2 differs by 3px
+        # with the offscreen font); footer selection is tested separately.
+        note_id_label = self.window.shell.note_id_label
+        footer_widths = []
+        for note in (short, long_note, longer_note):
+            note_id_label.setText(f"笔记 ID：{note.id}")
+            footer_widths.append(note_id_label.sizeHint().width())
+        note_id_label.setFixedWidth(max(footer_widths))
+
         self._load_note(short.id)
         short_collapsed_minimums = self._layout_minimum_widths(self.window)
         short_minimum_width = self.window.minimumWidth()

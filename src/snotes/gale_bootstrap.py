@@ -19,7 +19,12 @@ from src.snotes.application.gale_service import (
 from src.snotes.application.greencloud_receipt_service import GreenCloudReceiptService
 from src.snotes.application.directory_service import DirectoryService
 from src.snotes.application.note_service import NoteService
-from src.snotes.application.ports import GaleOutboxTransport, GalePublishTransport, GreenCloudOutboxTransport
+from src.snotes.application.ports import (
+    ActorMirrorPublishPort,
+    GaleOutboxTransport,
+    GalePublishTransport,
+    GreenCloudOutboxTransport,
+)
 from src.services.actor_mirror_publish_service import ActorMirrorPublisher, SshActorMirrorTransport
 from src.snotes.application.tag_service import TagService
 from src.snotes.domain.markdown import markdown_to_plain_text
@@ -50,7 +55,7 @@ def build_gale_control_service(
     outbox_transport: GaleOutboxTransport | None = None,
     outbox_mode: str = "production",
     greencloud_transport: GreenCloudOutboxTransport | None = None,
-    actor_publisher: ActorMirrorPublisher | None = None,
+    actor_publisher: ActorMirrorPublishPort | None = None,
 ) -> GaleControlService:
     root = resolve_gale_data_root(data_root)
     connections = initialize_database(root / "s_notes.db")
@@ -95,7 +100,7 @@ def compose_gale_control(
     outbox_transport: GaleOutboxTransport | None = None,
     outbox_mode: str = "production",
     greencloud_transport: GreenCloudOutboxTransport | None = None,
-    actor_publisher: ActorMirrorPublisher | None = None,
+    actor_publisher: ActorMirrorPublishPort | None = None,
 ) -> GaleControlService:
     settings = JsonGaleRuntimeSettings(root / "config" / "gale_runtime.json")
     mirror = GaleMirrorService(

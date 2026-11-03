@@ -252,7 +252,7 @@ class ClaudeWebRemoteAuthTests(unittest.TestCase):
             patch.object(auth, "OAUTH_STORAGE_DIRECTORY", self.storage),
             patch.object(
                 auth,
-                "_load_json_file",
+                "load_json_file",
                 side_effect=[public, secret],
             ) as loader,
             patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": str(self.root)}),

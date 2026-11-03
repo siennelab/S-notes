@@ -10,7 +10,8 @@ import tempfile
 import unittest
 
 from src.services.gale_submission_outbox import (
-    enqueue_proposal, get_operation_status, initialize_outbox,
+    GaleSubmissionOutboxError, enqueue_proposal, get_operation_status,
+    initialize_outbox,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,9 +62,19 @@ class Step10DeployTests(unittest.TestCase):
     def test_transport_rejects_arbitrary_paths_commands_actors_and_payload_fields(self):
         for action, request in (("delete", {}), ("export", {"database": "other.db"}),
                                 ("export", {"limit": True}), ("acknowledge", {"source_actor": "gale"}),
-                                ("receipt", {"source_actor": "gale", "request_id": "fixture", "terminal_state": "accepted"})):
+                                ("receipt", {"source_actor": "unknown", "request_id": "fixture", "terminal_state": "accepted"})):
             with self.subTest(action=action, request=request), self.assertRaises(ValueError):
                 transport.dispatch(action, request, database=self.database)
+        with self.assertRaisesRegex(GaleSubmissionOutboxError, "submission_not_found"):
+            transport.dispatch(
+                "receipt",
+                {
+                    "source_actor": "gale",
+                    "request_id": "fixture",
+                    "terminal_state": "accepted",
+                },
+                database=self.database,
+            )
 
     def test_backup_includes_wal_data_and_retains_only_generated_snapshots(self):
         connection = sqlite3.connect(self.database)

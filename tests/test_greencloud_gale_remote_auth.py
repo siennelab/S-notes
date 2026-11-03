@@ -30,11 +30,11 @@ from src.snotes.transport.mcp.greencloud_remote_auth import (
     OAUTH_STORAGE_DIRECTORY,
     PROXY_BASE_URL,
     Auth0TokenVerifier,
-    _load_json_file,
     _rfc9207_redirect_location,
     build_auth0_provider,
     load_auth_config,
 )
+from src.snotes.transport.mcp.remote_auth_support import load_json_file
 
 
 ISSUER = "https://fictional-tenant.example.test/"
@@ -149,7 +149,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
         secret = self.root / "remote-oauth.json"
         secret.write_text(json.dumps({"fictional": True}), encoding="utf-8")
         os.chmod(secret, 0o600)
-        loaded = _load_json_file(
+        loaded = load_json_file(
             secret,
             maximum_bytes=1024,
             error_prefix="credential",
@@ -163,7 +163,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
             GreenCloudRemoteAuthError,
             "credential_permissions_unsafe",
         ):
-            _load_json_file(
+            load_json_file(
                 secret,
                 maximum_bytes=1024,
                 error_prefix="credential",
@@ -175,7 +175,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
             GreenCloudRemoteAuthError,
             "credential_owner_unsafe",
         ):
-            _load_json_file(
+            load_json_file(
                 secret,
                 maximum_bytes=1024,
                 error_prefix="credential",
@@ -189,7 +189,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
             GreenCloudRemoteAuthError,
             "credential_symlink_rejected",
         ):
-            _load_json_file(
+            load_json_file(
                 link,
                 maximum_bytes=1024,
                 error_prefix="credential",
@@ -202,7 +202,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
             GreenCloudRemoteAuthError,
             "credential_too_large",
         ):
-            _load_json_file(
+            load_json_file(
                 secret,
                 maximum_bytes=1024,
                 error_prefix="credential",
@@ -236,7 +236,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
             patch.object(auth, "OAUTH_STORAGE_DIRECTORY", self.storage),
             patch.object(
                 auth,
-                "_load_json_file",
+                "load_json_file",
                 side_effect=[public, secret],
             ) as loader,
             patch.dict(
@@ -270,7 +270,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
         root_metadata[4:6] = [0, 0]
         with patch.object(Path, "lstat", return_value=os.stat_result(root_metadata)):
             self.assertEqual(
-                _load_json_file(secret, maximum_bytes=1024,
+                load_json_file(secret, maximum_bytes=1024,
                     error_prefix="credential", allowed_modes={0o440},
                     allowed_owner_uids={0}),
                 {"fictional": True},
@@ -279,7 +279,7 @@ class GreenCloudGaleRemoteAuthTests(unittest.TestCase):
         with patch.object(Path, "lstat", return_value=os.stat_result(root_metadata)):
             with self.assertRaisesRegex(GreenCloudRemoteAuthError,
                 "credential_permissions_unsafe"):
-                _load_json_file(secret, maximum_bytes=1024,
+                load_json_file(secret, maximum_bytes=1024,
                     error_prefix="credential", allowed_modes={0o440},
                     allowed_owner_uids={0})
 

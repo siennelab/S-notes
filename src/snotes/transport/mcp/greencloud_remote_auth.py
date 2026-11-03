@@ -33,6 +33,15 @@ from starlette.responses import HTMLResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from src.snotes.transport.mcp.remote_auth_support import (
+    RemoteAuthError,
+    load_json_file,
+    require_exact_keys,
+    required_string,
+    required_string_list,
+    validated_https_url,
+)
+
 
 LOGGER = logging.getLogger("snotes_greencloud_remote_mcp.auth")
 
@@ -84,12 +93,7 @@ _CREDENTIAL_KEYS = frozenset(
 )
 
 
-class GreenCloudRemoteAuthError(RuntimeError):
-    """A stable, non-secret startup or validation failure."""
-
-    def __init__(self, code: str) -> None:
-        self.code = code
-        super().__init__(code)
+GreenCloudRemoteAuthError = RemoteAuthError
 
 
 @dataclass(frozen=True)
@@ -364,14 +368,14 @@ def build_auth_provider() -> RestrictedAuth0Provider:
 
 def load_auth_config(*, expected_owner_uid: int) -> GreenCloudRemoteAuthConfig:
     """Load fixed non-secret config and one systemd credential."""
-    config_document = _load_json_file(
+    config_document = load_json_file(
         CONFIG_PATH,
         maximum_bytes=MAX_CONFIG_BYTES,
         error_prefix="config",
         allowed_modes={0o600, 0o644},
         allowed_owner_uids={0},
     )
-    _require_exact_keys(config_document, _CONFIG_KEYS, "config_keys_invalid")
+    require_exact_keys(config_document, _CONFIG_KEYS, "config_keys_invalid")
 
     credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
     if not credentials_directory:
@@ -379,7 +383,7 @@ def load_auth_config(*, expected_owner_uid: int) -> GreenCloudRemoteAuthConfig:
     directory = Path(credentials_directory)
     if not directory.is_absolute():
         raise GreenCloudRemoteAuthError("credentials_directory_not_absolute")
-    credential_document = _load_json_file(
+    credential_document = load_json_file(
         directory / CREDENTIAL_NAME,
         maximum_bytes=MAX_CREDENTIAL_BYTES,
         error_prefix="credential",
@@ -388,7 +392,7 @@ def load_auth_config(*, expected_owner_uid: int) -> GreenCloudRemoteAuthConfig:
         allowed_modes={0o400, 0o440, 0o600},
         allowed_owner_uids={0, expected_owner_uid},
     )
-    _require_exact_keys(
+    require_exact_keys(
         credential_document,
         _CREDENTIAL_KEYS,
         "credential_keys_invalid",
@@ -487,41 +491,41 @@ def _parse_auth_config(
     public: Mapping[str, Any],
     secret: Mapping[str, Any],
 ) -> GreenCloudRemoteAuthConfig:
-    redirects = _required_string_list(
+    redirects = required_string_list(
         public,
         "allowed_client_redirect_uris",
         "allowed_client_redirect_uris_invalid",
     )
-    subjects = _required_string_list(
+    subjects = required_string_list(
         secret,
         "allowed_subjects",
         "allowed_subjects_invalid",
     )
     config = GreenCloudRemoteAuthConfig(
-        issuer_url=_required_string(public, "issuer_url"),
-        jwks_url=_required_string(public, "jwks_url"),
-        auth0_config_url=_required_string(public, "auth0_config_url"),
-        auth0_client_id=_required_string(secret, "auth0_client_id"),
-        auth0_client_secret=_required_string(secret, "auth0_client_secret"),
-        proxy_base_url=_required_string(public, "proxy_base_url"),
-        audience=_required_string(public, "audience"),
+        issuer_url=required_string(public, "issuer_url"),
+        jwks_url=required_string(public, "jwks_url"),
+        auth0_config_url=required_string(public, "auth0_config_url"),
+        auth0_client_id=required_string(secret, "auth0_client_id"),
+        auth0_client_secret=required_string(secret, "auth0_client_secret"),
+        proxy_base_url=required_string(public, "proxy_base_url"),
+        audience=required_string(public, "audience"),
         oauth_storage_directory=Path(
-            _required_string(public, "oauth_storage_directory")
+            required_string(public, "oauth_storage_directory")
         ),
         allowed_client_redirect_uris=redirects,
         allowed_subjects=frozenset(subjects),
-        storage_encryption_key=_required_string(
+        storage_encryption_key=required_string(
             secret,
             "storage_encryption_key",
         ),
-        jwt_signing_key=_required_string(secret, "jwt_signing_key"),
+        jwt_signing_key=required_string(secret, "jwt_signing_key"),
     )
     _validate_config_bindings(config)
     return config
 
 
 def _validate_config_bindings(config: GreenCloudRemoteAuthConfig) -> None:
-    issuer = _validated_https_url(config.issuer_url, "issuer_url_invalid")
+    issuer = validated_https_url(config.issuer_url, "issuer_url_invalid")
     if not issuer.endswith("/"):
         raise GreenCloudRemoteAuthError("issuer_url_invalid")
     expected_config = f"{issuer}.well-known/openid-configuration"
@@ -530,8 +534,8 @@ def _validate_config_bindings(config: GreenCloudRemoteAuthConfig) -> None:
         raise GreenCloudRemoteAuthError("auth0_config_url_mismatch")
     if config.jwks_url != expected_jwks:
         raise GreenCloudRemoteAuthError("jwks_url_mismatch")
-    _validated_https_url(config.auth0_config_url, "auth0_config_url_invalid")
-    _validated_https_url(config.jwks_url, "jwks_url_invalid")
+    validated_https_url(config.auth0_config_url, "auth0_config_url_invalid")
+    validated_https_url(config.jwks_url, "jwks_url_invalid")
     if config.proxy_base_url != PROXY_BASE_URL:
         raise GreenCloudRemoteAuthError("proxy_base_url_mismatch")
     if config.audience != AUDIENCE:
@@ -547,64 +551,6 @@ def _validate_config_bindings(config: GreenCloudRemoteAuthConfig) -> None:
         raise GreenCloudRemoteAuthError("allowed_client_redirect_uris_invalid")
     if not config.allowed_subjects:
         raise GreenCloudRemoteAuthError("allowed_subjects_missing")
-
-
-def _load_json_file(
-    path: Path,
-    *,
-    maximum_bytes: int,
-    error_prefix: str,
-    allowed_modes: set[int] | None,
-    allowed_owner_uids: set[int] | None,
-) -> dict[str, Any]:
-    path = Path(path)
-    try:
-        before = path.lstat()
-    except OSError as error:
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_unavailable") from error
-    if stat.S_ISLNK(before.st_mode):
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_symlink_rejected")
-    if not stat.S_ISREG(before.st_mode):
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_not_regular")
-    if allowed_modes is not None and stat.S_IMODE(before.st_mode) not in allowed_modes:
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_permissions_unsafe")
-    if (
-        error_prefix == "credential"
-        and stat.S_IMODE(before.st_mode) == 0o440
-        and (before.st_uid != 0 or before.st_gid != 0)
-    ):
-        raise GreenCloudRemoteAuthError("credential_permissions_unsafe")
-    if allowed_owner_uids is not None and before.st_uid not in allowed_owner_uids:
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_owner_unsafe")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-        try:
-            opened = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or opened.st_dev != before.st_dev
-                or opened.st_ino != before.st_ino
-            ):
-                raise GreenCloudRemoteAuthError(
-                    f"{error_prefix}_changed_during_read"
-                )
-            payload = os.read(descriptor, maximum_bytes + 1)
-        finally:
-            os.close(descriptor)
-    except GreenCloudRemoteAuthError:
-        raise
-    except OSError as error:
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_unavailable") from error
-    if len(payload) > maximum_bytes:
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_too_large")
-    try:
-        document = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_json_invalid") from error
-    if not isinstance(document, dict):
-        raise GreenCloudRemoteAuthError(f"{error_prefix}_json_invalid")
-    return document
 
 
 def _validate_storage_directory(
@@ -768,55 +714,6 @@ def _replace_raw_header(
         for header_name, header_value in headers
         if header_name.lower() != lowered
     ] + [(name, value)]
-
-
-def _validated_https_url(value: str, code: str) -> str:
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or not parsed.netloc
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise GreenCloudRemoteAuthError(code)
-    return value
-
-
-def _required_string(values: Mapping[str, Any], name: str) -> str:
-    value = values.get(name)
-    if not isinstance(value, str) or not value.strip() or value != value.strip():
-        raise GreenCloudRemoteAuthError(f"{name}_invalid")
-    return value
-
-
-def _required_string_list(
-    values: Mapping[str, Any],
-    name: str,
-    code: str,
-) -> tuple[str, ...]:
-    value = values.get(name)
-    if not isinstance(value, list) or not value:
-        raise GreenCloudRemoteAuthError(code)
-    if any(
-        not isinstance(item, str) or not item.strip() or item != item.strip()
-        for item in value
-    ):
-        raise GreenCloudRemoteAuthError(code)
-    result = tuple(value)
-    if len(result) != len(set(result)):
-        raise GreenCloudRemoteAuthError(code)
-    return result
-
-
-def _require_exact_keys(
-    values: Mapping[str, Any],
-    expected: frozenset[str],
-    code: str,
-) -> None:
-    if frozenset(values) != expected:
-        raise GreenCloudRemoteAuthError(code)
 
 
 def _token_scopes(claims: dict[str, Any]) -> set[str]:

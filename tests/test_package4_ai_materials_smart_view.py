@@ -9,6 +9,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.snotes.application.ai_access_metadata_service import AiAccessMetadataService
+from src.snotes.application.ai_actor_registry import selectable_target_definitions
 from src.snotes.application.ai_receipt_inbox_service import AiReceiptAcceptFields
 from src.snotes.application.note_service import NoteService
 from src.snotes.application.tag_service import TagService
@@ -226,15 +227,9 @@ class Package4AiMaterialsUiTests(unittest.TestCase):
                 )
                 for index in range(sidebar.ai_actor_filter_combo.count())
             ),
-            (
-                ("全部", None),
-                ("通用", "common"),
-                ("Gale", "gale"),
-                ("砚", "yan"),
-                ("Clawbot", "clawbot"),
-                ("Antigravity", "antigravity"),
-                ("Claude", "claude-code"),
-                ("Ke", "ke-den"),
+            (("全部", None),) + tuple(
+                (item.display_name, item.target_id)
+                for item in selectable_target_definitions()
             ),
         )
 

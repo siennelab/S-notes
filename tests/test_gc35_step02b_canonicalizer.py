@@ -34,6 +34,7 @@ FIXTURES = (
     ("escaping", r"\# literal \*star\* \[brackets\]", "\\# literal \\*star\\* \\[brackets]" + "\n"),
     ("trailing_newline", "text\n\n", "text\n"),
     ("size15", ':size[small]{size="15"}', ':size[small]{size="15"}\n'),
+    ("size17", ':size[normal]{size="17"}', ':size[normal]{size="17"}\n'),
     ("size20", ':size[large]{size="20"}', ':size[large]{size="20"}\n'),
     ("list_heading", "- ## Heading", "* ## Heading\n"),
 )
@@ -90,7 +91,7 @@ class CanonicalizerTests(unittest.TestCase):
 
     def test_unknown_and_invalid_size_remain_literal(self):
         with MarkdownCanonicalizer() as canonicalizer:
-            for source in (':size[keep]{size="17"}', ':future[keep]{mode="x"}'):
+            for source in (':size[keep]{size="16"}', ':future[keep]{mode="x"}'):
                 with self.subTest(source=source):
                     result = canonicalizer.canonicalize_markdown(source)
                     self.assertEqual(canonicalizer.canonicalize_markdown(result), result)

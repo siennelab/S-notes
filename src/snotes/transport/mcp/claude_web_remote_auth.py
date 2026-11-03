@@ -14,18 +14,20 @@ from fastmcp.server.auth.oidc_proxy import OIDCConfiguration
 from src.snotes.transport.mcp.greencloud_remote_auth import (
     MAX_CONFIG_BYTES,
     MAX_CREDENTIAL_BYTES,
-    GreenCloudRemoteAuthError,
     RestrictedAuth0Provider,
-    _load_json_file,
-    _require_exact_keys,
-    _required_string,
-    _required_string_list,
-    _validated_https_url,
     build_scoped_auth0_provider,
+)
+from src.snotes.transport.mcp.remote_auth_support import (
+    RemoteAuthError,
+    load_json_file,
+    require_exact_keys,
+    required_string,
+    required_string_list,
+    validated_https_url,
 )
 
 
-ClaudeWebRemoteAuthError = GreenCloudRemoteAuthError
+ClaudeWebRemoteAuthError = RemoteAuthError
 
 NOTES_ACCESS_SCOPE = "notes"
 CONFIG_PATH = Path("/srv/snotes/claude-web-remote/config.json")
@@ -98,14 +100,14 @@ def build_auth_provider() -> RestrictedAuth0Provider:
 
 def load_auth_config(*, expected_owner_uid: int) -> ClaudeWebRemoteAuthConfig:
     """Load root-owned public config and Claude's systemd credential."""
-    config_document = _load_json_file(
+    config_document = load_json_file(
         CONFIG_PATH,
         maximum_bytes=MAX_CONFIG_BYTES,
         error_prefix="config",
         allowed_modes={0o600, 0o644},
         allowed_owner_uids={0},
     )
-    _require_exact_keys(config_document, _CONFIG_KEYS, "config_keys_invalid")
+    require_exact_keys(config_document, _CONFIG_KEYS, "config_keys_invalid")
 
     credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
     if not credentials_directory:
@@ -113,14 +115,14 @@ def load_auth_config(*, expected_owner_uid: int) -> ClaudeWebRemoteAuthConfig:
     directory = Path(credentials_directory)
     if not directory.is_absolute():
         raise ClaudeWebRemoteAuthError("credentials_directory_not_absolute")
-    credential_document = _load_json_file(
+    credential_document = load_json_file(
         directory / CREDENTIAL_NAME,
         maximum_bytes=MAX_CREDENTIAL_BYTES,
         error_prefix="credential",
         allowed_modes={0o400, 0o440, 0o600},
         allowed_owner_uids={0, expected_owner_uid},
     )
-    _require_exact_keys(
+    require_exact_keys(
         credential_document,
         _CREDENTIAL_KEYS,
         "credential_keys_invalid",
@@ -151,45 +153,45 @@ def _parse_auth_config(
     secret: Mapping[str, Any],
 ) -> ClaudeWebRemoteAuthConfig:
     config = ClaudeWebRemoteAuthConfig(
-        issuer_url=_required_string(public, "issuer_url"),
-        jwks_url=_required_string(public, "jwks_url"),
-        auth0_config_url=_required_string(public, "auth0_config_url"),
-        auth0_client_id=_required_string(secret, "auth0_client_id"),
-        auth0_client_secret=_required_string(secret, "auth0_client_secret"),
-        proxy_base_url=_required_string(public, "proxy_base_url"),
-        audience=_required_string(public, "audience"),
+        issuer_url=required_string(public, "issuer_url"),
+        jwks_url=required_string(public, "jwks_url"),
+        auth0_config_url=required_string(public, "auth0_config_url"),
+        auth0_client_id=required_string(secret, "auth0_client_id"),
+        auth0_client_secret=required_string(secret, "auth0_client_secret"),
+        proxy_base_url=required_string(public, "proxy_base_url"),
+        audience=required_string(public, "audience"),
         oauth_storage_directory=Path(
-            _required_string(public, "oauth_storage_directory")
+            required_string(public, "oauth_storage_directory")
         ),
-        allowed_client_redirect_uris=_required_string_list(
+        allowed_client_redirect_uris=required_string_list(
             public,
             "allowed_client_redirect_uris",
             "allowed_client_redirect_uris_invalid",
         ),
         allowed_subjects=frozenset(
-            _required_string_list(
+            required_string_list(
                 secret,
                 "allowed_subjects",
                 "allowed_subjects_invalid",
             )
         ),
-        storage_encryption_key=_required_string(secret, "storage_encryption_key"),
-        jwt_signing_key=_required_string(secret, "jwt_signing_key"),
+        storage_encryption_key=required_string(secret, "storage_encryption_key"),
+        jwt_signing_key=required_string(secret, "jwt_signing_key"),
     )
     _validate_config_bindings(config)
     return config
 
 
 def _validate_config_bindings(config: ClaudeWebRemoteAuthConfig) -> None:
-    issuer = _validated_https_url(config.issuer_url, "issuer_url_invalid")
+    issuer = validated_https_url(config.issuer_url, "issuer_url_invalid")
     if not issuer.endswith("/"):
         raise ClaudeWebRemoteAuthError("issuer_url_invalid")
     if config.auth0_config_url != f"{issuer}.well-known/openid-configuration":
         raise ClaudeWebRemoteAuthError("auth0_config_url_mismatch")
     if config.jwks_url != f"{issuer}.well-known/jwks.json":
         raise ClaudeWebRemoteAuthError("jwks_url_mismatch")
-    _validated_https_url(config.auth0_config_url, "auth0_config_url_invalid")
-    _validated_https_url(config.jwks_url, "jwks_url_invalid")
+    validated_https_url(config.auth0_config_url, "auth0_config_url_invalid")
+    validated_https_url(config.jwks_url, "jwks_url_invalid")
     if config.proxy_base_url != PROXY_BASE_URL:
         raise ClaudeWebRemoteAuthError("proxy_base_url_mismatch")
     if config.audience != AUDIENCE:
