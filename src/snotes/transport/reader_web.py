@@ -101,8 +101,12 @@ def create_reader_app(
         return login.session(request.cookies.get(SESSION_COOKIE, ""))
 
     async def post_form(request, session):
-        # The unpredictable session-bound token also covers clients omitting Origin.
-        if request.headers.get("origin", ORIGIN) != ORIGIN:
+        # Referrer-Policy:no-referrer makes ordinary form POSTs send Origin:null
+        # (Fetch's origin-header algorithm). The session-bound CSRF token remains
+        # mandatory; an opaque/missing Origin is never itself authorization.
+        if request.headers.get("origin") not in {None, "null", ORIGIN}:
+            raise ValueError("invalid_origin")
+        if request.headers.get("sec-fetch-site") not in {None, "same-origin", "none"}:
             raise ValueError("invalid_origin")
         form = await _form(request)
         values = form.get("csrf", [])

@@ -199,6 +199,19 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.client.get("/note/1").status_code, 404)
         self.assertNotIn("/note/1", self.client.post("/search", data={"csrf": self.csrf(), "q": "子串"}).text)
 
+    def test_no_referrer_form_posts_keep_csrf_and_reject_cross_site(self):
+        self.sign_in()
+        form = {"csrf": self.csrf(), "q": "子串"}
+        browser_headers = {"origin": "null", "sec-fetch-site": "same-origin"}
+        response = self.client.post("/search", data=form, headers=browser_headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/note/1", response.text)
+        self.assertEqual(self.client.post("/search", data=form, headers={"origin": "null"}).status_code, 200)
+        self.assertEqual(self.client.post("/search", data={"q": "子串", "csrf": "wrong"}, headers=browser_headers).status_code, 400)
+        for site in ("cross-site", "same-site"):
+            self.assertEqual(self.client.post("/search", data=form, headers={"origin": "null", "sec-fetch-site": site}).status_code, 400)
+        self.assertEqual(self.client.post("/logout", data={"csrf": self.csrf()}, headers=browser_headers, follow_redirects=False).status_code, 303)
+
     def test_parent_directory_includes_default_and_child_subcategories(self):
         # Formal root-level notes use the default subcategory, while the
         # directory catalog represents their parent with an empty subcategory.
