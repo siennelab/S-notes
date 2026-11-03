@@ -1,64 +1,113 @@
-# S-notes Remote Reader — active handoff
+# S-notes Remote Reader — CLOSED
 
-Updated: 2026-11-02 (America/Los_Angeles). Task is **not CLOSED**. Work stopped at the user's quota handoff threshold; services are stable.
+Closed: 2026-11-02 (America/Los_Angeles). All requested implementation,
+deployment and live acceptance are complete. No remaining construction task.
 
-## Workspace / authorization
+## Revisions and workspace
 
-- `/Users/s/Documents/项目/S-notes`, current branch `main`; implementation branch `codex/s-remote-reader`.
-- Clean baseline was `facc1e2398b24a639f3d8979a83cc1e7f67f450d` = main = origin/main.
-- Current deployed Reader code is `17a5e0d682ead286f4d426818bc09e9f6da04d5a`. Main/origin matched it before this handoff-only documentation commit; inspect current Git revision when resuming.
-- Full pasted work order permits actual implementation, deployment, ff-only merge and push; no extra publishing approval needed within this unchanged scope.
-- Original request attachment: `/Users/s/.codex/attachments/e783ea0f-c87e-4911-9f5e-478993a82c39/Pasted text.txt`.
-- Check account quota before resuming; last read: **11% remaining in 5h window, 72% weekly**. No reset credits used. Stopped at the ~10% threshold with no irreversible/in-progress deployment remaining.
-- This handoff file is task-generated related work. Preserve unrelated user changes if any appear.
+- Workspace: `/Users/s/Documents/项目/S-notes`, branch `main`.
+- Clean starting main/origin: `facc1e2398b24a639f3d8979a83cc1e7f67f450d`.
+- Feature branch: `codex/s-remote-reader`; ff-only merges, no force push.
+- Core S actor/Reader implementation: `51150fcf3bac316e6c9f86fd73464fe4dba5e3ae`.
+- Reader directory fix: `d0768aa32f569b518c6cbfdf025b573ce343639c`.
+- Reader no-referrer form fix / deployed Reader code: `17a5e0d682ead286f4d426818bc09e9f6da04d5a`.
+- Subsequent commits contain status documentation only. Inspect Git for final
+  documentation revision; final main/origin equality and clean worktree are
+  checked after the closing commit/push.
+- Formal App: `dist/S-notes.app`, clean source `51150fc...`, arm64, codesign and
+  actual-bundle isolated smoke passed. Later code fixes are Reader-only.
+- Publisher pinned export/venv: `51150fc...` under
+  `~/Library/Application Support/S-notes/runtime/greencloud-publisher/`.
+  It never runs from the developer checkout. Five-minute LaunchAgent remains
+  loaded, last exit 0; all four actors have needs_retry=NO.
+- S manually reset the account quota once to resume final acceptance. The agent
+  did not invoke any credit reset.
 
-## Implemented / deployed
+## Production
 
-- S registered after common, before Gale. Mirror-only actor sequence includes S; proposal/outbox actor set unchanged. No schema, authority, new permission field, S MCP, or JS/framework.
-- Reader over fresh ro/immutable SQLite connections. POST Chinese substring search reuses existing search semantics. Safe full Markdown, fixed size classes, images as links, redacted escaped plain text, local CSS/security headers.
-- Separate human Auth0 Regular Web Application `S-notes Remote Reader`, Authorization Code only, PKCE, openid, RS256/OIDC. Fixed existing S subject allowlist. No other app or tenant-wide policy changed. Tenant MFA inspected: Never / factors disabled, left unchanged.
-- Secrets already securely provisioned root-only and injected with LoadCredential. Never print/read secret or subject. Temporary entry key was removed; browser secret clipboard/memory cleared.
-- GreenCloud SSH alias `optimal`, root administrative access via existing SSH; Reader Linux UID/GID 986, group `snotes-reader`, no supplementary groups.
-- S mirror: `/srv/snotes/mirror/s/current.db`; parent `snotes:snotes-reader 2750`, DB `0640`. Reader read-only and cannot read other actor mirrors.
-- Reader independent source closure: `/srv/snotes/reader/runtime`; manifest `/srv/snotes/reader/source-manifest.json` now records code `17a5e0d`.
-- Service `snotes-reader.service`, only `127.0.0.1:8771`; `/srv/snotes/reader/config.json` public config, root-only credential `/root/greencloud-secrets/reader-oidc.json`. Existing installed runtime/vendor reused, no dependency upgrades.
-- DNS `notes.ke-den.de` A → `109.94.170.215`, DNS only, Auto TTL. Caddy validate/reload passed, real HTTPS certificate obtained. Reader and original Claude/Gale public endpoint smokes pass. No unrelated service restarted.
-- Formal App `/Users/s/Documents/项目/S-notes/dist/S-notes.app` built from clean approved main `51150fcf3bac316e6c9f86fd73464fe4dba5e3ae`, codesign and actual bundle isolated smoke passed.
-- Publisher pinned export/venv also `51150fc...` under `~/Library/Application Support/S-notes/runtime/greencloud-publisher/`. Five-minute LaunchAgent active; not developer checkout. Later `d0768aa` and `17a5e0d` change only Reader behavior/tests, so App and publisher were not rebuilt/restarted for those server-only fixes.
-- Four mirror actors have successful publish and needs_retry=NO. Initial transient SSH timeouts recovered through unchanged pipeline. No network configuration changed.
+- Reader: `https://notes.ke-den.de`, `snotes-reader.service`, one worker,
+  `127.0.0.1:8771`; Caddy provides HTTPS reverse proxy only.
+- DNS A points to existing GreenCloud, DNS-only/Auto TTL. Caddy candidate
+  validation, reload and real certificate issuance passed; no Caddy replacement.
+- Root-owned source closure: `/srv/snotes/reader/runtime`; source manifest:
+  `/srv/snotes/reader/source-manifest.json`.
+- Independent human Auth0 Regular Web Application `S-notes Remote Reader`.
+  Authorization Code + PKCE, openid only, RS256/OIDC validation and fixed S sub.
+  No other app, shared signup policy or tenant-wide MFA policy changed.
+- Public app config: `/srv/snotes/reader/config.json`; root-only credential:
+  `/root/greencloud-secrets/reader-oidc.json`, delivered by LoadCredential.
+  No secret, subject, rule value or note content is recorded here or in Git.
+- Linux Reader UID/GID 986, no supplementary groups. S mirror parent:
+  `/srv/snotes/mirror/s`, `snotes:snotes-reader 2750`; `current.db` is `0640`.
+  Reader can read S only, cannot write it or read other actor mirrors.
+- Mac remains Notes authority. No schema migration, new permission field, S MCP,
+  session database, heartbeat, JS/framework, remote writes or new transport key.
+- Mirror-only actor sequence includes S. Proposal/outbox/receipt actors remain
+  exactly claude-code, clawbot and gale; S is excluded.
+- Existing App “立即更新镜像” remains Gale-only. S uses the existing five-minute
+  publisher; this explains the observed delay after pressing that button.
 
-## Evidence and real acceptance
+## Verified outcomes
 
-- Initial 118 targeted tests passed (actors, mirrors, publisher/receiver, outbox, read, auth, renderer, existing Claude/Gale auth). Candidate build/signature passed. Qt checks used temporary HOME/DB and normal exit. Formal actual bundle `--step11-smoke` passed with temp HOME/DB and QTimer exit.
-- Real user confirms formal UI order `通用 → S → Gale → …` and selected a non-sensitive full+S note.
-- Real user logged into Reader on phone and saw homepage: AUTH0_LOGIN=PASS.
-- User reported main category directories empty. Root cause: formal root note subcategory is `无`, catalog root subcategory is empty. Fixed parent browsing to include its children/default notes in `d0768aa`; exact child remains exact. User confirms directories now normal.
-- User confirms full rendering normal.
-- User reported POST search rejected. Root cause confirmed in Fetch spec and actual browser fixture: no-referrer makes ordinary forms send Origin:null. `17a5e0d` accepts opaque/missing Origin only with mandatory session CSRF; rejects explicit foreign origins and cross-/same-site Fetch Metadata. Tests cover positive/null, invalid CSRF, foreign origin, logout. Real Chrome form logged `REAL_BROWSER_ORIGIN=null; RESPONSE=200` using fictional data.
-- 28 directly related tests pass after latest fix. User **confirmed phone search now works** after deployment/relogin: CHINESE_SEARCH=PASS.
-- Only real note explicitly identified for backend checking is ID **272**. Exact-row checks showed it exists/full/Markdown non-null, matches parent catalog, default subcategory. No title/body printed.
-- Automatic approval review rejected a proposed probe scanning up to 200 real notes and persisting IDs. It **did not execute**. Do not retry/circumvent. Ask S for exact selected note ID/URL and inspect only that row if needed; no broad content scans.
-- Local Mac DNS had stale NXDOMAIN caching. Public HTTPS/phone/server work, authoritative/HTTPS DNS confirms correct A. Do not change network infrastructure for this. Check browser availability naturally later if useful.
-- MAC_OFFLINE_READ=PASS: temporarily booted out only Mac publisher, then as GreenCloud `snotes-reader` used installed SQLiteCloudMirrorReader.get(272, include_markdown=True) and installed renderer on that exact selected note. Read/render succeeded without Mac publisher; no content/title output. Same pinned LaunchAgent immediately restored via trap, last exit=0 and five-minute schedule active.
+- S UI order: common → S → Gale → remaining registry identities; S confirmed
+  this in the formal App.
+- Full/common/S/redacted/hidden permissions, mirror validation/receiver/state,
+  proposal rejection and existing actor paths covered by initial 118 targeted
+  tests. Candidate and formal App builds/signatures passed; Qt checks used
+  temporary HOME/DB and normal/QTimer exits, never real Notes DB test fixtures.
+- Full rendering, real Auth0 login and Chinese search confirmed by S on phone.
+- Parent-directory bug fixed: parent includes default and child locations;
+  exact child stays exact. S confirmed directories and rendering normal.
+- Referrer-Policy:no-referrer causes ordinary form Origin:null. Fixed without
+  removing mandatory session CSRF; explicit foreign origins and cross-/same-site
+  Fetch Metadata still rejected. Real browser form observed Origin:null and 200.
+  Latest 28 directly related tests passed; S confirmed actual phone search.
+- Safe renderer fixtures cover headings, paragraphs, bold/lists/quote/code/table,
+  fixed size classes, escaped HTML, unsafe schemes, image links and redacted text.
+  Mobile 390px render has 17px text, no page overflow, zero img/script elements,
+  horizontal code scrolling and redacted pre-wrap paragraph preservation.
+- MAC_OFFLINE_READ=PASS: temporarily unloaded only Mac publisher; GreenCloud
+  Reader identity read/rendered the selected Note 272 from its existing snapshot.
+  Same pinned LaunchAgent immediately restored by trap, last exit 0.
+- Note 462 was S's dedicated redacted acceptance note. Its initial missing-page
+  report resolved after the scheduled S publish; local/cloud hashes matched.
+- S explicitly authorized read-only inspection of the existing formal redaction
+  rules and modification only of Note 462 via the formal write path. An existing
+  documentation-address rule was selected in memory; no rule values were output.
+  Two test paragraphs were appended through the formal App, with autosave
+  confirmed. No direct SQLite writes and no redaction-rule changes occurred.
+- Actual Note 462 checks all passed: redacted; replacement count > 0; expected
+  safe two-paragraph text present; original source string absent in safe text and
+  rendered HTML; safe_markdown NULL; HTML equals escaped safe_text; rule-file hash
+  unchanged. Private comparisons used memory/private SSH pipes, boolean output
+  only. S had confirmed the real page's paragraph display.
+- REVOKE=PASS: through the App, temporarily removed only S from 462, preserving
+  Gale and leaving common off. Published S; exact row absent in S mirror, still
+  present in Gale. S confirmed old URL inaccessible and search result absent.
+- Restored original S/Gale grant through the App, published S again, and reran
+  exact-note redaction checks: all passed. Final 462 remains redacted and readable
+  to its original S/Gale recipients, with the two authorized test paragraphs.
+- Public Reader health/TLS and anonymous no-content checks passed. Existing
+  Claude/Gale public OAuth metadata and unauthenticated MCP rejection smokes
+  passed after Caddy reload; existing mirror actors and outbox tests passed.
+  Final Reader/Caddy active, mirror permissions correct, all retry flags NO.
 
-## Remaining — do not claim PASS yet
+## Safety and recovery
 
-1. **Latest user issue, investigate first:** S says they wrote a redacted-visible note in S-notes and “更新投稿”, but it does not appear in Reader, so they cannot supply a Web URL. No numeric ID received. A Web URL is NOT a prerequisite: first identify the single selected Mac note/draft, confirm whether it is a saved formal Note or still an AI Center pending item, confirm S/common target and redacted visibility, then check publisher status/receipt and only that exact row in S mirror. Do not infer it is pending solely from the user's phrase; literal “更新投稿” was not found under src/snotes. No production diagnosis for this latest missing-note issue has been performed yet. Reader follows formal Mac saves and the existing five-minute publisher, not arbitrary pending proposals. After selection/publication, user checks actual masking/paragraphs/no Markdown-source rendering. Backend checks limited to this exact ID (visibility redacted, safe_markdown IS NULL, redaction_count > 0 and newline bool), no body/title output. Do not rerun completed tests/builds without a new reason.
-2. Revoke: S removes S (and common if present) or uses hidden on selected test note (272 if that is the intended chosen note). Publish through existing pipeline. Verify exact selected ID absent in S mirror and user old URL returns 404/search no longer finds it. Preserve other grants; user can restore preferred final permissions afterward.
-3. Recheck main=origin/main/worktree clean; update this handoff to actual final state and commit/push related documentation if retaining it, then concise final ≤20 lines. Do not label CLOSED until these real cases pass.
+- A prior proposed bulk probe of up to 200 real notes was rejected by automatic
+  approval review and did not execute. It was abandoned. Production acceptance
+  used only explicitly identified Notes 272 and 462; do not revive that probe.
+- No user notes were deleted. No real rule values, original strings, replacement
+  strings, note bodies/titles, Auth0 sub, secret or token are included in reports.
+- Temporary credential-entry key was removed; temporary clipboard was cleared;
+  fixture preview servers stopped. No credential entry or publisher pause remains.
+- Keep rollback assets: old publisher pin `fdbb6eb97f90b6cbf50b62df196582f9f7ad51b2`
+  and plist in `~/Library/Application Support/S-notes/backups/reader-publisher.RBqRyrS9/`;
+  receiver backup `/root/greencloud-backups/reader-receiver.UgmYiIIC`;
+  Caddy backup `/root/greencloud-backups/reader-caddy.yK30Qcwu/Caddyfile.before`;
+  Reader file backups `/root/greencloud-backups/reader-directory.igUUHK2x` and
+  `/root/greencloud-backups/reader-form.o9hdbbir`.
+- Reader rollback: stop/disable only Reader, restore prior Caddyfile/reload,
+  preserve mirror. No Reminder/Oracle/network-infrastructure change is required.
 
-## Rollback points
-
-- Prior main `facc1e2...`; core implementation `51150fc...`, directory fix `d0768aa...`, form fix `17a5e0d...`.
-- Old publisher pin `fdbb6eb97f90b6cbf50b62df196582f9f7ad51b2`; old plist backup `~/Library/Application Support/S-notes/backups/reader-publisher.RBqRyrS9/publisher.before.plist`.
-- Receiver replaced three files backed up `/root/greencloud-backups/reader-receiver.UgmYiIIC`.
-- Old Caddyfile `/root/greencloud-backups/reader-caddy.yK30Qcwu/Caddyfile.before`.
-- Reader directory fix backup `/root/greencloud-backups/reader-directory.igUUHK2x`; form fix backup `/root/greencloud-backups/reader-form.o9hdbbir`.
-- Reader rollback: stop/disable only Reader, restore previous Caddyfile/reload; leave mirror intact.
-
-## Active tools / temporary artifacts
-
-- Browser Chrome binding ID 3. Auth0 user tab 678824290 now Reader app Credentials (keep secret masked); Cloudflare user tab 678824245 now DNS records. Claimed user tabs were left open. Agent-created old preview tab 678824292 is closed. Failed Reader tab 678824302 may exist.
-- Local fictional form browser smoke server exec session **62824** on `127.0.0.1:50495` is stopped. Earlier static preview session 41242 is also stopped.
-- Actual service units and publisher are active. No credential entry pending, no publisher intentionally left stopped.
-- `/tmp/snotes-reader-*` holds task scripts/logs/archives/screenshots, no plaintext credentials. Clean only known task materials after final closure, preserve useful failure evidence until then.
+The original work order is complete. Do not continue with adjacent optimization.
