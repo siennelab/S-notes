@@ -355,6 +355,9 @@ class SnotesShell(QWidget):
         self.delete_button = self._action_button("trash.svg", "删除笔记")
         self.delete_button.setObjectName("deleteNoteButton")
         status_row.addWidget(self.delete_button)
+        self.note_id_label = QLabel()
+        self.note_id_label.setObjectName("noteIdLabel")
+        status_row.addWidget(self.note_id_label)
         self.status_label = QLabel("未选择笔记")
         self.status_label.setObjectName("statusLabel")
         status_row.addWidget(self.status_label, stretch=1)
@@ -462,6 +465,7 @@ class SnotesShell(QWidget):
             self.metadata_summary_scroll.viewport(),
             self.body_editor,
             self.empty_label,
+            self.note_id_label,
             self.status_label,
         )
         for widget in widgets:
@@ -474,6 +478,7 @@ class SnotesShell(QWidget):
             self.title_separator,
             self.metadata_section,
             self.delete_button,
+            self.note_id_label,
             self.body_editor,
         ):
             widget.setVisible(available)

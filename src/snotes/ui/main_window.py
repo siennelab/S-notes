@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -617,6 +618,7 @@ class MainWindow(QMainWindow):
                 and self.title_input.text() == note.title
             )
             self.current_note = None if read_only else note
+            self.shell.note_id_label.setText(f"笔记 ID：{note.id}")
             if not preserve_title_edit:
                 self.title_input.setText(note.title)
                 # Hydration starts at the left; normal editing can scroll freely.
@@ -832,7 +834,9 @@ class MainWindow(QMainWindow):
                 self.shell.reminder_center.set_search(query)
                 self._sync_sidebar_reminder_filters()
             return
-        if self.current_mode == "smart_view" and self.current_filter == "ai":
+        is_note_id_query = re.fullmatch(r"#[0-9]+", query) is not None
+        if (self.current_mode == "smart_view" and self.current_filter == "ai"
+                and not is_note_id_query):
             self.ai_materials_query = query
             self.refresh_note_list()
             return
@@ -842,6 +846,8 @@ class MainWindow(QMainWindow):
             self.current_mode = "search"
             self.current_filter = query
             self.refresh_note_list()
+            if is_note_id_query and self.visible_notes:
+                self.switch_note(self.visible_notes[0].id)
 
     def show_tag(self, tag: str) -> None:
         self.current_mode = "tag"
@@ -1077,6 +1083,7 @@ class MainWindow(QMainWindow):
         self.current_note = None
         self._pending_note = None
         self._note_load = None
+        self.shell.note_id_label.clear()
         self.title_input.clear()
         if not self.body_edit.closing:
             self.body_edit.setMarkdown("", uuid.uuid4().hex)

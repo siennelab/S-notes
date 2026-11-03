@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from src.snotes.application.ai_actor_registry import resolve_target_id
@@ -45,6 +46,13 @@ class NoteService:
         )
 
     def search_notes(self, query: str) -> list[Note]:
+        if re.fullmatch(r"#[0-9]+", query):
+            try:
+                note = self.get_note(int(query[1:]))
+            except (ValueError, OverflowError):
+                # Unbounded input can exceed Python/SQLite's integer range.
+                return []
+            return [note] if note is not None else []
         clean = query.strip()
         if clean.startswith("#") and len(clean) > 1:
             return self.notes_for_tag(clean[1:].strip())

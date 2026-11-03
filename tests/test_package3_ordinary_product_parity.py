@@ -101,6 +101,31 @@ class Package3OrdinaryProductParityTests(unittest.TestCase):
                 r1 = r1_database.parse_search_query(sample)
                 self.assertEqual((r2.normalized, r2.tokens), (r1.normalized, r1.tokens))
 
+    def test_numeric_hash_query_finds_only_the_active_note_id(self) -> None:
+        target = self.create_note("Target", "Unrelated body")
+        self.create_note(str(target.id), f"Mention #{target.id}", tags=(str(target.id),))
+        for query in (f"#{target.id}", f"#000{target.id}"):
+            with self.subTest(query=query):
+                self.assertEqual(self.notes.search_notes(query), [target])
+        self.notes.soft_delete_note(target.id)
+        self.assertEqual(self.notes.search_notes(f"#{target.id}"), [])
+
+    def test_missing_and_out_of_range_ids_have_no_results(self) -> None:
+        self.create_note("Existing", "Body")
+        for query in ("#449", "#0", "#9223372036854775808", "#" + "9" * 5000):
+            with self.subTest(query=query[:40]):
+                self.assertEqual(self.notes.search_notes(query), [])
+
+    def test_non_id_hash_queries_keep_the_existing_tag_path(self) -> None:
+        tagged = self.create_note("Tagged", "Body", tags=("abc", "449"))
+        self.create_note("abc 449", "abc 449")
+        for query, tag in (("#abc", "abc"), ("#449 abc", "449 abc"),
+                           (" #449", "449"), ("#449 ", "449"),
+                           ("#449\n", "449"), ("#４４９", "４４９")):
+            with self.subTest(query=query):
+                self.assertEqual(self.notes.search_notes(query), self.notes.notes_for_tag(tag))
+        self.assertEqual(self.notes.search_notes("#abc"), [tagged])
+
     def test_same_fixture_queries_return_same_order_as_frozen_r1(self) -> None:
         r1_path = self.root / "r1.db"
         r1_database.initialize_database(r1_path)

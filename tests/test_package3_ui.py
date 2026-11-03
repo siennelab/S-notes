@@ -152,6 +152,56 @@ class Package3UiTests(unittest.TestCase):
             note_list.item(row).setSelected(True)
         self.assertEqual(set(self.window.shell.sidebar.selected_note_ids()), {first.id, second.id})
 
+    def test_footer_note_id_tracks_committed_selection_and_clears(self) -> None:
+        first = self.create_note("First", "First body")
+        second = self.create_note("Second", "Second body")
+        shell = self.window.shell
+        self.window.show()
+        self.assertTrue(shell.note_id_label.isHidden())
+        self.load_note(first.id)
+        self.assertEqual(shell.note_id_label.text(), f"笔记 ID：{first.id}")
+        self.assertFalse(shell.note_id_label.isHidden())
+        self.window.switch_note(second.id)
+        self.wait_note(second.id)
+        self.assertEqual(shell.note_id_label.text(), f"笔记 ID：{second.id}")
+        self.assertEqual(shell.status_label.text(), "已保存")
+        self.assertLess(shell.delete_button.geometry().right(), shell.note_id_label.x())
+        self.assertLess(shell.note_id_label.geometry().right(), shell.status_label.x())
+        self.assertEqual(shell.note_id_label.geometry().center().y(), shell.status_label.geometry().center().y())
+        self.assertEqual(shell.note_id_label.font(), shell.status_label.font())
+        self.assertEqual(shell.note_id_label.palette().color(QPalette.WindowText),
+                         shell.status_label.palette().color(QPalette.WindowText))
+        self.window.clear_editor()
+        self.assertEqual(shell.note_id_label.text(), "")
+        self.assertTrue(shell.note_id_label.isHidden())
+
+    def test_numeric_hash_search_opens_via_existing_switch_and_preserves_edits(self) -> None:
+        first = self.create_note("First", "First body")
+        target = self.create_note("Target", "Target body")
+        self.load_note(first.id)
+        self.window.title_input.setText("Edited first")
+        self.assertTrue(self.window.has_unsaved_changes)
+        self.window.shell.sidebar.search_input.setText(f"#{target.id}")
+        self.wait_note(target.id)
+        self.assertEqual(self.window.visible_notes, [target])
+        self.assertEqual(self.window.title_input.text(), "Target")
+        self.assertEqual(self.window.body_edit.latest_markdown.strip(), "Target body")
+        self.assertEqual(self.window.note_service.get_note(first.id).title, "Edited first")
+        self.assertEqual(self.window.shell.note_id_label.text(), f"笔记 ID：{target.id}")
+        self.assertEqual(self.window.shell.sidebar.selected_note_ids(), [target.id])
+        self.window.shell.sidebar.search_input.setText("#999999999")
+        self.assertEqual(self.window.visible_notes, [])
+        self.assertEqual(self.window.current_note.id, target.id)
+        self.assertEqual(len(self.window.note_service.list_active_notes()), 2)
+
+    def test_numeric_hash_search_from_ai_materials_uses_ordinary_note_navigation(self) -> None:
+        target = self.create_note("Target", "Target body")
+        self.window.show_smart_view("ai")
+        self.window.shell.sidebar.search_input.setText(f"#{target.id}")
+        self.wait_note(target.id)
+        self.assertEqual(self.window.current_mode, "search")
+        self.assertEqual(self.window.visible_notes, [target])
+
     def test_reminder_note_navigation_is_single_click_and_stays_in_editor(self) -> None:
         note = self.create_note("导航 A", "<p>虚构正文</p>")
         self.create_note("导航 B", "<p>其他正文</p>")

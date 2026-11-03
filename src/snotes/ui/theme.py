@@ -339,7 +339,7 @@ QToolButton::menu-indicator {{ image: none; width: 0; }}
 }}
 #bodyEdit QWidget {{ background: transparent; }}
 #bodyEdit:focus {{ border: 1px solid {t.focus}; }}
-#statusLabel {{ background: transparent; color: {t.text_subtle}; padding: 4px 0; font-size: 12.5px; }}
+#statusLabel, #noteIdLabel {{ background: transparent; color: {t.text_subtle}; padding: 4px 0; font-size: 12.5px; }}
 #statusLabel[conflict='true'] {{ color: {t.warning}; }}
 #aiCenterDialog {{ background: {t.window}; color: {t.text}; }}
 #receiptInboxTitle {{ color: {t.text}; font-size: 15px; font-weight: 600; }}
