@@ -1,0 +1,11 @@
+# BEGIN S-NOTES REMOTE READER
+notes.ke-den.de {
+	log {
+		output discard
+	}
+	request_body {
+		max_size 8KB
+	}
+	reverse_proxy 127.0.0.1:@PORT@
+}
+# END S-NOTES REMOTE READER

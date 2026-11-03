@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 
 from src.services.actor_mirror_publish_service import ActorMirrorPublisher, PublishReceipt
-from src.snotes.domain.greencloud import GREEN_CLOUD_ACTOR_SEQUENCE
+from src.snotes.domain.greencloud import GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE
 from src.snotes.storage.cloud_mirror_receiver import receive_publish
 from src.snotes.storage.schema import initialize_database
 from src.snotes.storage.repositories.directories import SQLiteDirectoriesRepository
@@ -30,7 +30,7 @@ class FixtureTransport:
 def build_fixtures(root: Path) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     mirror_root = root / "mirror"
-    for actor in GREEN_CLOUD_ACTOR_SEQUENCE:
+    for actor in GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE:
         (mirror_root / actor).mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix="snotes-gale-fictional-source-") as name:
         source = Path(name)
@@ -61,6 +61,6 @@ def build_fixtures(root: Path) -> dict:
     manifest = {"fixture": "greencloud-gale-internal-fictional", "ids": ids,
                 "source_database_uploaded": False,
                 "mirrors": {actor: hashlib.sha256((mirror_root / actor / "current.db").read_bytes()).hexdigest()
-                            for actor in GREEN_CLOUD_ACTOR_SEQUENCE}}
+                            for actor in GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE}}
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest

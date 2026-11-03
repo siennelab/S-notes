@@ -150,7 +150,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
         self.assertEqual(self.checked_target_ids(), ("common",))
         self.assertFalse(self.window.shell.ai_legacy_targets_label.isVisible())
 
-    def test_chooser_has_seven_active_targets_and_preserves_legacy_on_edit(self) -> None:
+    def test_chooser_has_eight_active_targets_and_preserves_legacy_on_edit(self) -> None:
         self.assertEqual(
             tuple(
                 (target_id, checkbox.text())
@@ -158,6 +158,7 @@ class Package4AiMetadataUiTests(unittest.TestCase):
             ),
             (
                 ("common", "通用"),
+                ("s", "S"),
                 ("gale", "Gale"),
                 ("yan", "砚"),
                 ("clawbot", "Clawbot"),

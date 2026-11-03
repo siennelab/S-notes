@@ -15,12 +15,12 @@ import tempfile
 from typing import BinaryIO
 
 from src.snotes.domain.actor_mirror import ActorMirrorError
-from src.snotes.domain.greencloud import GREEN_CLOUD_ACTORS
+from src.snotes.domain.greencloud import GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE
 from src.snotes.storage.actor_mirror import verify_actor_mirror
 
 
 MIRROR_ROOT = Path("/srv/snotes/mirror")
-ALLOWED_ACTORS = GREEN_CLOUD_ACTORS
+ALLOWED_ACTORS = frozenset(GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE)
 MAX_HEADER_BYTES = 4096
 MAX_PAYLOAD_BYTES = 512 * 1024 * 1024
 INPUT_TIMEOUT_SECONDS = 120

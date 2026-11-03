@@ -31,6 +31,19 @@ class GC35Step10OutboxTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.outbox = Path(self.temporary.name) / "data" / "outbox.db"
 
+    def test_s_read_actor_cannot_enqueue_proposals(self) -> None:
+        initialize_outbox(self.outbox, generalized=True)
+        before = self.outbox.read_bytes()
+        with self.assertRaisesRegex(GaleSubmissionOutboxError, "source_actor_invalid"):
+            enqueue_proposal(
+                self.outbox,
+                source_actor="s",
+                request_id="fictional-s-read-only",
+                operation_type="create",
+                payload={"title": "Fictional S denied"},
+            )
+        self.assertEqual(self.outbox.read_bytes(), before)
+
     def test_generalized_schema_is_explicit_opt_in(self) -> None:
         initialize_outbox(self.outbox)
         with closing(sqlite3.connect(self.outbox)) as connection:

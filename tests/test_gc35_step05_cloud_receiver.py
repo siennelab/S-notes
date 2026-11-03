@@ -17,10 +17,16 @@ import unittest
 from unittest.mock import patch
 
 from src.snotes.domain.actor_mirror import ActorMirrorRecord
+from src.snotes.domain.greencloud import (
+    GREEN_CLOUD_ACTORS,
+    GREEN_CLOUD_ACTOR_SEQUENCE,
+    GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE,
+)
 from src.snotes.storage.actor_mirror import verify_actor_mirror, write_actor_mirror
 from src.snotes.storage.cloud_mirror_receiver import (
     MAX_HEADER_BYTES,
     MAX_PAYLOAD_BYTES,
+    ALLOWED_ACTORS,
     MirrorPublishError,
     receive_publish,
 )
@@ -33,7 +39,7 @@ class CloudMirrorReceiverTest(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name) / "mirror"
-        for actor in ("claude-code", "clawbot"):
+        for actor in GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE:
             actor_directory = self.root / actor
             actor_directory.mkdir(parents=True)
             os.chmod(actor_directory, 0o2750)
@@ -78,6 +84,17 @@ class CloudMirrorReceiverTest(unittest.TestCase):
 
         self.assertEqual(caught.exception.reason, "candidate_rejected")
         self.assertEqual(current.read_bytes(), b"OLD_CURRENT")
+
+    def test_mirror_allowlist_adds_s_without_expanding_proposal_actors(self):
+        self.assertEqual(GREEN_CLOUD_ACTOR_SEQUENCE, ("claude-code", "clawbot", "gale"))
+        self.assertEqual(GREEN_CLOUD_ACTORS, frozenset(GREEN_CLOUD_ACTOR_SEQUENCE))
+        self.assertEqual(ALLOWED_ACTORS, GREEN_CLOUD_ACTORS | {"s"})
+        payload, content_hash = self._fixture("s", "S mirror")
+        result = receive_publish(self._request("s", payload), mirror_root=self.root)
+        current = self.root / "s" / "current.db"
+        self.assertEqual((result["actor"], result["hash"]), ("s", content_hash))
+        self.assertEqual(result["note_count"], 1)
+        self.assertEqual(current.read_bytes(), payload)
 
     def test_actor_mismatch_is_rejected_and_old_current_remains(self):
         current = self._old_current("clawbot")

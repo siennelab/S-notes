@@ -99,6 +99,35 @@ class ActorMirrorTest(unittest.TestCase):
         self.assertEqual(row[0], "FIXTURE_SECRET inline")
         self.assertEqual(row[1], "FIXTURE_SECRET `inline`")
 
+    def test_s_mirror_obeys_common_explicit_redacted_and_hidden_grants(self):
+        full_id = self._note("S full", "# S FIXTURE_SECRET", "full", ["s"])
+        redacted_id = self._note("S redacted", "FIXTURE_SECRET", "redacted", ["s"])
+        hidden_id = self._note("S hidden", "S hidden canary", "hidden", ["s"])
+        path = self.root / "s.db"
+        result = self.service.generate("s", path)
+        self.assertEqual(result["target_actor"], "s")
+        self.assertEqual(result["note_count"], 4)
+        self.assertEqual(result["full_note_count"], 2)
+        self.assertEqual(result["redacted_note_count"], 2)
+        self.assertEqual(
+            self.service.verify(path, expected_actor="s", expected_note_count=4)["hash"],
+            result["hash"],
+        )
+        with closing(sqlite3.connect(path)) as connection:
+            rows = {
+                row[0]: row[1:]
+                for row in connection.execute(
+                    "SELECT source_note_id,safe_text,safe_markdown FROM mirror_notes"
+                )
+            }
+        self.assertEqual(set(rows), {self.ids["common"], self.ids["redacted"], full_id, redacted_id})
+        self.assertEqual(rows[full_id], ("S FIXTURE_SECRET", "# S FIXTURE_SECRET"))
+        self.assertEqual(rows[redacted_id], ("[MASKED]", None))
+        self.assertNotIn(hidden_id, rows)
+        with self.assertRaises(ActorMirrorError) as caught:
+            self.service.verify(path, expected_actor="gale")
+        self.assertEqual(caught.exception.code, "target_actor_mismatch")
+
     def test_source_schema_marker_is_formal_markdown_marker(self):
         with self.connections.read() as connection:
             row = connection.execute("SELECT meta_value FROM schema_meta WHERE meta_key='body_format'").fetchone()

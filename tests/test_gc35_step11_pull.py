@@ -163,6 +163,7 @@ class GC35Step11PullTest(unittest.TestCase):
     def test_parser_rejects_identity_operation_and_envelope_confusion(self) -> None:
         cases = (
             (proposal(source_actor="unknown-actor"), "source_actor_invalid"),
+            (proposal(source_actor="s"), "source_actor_invalid"),
             (proposal(operation_type="delete"), "operation_type_invalid"),
             (proposal(note_id=None), "operation_envelope_invalid"),
             (proposal(delivery_state="acknowledged"), "remote_delivery_state_invalid"),

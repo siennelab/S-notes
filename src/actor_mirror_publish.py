@@ -15,7 +15,7 @@ from src.services.actor_mirror_publish_service import (
     ActorMirrorPublisher,
     SshActorMirrorTransport,
 )
-from src.snotes.domain.greencloud import GREEN_CLOUD_ACTOR_SEQUENCE
+from src.snotes.domain.greencloud import GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE
 
 
 DEFAULT_MIRROR_DIRECTORY = (
@@ -119,7 +119,7 @@ def _print_status(state: dict[str, object]) -> None:
     actors = state.get("actors", {})
     if not isinstance(actors, dict):
         actors = {}
-    for actor in GREEN_CLOUD_ACTOR_SEQUENCE:
+    for actor in GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE:
         value = actors.get(actor, {})
         if not isinstance(value, dict):
             value = {}

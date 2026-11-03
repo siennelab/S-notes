@@ -144,7 +144,7 @@ class Package4AiAccessMetadataCoreTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(item.target_id for item in self.metadata.available_targets()),
-            ("common", "gale", "yan", "clawbot", "antigravity", "claude-code", "ke-den"),
+            ("common", "s", "gale", "yan", "clawbot", "antigravity", "claude-code", "ke-den"),
         )
 
     def test_legacy_targets_remain_visible_and_survive_active_edits(self) -> None:

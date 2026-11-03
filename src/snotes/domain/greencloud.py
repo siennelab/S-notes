@@ -11,6 +11,7 @@ from src.snotes.domain.gale import GalePullResult
 GREEN_CLOUD_SOURCE = "GreenCloud"
 GREEN_CLOUD_ACTOR_SEQUENCE = ("claude-code", "clawbot", "gale")
 GREEN_CLOUD_ACTORS = frozenset(GREEN_CLOUD_ACTOR_SEQUENCE)
+GREEN_CLOUD_MIRROR_ACTOR_SEQUENCE = (*GREEN_CLOUD_ACTOR_SEQUENCE, "s")
 GREEN_CLOUD_OPERATIONS = frozenset(
     {"create", "prepend", "append", "update_note_metadata", "edit"}
 )

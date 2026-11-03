@@ -15,7 +15,7 @@ from src.snotes.application.ai_actor_registry import (
 
 
 class Package4AiActorRegistryTests(unittest.TestCase):
-    def test_active_chooser_is_exactly_the_seven_product_identities(self) -> None:
+    def test_active_chooser_is_exactly_the_eight_product_identities(self) -> None:
         self.assertEqual(
             tuple(
                 (item.target_id, item.display_name)
@@ -23,6 +23,7 @@ class Package4AiActorRegistryTests(unittest.TestCase):
             ),
             (
                 ("common", "通用"),
+                ("s", "S"),
                 ("gale", "Gale"),
                 ("yan", "砚"),
                 ("clawbot", "Clawbot"),
@@ -40,6 +41,8 @@ class Package4AiActorRegistryTests(unittest.TestCase):
         self.assertEqual(stable_ids.count("yan"), 1)
         self.assertEqual(resolve_target_id("砚"), "yan")
         self.assertEqual(target_definition("yan").display_name, "砚")
+        self.assertEqual(resolve_target_id("S"), "s")
+        self.assertEqual(target_definition("s"), AiTargetDefinition("s", "S", "s"))
 
     def test_selectable_targets_follow_current_registry_without_static_copy(self) -> None:
         dynamic = AiTargetDefinition(

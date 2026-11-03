@@ -68,20 +68,28 @@ class SQLiteCloudMirrorReader:
         finally:
             connection.close()
 
-    def get(self, note_id: int) -> dict | None:
+    def get(self, note_id: int, *, include_markdown: bool = False) -> dict | None:
         connection = self._open()
         try:
             row = connection.execute(
                 """
                 SELECT source_note_id, title, safe_text, directory, tags_json,
                        source_updated_at, source_version, visibility,
-                       main_category, sub_category, ai_visibility, ai_targets_json
+                       main_category, sub_category, ai_visibility, ai_targets_json,
+                       safe_markdown
                 FROM mirror_notes
                 WHERE source_note_id = ?
                 """,
                 (int(note_id),),
             ).fetchone()
-            return None if row is None else self._safe_note(row)
+            if row is None:
+                return None
+            note = self._safe_note(row)
+            if include_markdown:
+                # Metadata and body must come from one inode/snapshot, including
+                # when a publish revokes or redacts a note during this request.
+                note["safe_markdown"] = row["safe_markdown"]
+            return note
         except (sqlite3.Error, ValueError, TypeError, json.JSONDecodeError) as error:
             raise CloudMirrorReadError("mirror_read_failed") from error
         finally:
@@ -122,6 +130,48 @@ class SQLiteCloudMirrorReader:
             return validate_metadata_catalog(json.loads(row["meta_value"]))
         except (sqlite3.Error, ValueError, TypeError, ActorMirrorError) as error:
             raise CloudMirrorReadError("catalog_read_failed") from error
+        finally:
+            connection.close()
+
+    def list_recent(self, limit: int = 50) -> list[dict]:
+        connection = self._open()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM mirror_notes ORDER BY source_updated_at DESC, "
+                "source_note_id DESC LIMIT ?", (max(1, min(int(limit), 200)),),
+            ).fetchall()
+            return [self._safe_note(row) for row in rows]
+        except (sqlite3.Error, ValueError, TypeError) as error:
+            raise CloudMirrorReadError("mirror_read_failed") from error
+        finally:
+            connection.close()
+
+    def list_by_location(
+        self, main_category: str, sub_category: str, limit: int = 200,
+    ) -> list[dict]:
+        connection = self._open()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM mirror_notes WHERE main_category = ? AND sub_category = ? "
+                "ORDER BY source_updated_at DESC, source_note_id DESC LIMIT ?",
+                (main_category, sub_category, max(1, min(int(limit), 200))),
+            ).fetchall()
+            return [self._safe_note(row) for row in rows]
+        except (sqlite3.Error, ValueError, TypeError) as error:
+            raise CloudMirrorReadError("mirror_read_failed") from error
+        finally:
+            connection.close()
+
+    def snapshot_info(self) -> dict:
+        connection = self._open()
+        try:
+            values = dict(connection.execute(
+                "SELECT meta_key, meta_value FROM mirror_metadata "
+                "WHERE meta_key IN ('generated_at', 'note_count')"
+            ))
+            return {"generated_at": values["generated_at"], "note_count": int(values["note_count"])}
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as error:
+            raise CloudMirrorReadError("mirror_read_failed") from error
         finally:
             connection.close()
 

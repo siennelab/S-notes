@@ -13,8 +13,8 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def source_closure():
-    pending = ["src.cloud_read_mcp", "src.snotes.storage.cloud_mirror_receiver"]
+def source_closure(entrypoints=None):
+    pending = list(entrypoints or ["src.cloud_read_mcp", "src.snotes.storage.cloud_mirror_receiver"])
     files = set()
     while pending:
         module = pending.pop()

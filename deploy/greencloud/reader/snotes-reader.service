@@ -1,0 +1,33 @@
+[Unit]
+Description=S-notes private read-only Remote Reader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=snotes-reader
+Group=snotes-reader
+WorkingDirectory=/srv/snotes/reader/runtime
+Environment=PYTHONPATH=/srv/snotes/gale-remote/vendor:/srv/snotes/reader/runtime
+Environment=PYTHONDONTWRITEBYTECODE=1
+LoadCredential=reader-oidc.json:/root/greencloud-secrets/reader-oidc.json
+ExecStart=/srv/snotes/runtime/.venv/bin/python -B -m src.remote_reader
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+InaccessiblePaths=/srv/snotes/mirror/claude-code /srv/snotes/mirror/clawbot /srv/snotes/mirror/gale
+InaccessiblePaths=-/srv/snotes/notes-outbox -/srv/snotes/reminder -/srv/snotes/gale-remote/oauth -/srv/snotes/claude-web-remote/oauth
+
+[Install]
+WantedBy=multi-user.target

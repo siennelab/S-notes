@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 import sqlite3
 import subprocess
 import tempfile
@@ -9,7 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from src.actor_mirror_publish import main as publisher_main
+from src.actor_mirror_publish import main as publisher_main, _print_status
 from src.services.actor_mirror_publish_service import (
     ActorMirrorPublishError,
     ActorMirrorPublisher,
@@ -122,18 +124,18 @@ class ActorMirrorPublisherTest(unittest.TestCase):
         first = self.publisher.publish()
         self.assertEqual(
             [result.status for result in first],
-            ["published", "published", "published"],
+            ["published", "published", "published", "published"],
         )
         self.assertEqual(
             [call[0] for call in self.transport.calls],
-            ["claude-code", "clawbot", "gale"],
+            ["claude-code", "clawbot", "gale", "s"],
         )
         second = self.publisher.publish()
         self.assertEqual(
             [result.status for result in second],
-            ["unchanged", "unchanged", "unchanged"],
+            ["unchanged", "unchanged", "unchanged", "unchanged"],
         )
-        self.assertEqual(len(self.transport.calls), 3)
+        self.assertEqual(len(self.transport.calls), 4)
         self.assertEqual(self.database.read_bytes(), source_before)
         with self.assertRaisesRegex(RuntimeError, "read-only"):
             with SQLiteConnectionFactory(
@@ -160,7 +162,7 @@ class ActorMirrorPublisherTest(unittest.TestCase):
         failed = self.publisher.publish()
         self.assertEqual(
             [result.status for result in failed],
-            ["published", "failed", "published"],
+            ["published", "failed", "published", "published"],
         )
         failure_state = self.publisher.status()["actors"]["clawbot"]
         self.assertEqual(
@@ -173,12 +175,33 @@ class ActorMirrorPublisherTest(unittest.TestCase):
         retried = self.publisher.publish()
         self.assertEqual(
             [result.status for result in retried],
-            ["unchanged", "published", "unchanged"],
+            ["unchanged", "published", "unchanged", "unchanged"],
         )
         self.assertEqual(len(self.transport.calls), calls_before_retry + 1)
         self.assertFalse(
             self.publisher.status()["actors"]["clawbot"]["needs_retry"]
         )
+
+    def test_s_publish_has_independent_generation_state_and_status_output(self):
+        s_note = self._note("S only", "# S only", "full", ("s",))
+        result = self.publisher.publish_actor("s")
+        self.assertEqual((result.actor, result.status, result.note_count), ("s", "published", 2))
+        self.assertEqual([call[0] for call in self.transport.calls], ["s"])
+        with closing(sqlite3.connect(self.root / "mirrors" / "s.db")) as connection:
+            ids = {row[0] for row in connection.execute("SELECT source_note_id FROM mirror_notes")}
+        self.assertEqual(ids, {self.common_note.id, s_note.id})
+        state = self.publisher.status()
+        self.assertEqual(
+            {actor for actor, value in state["actors"].items() if value.get("last_success_hash")},
+            {"s"},
+        )
+        self.assertEqual(state["actors"]["s"]["last_success_hash"], result.content_hash)
+        self.assertFalse(state["actors"]["s"]["needs_retry"])
+        output = StringIO()
+        with redirect_stdout(output):
+            _print_status(state)
+        self.assertIn(f"S_LAST_SUCCESS_HASH={result.content_hash}\n", output.getvalue())
+        self.assertIn("S_NEEDS_RETRY=NO\n", output.getvalue())
 
     def test_cli_accepts_only_explicit_fixture_paths(self):
         with patch(

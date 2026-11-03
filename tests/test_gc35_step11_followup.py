@@ -56,7 +56,7 @@ class ReceiverTransport:
         self.mirror_root = Path(mirror_root)
         self.calls: list[str] = []
         self.fail_next_actor = ""
-        for actor in ("claude-code", "clawbot", "gale"):
+        for actor in ("claude-code", "clawbot", "gale", "s"):
             (self.mirror_root / actor).mkdir(parents=True, mode=0o700)
 
     def publish(
@@ -199,7 +199,7 @@ class Step11FollowupIntegrationTest(unittest.TestCase):
             transport=self.receiver,
         )
         initial = self.publisher.publish()
-        self.assertEqual([item.status for item in initial], ["published", "published", "published"])
+        self.assertEqual([item.status for item in initial], ["published", "published", "published", "published"])
 
         self.identity = self.root / "mirror-key"
         self.identity.write_text("fictional", encoding="utf-8")

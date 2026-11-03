@@ -26,6 +26,7 @@ AI_ACTOR_YAN_ID = "yan"
 # so persisted grants remain readable and can never be reassigned.
 AI_TARGET_REGISTRY = (
     AiTargetDefinition("common", "通用", "general", system=True),
+    AiTargetDefinition("s", "S", "s"),
     AiTargetDefinition(AI_ACTOR_GALE_ID, "Gale", "gale", aliases=("G经理",)),
     AiTargetDefinition(AI_ACTOR_YAN_ID, "砚", "yan"),
     AiTargetDefinition(
