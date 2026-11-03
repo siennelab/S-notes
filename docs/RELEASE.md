@@ -29,7 +29,13 @@ and by direct terminal builds.
 
 Both build paths must continue to keep user data outside the app bundle.
 
-## Formal Gale Background Helper Refresh
+The default profile targets the maintainer's configured remote Reminder
+deployment; it is not a generic local-only distribution profile. For a
+local-Reminder build, use `scripts/build_macos_app.sh --candidate`, which writes
+`dist-d1-candidate/S-notes.app`. Neither profile installs helpers or loads
+LaunchAgents. See the [README](../README.md) for dependencies and isolated runs.
+
+## Formal Gale Background Helper Refresh (Maintainer-only)
 
 Building `dist/S-notes.app` does not install or refresh the independent Gale
 background helper under Application Support. A formal closeout that rebuilds

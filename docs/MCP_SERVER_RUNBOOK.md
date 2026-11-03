@@ -1,16 +1,22 @@
 # S-notes Local MCP Server Runbook
 
 The current R2 local MCP server is `src/snotes/transport/mcp/server.py`.
-Production clients must use the launcher packaged inside the formal App:
+See [README](../README.md#local-mcp) for the isolated local development setup.
+Path templates below use `<repo>` for the current checkout and `<app-bundle>`
+for the built App (normally `<repo>/dist/S-notes.app`). Replace them with your
+own paths; production deployment is maintainer-only.
+
+Maintainer production clients must use the launcher packaged inside the formal
+App:
 
 ```text
-/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_mcp_stdio.sh
+<app-bundle>/Contents/Resources/bin/run_snotes_mcp_stdio.sh
 ```
 
 Yan uses the packaged profile wrapper at:
 
 ```text
-/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh
+<app-bundle>/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh
 ```
 
 Both launchers execute the Python source frozen into that App build. Switching
@@ -56,7 +62,10 @@ refresh the client tools, read a full note containing bold/link/size Markdown,
 and confirm a redacted note returns `not_found`. Server registration and stdio
 protocol tests are not evidence of real Claude Code discovery.
 
-## GreenCloud 3.5 step 3: precise Markdown edits (candidate)
+## GreenCloud 3.5 step 3: precise Markdown edits (historical candidate)
+
+The acceptance instructions in this section record the earlier candidate gate;
+they are not prerequisites for a new local checkout.
 
 The unrestricted local MCP profile adds
 `edit_note(request_id, note_id, expected_version, edits)`, where `edits` is a
@@ -109,7 +118,7 @@ fast-forward main, replace the formal App, or push before the closeout gate.
 Production Yan clients use the dedicated wrapper packaged in the formal App:
 
 ```bash
-/Users/s/Documents/项目/S-notes/dist/S-notes.app/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh
+"<app-bundle>/Contents/Resources/bin/run_snotes_yan_mcp_stdio.sh"
 ```
 
 The wrapper fixes `SNOTES_MCP_ACTOR_TARGET_ID=yan`, resolves the canonical
@@ -124,7 +133,7 @@ development and isolated tests.
 Use the dedicated Gale Tunnel stdio wrapper for ChatGPT / Secure MCP Tunnel:
 
 ```bash
-/Users/s/Documents/项目/S-notes/scripts/run_snotes_gale_tunnel_mcp_stdio.sh
+"<repo>/scripts/run_snotes_gale_tunnel_mcp_stdio.sh"
 ```
 
 The wrapper fixes `SNOTES_MCP_ACTOR_TARGET_ID=gale` and exposes only the Gale v3
@@ -145,11 +154,11 @@ retry key for one submission.
 The Secure MCP Tunnel command value for the candidate is:
 
 ```text
-/Users/s/Documents/项目/S-notes/scripts/run_snotes_gale_tunnel_mcp_stdio.sh
+<repo>/scripts/run_snotes_gale_tunnel_mcp_stdio.sh
 ```
 
-S must complete the ChatGPT-side association and Actions refresh. Do not record
-Tunnel IDs, runtime keys, or other secrets in this repository.
+The operator must complete the ChatGPT-side association and Actions refresh.
+Do not record Tunnel IDs, runtime keys, or other secrets in this repository.
 
 The Task 13A/13B material retained below records the historical R1 server. Its
 retired doctor, adapter, and fixture commands are not current operating
@@ -157,8 +166,12 @@ instructions.
 
 ## Historical R1: Two Separate Python Environments
 
+`<legacy-mcp-venv>` denotes the retired dedicated R1 environment, not a current
+setup requirement. Current R2 development uses the repository `.venv` described
+in README.
+
 - Desktop App: repository `.venv`, Python 3.13.x, PySide6 6.10.3.
-- MCP Server: `/Users/s/.venvs/snotes-mcp`, Python 3.13.x,
+- MCP Server: `<legacy-mcp-venv>`, Python 3.13.x,
   `mcp[cli]==1.28.1`.
 
 They remain separate because the accepted desktop runtime is Python 3.13.x,
@@ -238,7 +251,10 @@ starts no MCP session, opens no port, and starts no Tunnel.
 Exit code `0` means healthy. Exit code `2` means fail closed. Doctor output is
 human JSON and is separate from server mode, so it cannot pollute MCP stdout.
 
-## Formal stdio Startup
+## Development stdio Startup (Current R2)
+
+Use the isolated environment in [README](../README.md#local-mcp). The following
+repository launcher is for development, not a production client command:
 
 ```bash
 ./scripts/run_snotes_mcp_stdio.sh
@@ -249,8 +265,9 @@ the repository `.venv/bin/python`. Server stdout is reserved exclusively
 for MCP JSON-RPC frames. Human-safe errors and SDK logs go to stderr. Stop the
 server with Ctrl+C or SIGTERM; normal MCP client shutdown also closes it.
 
-The server opens no public listener, creates no fixed localhost port, starts no
-GUI, makes no network request, and does not start a Tunnel.
+With local Reminder authority and the read-only profile in README, the server
+opens no public listener, creates no fixed localhost port, starts no GUI, makes
+no network request, and does not start a Tunnel.
 
 ## Current R2 Automated Verification with Temporary Data
 
@@ -270,7 +287,7 @@ Create a non-private disposable fixture first:
 
 ```bash
 fixture_root="$(mktemp -d /private/tmp/snotes-inspector.XXXXXX)"
-/Users/s/.venvs/snotes-mcp/bin/python \
+"<legacy-mcp-venv>/bin/python" \
   -m tests_mcp.prepare_inspector_fixture "$fixture_root"
 ```
 
@@ -282,7 +299,7 @@ npx @modelcontextprotocol/inspector@0.22.0 \
   -e SNOTES_MCP_DATABASE_PATH="$fixture_root/s_notes.db" \
   -e SNOTES_MCP_REDACTION_RULES_PATH="$fixture_root/redaction_rules.json" \
   -e SNOTES_MCP_CONFIG_PATH="$fixture_root/config/mcp_server.json" \
-  -- /Users/s/Documents/项目/S-notes/scripts/run_snotes_mcp_stdio.sh
+  -- "<repo>/scripts/run_snotes_mcp_stdio.sh"
 ```
 
 Task 13B's local acceptance launch used Inspector 0.22.0. If that package is
@@ -314,7 +331,7 @@ change, reusing the old version with a new request ID must return `conflict`.
 - Request bodies and full note content are not logged; search logs store only
   query length, and write logs store bounded operation summaries.
 
-## Common Failures
+## Historical R1: Common Failures
 
 - `actor_target_id_missing`: create the local actor config or set the explicit
   environment variable.
@@ -330,7 +347,7 @@ change, reusing the old version with a new request ID must return `conflict`.
 - stdout pollution: stop immediately. Formal stdout must contain only JSON-RPC;
   human diagnostics belong on stderr.
 
-## Future Task 13C Boundary
+## Historical R1: Future Task 13C Boundary
 
 Task 13B needs no Tunnel ID, Runtime API key, ChatGPT custom App, payment, or
 public endpoint. Task 13C will supply the actual tunnel-client executable and
@@ -338,7 +355,7 @@ its authenticated arguments. Its stdio command value will be this stable local
 entrypoint:
 
 ```text
---mcp.command /Users/s/Documents/项目/S-notes/scripts/run_snotes_mcp_stdio.sh
+--mcp.command "<repo>/scripts/run_snotes_mcp_stdio.sh"
 ```
 
 Do not invent or commit the remaining Task 13C command, Tunnel ID, or API key.

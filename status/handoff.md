@@ -3,9 +3,15 @@
 Closed: 2026-11-02 (America/Los_Angeles). All requested implementation,
 deployment and live acceptance are complete. No remaining construction task.
 
+This is a historical deployment closeout. For current local setup and build
+entrypoints, see [README](../README.md) and [Release notes](../docs/RELEASE.md).
+`<repo>` below means the current checkout root (`git rev-parse --show-toplevel`).
+Recorded production and recovery paths describe that deployment, not portable
+setup defaults.
+
 ## Revisions and workspace
 
-- Workspace: `/Users/s/Documents/项目/S-notes`, branch `main`.
+- Workspace: `<repo>`, branch `main`.
 - Clean starting main/origin: `facc1e2398b24a639f3d8979a83cc1e7f67f450d`.
 - Feature branch: `codex/s-remote-reader`; ff-only merges, no force push.
 - Core S actor/Reader implementation: `51150fcf3bac316e6c9f86fd73464fe4dba5e3ae`.

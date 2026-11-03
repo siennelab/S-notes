@@ -1,7 +1,9 @@
 # S-notes Project Status
 
-This is the current repository handoff for S-notes. Frozen R1 information is
-retained below; active R2 package closeouts are recorded first.
+This document preserves dated R1/R2 milestone records. For current local setup
+and build entrypoints, use [README](../README.md) and [Release notes](RELEASE.md).
+Paths and deployment instructions inside the records describe their historical
+environment; they are not current setup requirements for a new checkout.
 
 ## 2026-09-23 — GreenCloud 3.5 Step 2 CLOSED
 

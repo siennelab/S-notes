@@ -27,11 +27,36 @@ config/*
 
 *.db
 *.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
 *.docx
 *.zip
 *.env
+.env.*
+!.env.example
 secrets*
+secret
+secret.json
+secret.*.json
+*.secret.json
+credential*.json
+credentials
+*.credentials.json
+.credentials*
+.secret*
 local_redaction_rules.json
+
+# Local SSH, TLS, and other private key material.
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.key
+*.pem
+*.p12
+*.pfx
 
 .venv/
 __pycache__/
