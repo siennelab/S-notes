@@ -149,12 +149,14 @@ class SQLiteCloudMirrorReader:
     def list_by_location(
         self, main_category: str, sub_category: str, limit: int = 200,
     ) -> list[dict]:
+        """Browse a parent category, or one exact child when provided."""
         connection = self._open()
         try:
             rows = connection.execute(
-                "SELECT * FROM mirror_notes WHERE main_category = ? AND sub_category = ? "
+                "SELECT * FROM mirror_notes WHERE main_category = ? "
+                "AND (? = '' OR sub_category = ?) "
                 "ORDER BY source_updated_at DESC, source_note_id DESC LIMIT ?",
-                (main_category, sub_category, max(1, min(int(limit), 200))),
+                (main_category, sub_category, sub_category, max(1, min(int(limit), 200))),
             ).fetchall()
             return [self._safe_note(row) for row in rows]
         except (sqlite3.Error, ValueError, TypeError) as error:

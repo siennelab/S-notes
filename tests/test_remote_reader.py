@@ -199,6 +199,22 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(self.client.get("/note/1").status_code, 404)
         self.assertNotIn("/note/1", self.client.post("/search", data={"csrf": self.csrf(), "q": "子串"}).text)
 
+    def test_parent_directory_includes_default_and_child_subcategories(self):
+        # Formal root-level notes use the default subcategory, while the
+        # directory catalog represents their parent with an empty subcategory.
+        self.full = replace(self.full, sub_category="无", directory="Fixture / 无")
+        self.records = [self.full, self.redacted]
+        self.publish()
+        self.sign_in()
+        parent = self.client.get("/directory/7")
+        self.assertIn("/note/1", parent.text)
+        self.assertIn("/note/2", parent.text)
+        child = self.client.get("/directory/8")
+        self.assertNotIn("/note/1", child.text)
+        self.assertIn("/note/2", child.text)
+        self.assertEqual(len(self.reader.list_by_location("Fixture", "")), 2)
+        self.assertEqual(len(self.reader.list_by_location("Fixture", "Leaf")), 1)
+
     def test_reader_minimal_methods_read_fresh_snapshots(self):
         self.assertEqual(self.reader.snapshot_info()["note_count"], 2)
         self.assertEqual(len(self.reader.list_recent(1)), 1)
