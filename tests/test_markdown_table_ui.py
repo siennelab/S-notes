@@ -271,6 +271,31 @@ class MarkdownTableUiTests(unittest.TestCase):
         self.assertEqual(self.table_matrix()[2], ["", "", ""])
         self.assertEqual(self.selection_cell(), [2, 1])
 
+    def test_open_table_operations_follow_mouse_to_another_cell(self):
+        rows = self.table_matrix()
+        self.open_table_operations("tr:nth-child(2) td:first-child p")
+        self.place_caret("tr:first-child th:last-child p")
+        self.assertFalse(self.js("document.querySelector('#table-operations').hidden"))
+        self.assertTrue(self.button_disabled('[data-table-operation="row-delete"]'))
+
+        bottom_right = "tr:last-child td:last-child p"
+        self.place_caret(bottom_right)
+        self.assertFalse(self.js("document.querySelector('#table-operations').hidden"))
+        self.assertFalse(self.button_disabled('[data-table-operation="row-delete"]'))
+        self.assertEqual(self.selection_cell(), [len(rows) - 1, len(rows[0]) - 1])
+        self.click_selector('[data-table-operation="col-delete"]')
+        self.wait(lambda: self.table_matrix() == [row[:-1] for row in rows])
+
+        self.open_table_operations("tr:nth-child(2) td:first-child p")
+        self.place_caret(bottom_right)
+        self.click_selector('[data-table-operation="row-delete"]')
+        self.wait(lambda: self.table_matrix() == [row[:-1] for row in rows[:-1]])
+
+        self.open_table_operations("tr:nth-child(2) td:first-child p")
+        self.place_caret(".ProseMirror > p:first-child")
+        self.assertTrue(self.js("document.querySelector('#table-operations').hidden"))
+        self.assertTrue(self.button_disabled('[data-command="Table"]'))
+
     def test_table_operation_guards_and_single_cell_text_selection(self):
         self.load("Outside\n\n" + OPERATIONS_TABLE)
         self.assertEqual(

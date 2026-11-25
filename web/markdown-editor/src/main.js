@@ -238,7 +238,9 @@ for (const action of tableActions) {
   };
 }
 document.addEventListener('mousedown', event => {
-  if (!tablePanel.hidden && !tablePanel.contains(event.target) && !tableToggle.contains(event.target)) {
+  // Let the editor update the caret before deciding whether it left the table.
+  const target = event.target;
+  if (!tablePanel.hidden && !tablePanel.contains(target) && !tableToggle.contains(target) && !$('editor').contains(target)) {
     setTableOperationsOpen(false);
   }
 });
