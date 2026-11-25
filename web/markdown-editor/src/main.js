@@ -229,7 +229,6 @@ for (const action of tableActions) {
   action.onmousedown = event => event.preventDefault();
   action.onclick = () => {
     if (!writable() || tablePanel.hidden) return;
-    setTableOperationsOpen(false);
     editor.action(ctx => {
       const view = ctx.get(editorViewCtx);
       runTableOperation(ctx, view, action.dataset.tableOperation);
@@ -237,13 +236,6 @@ for (const action of tableActions) {
     });
   };
 }
-document.addEventListener('mousedown', event => {
-  // Let the editor update the caret before deciding whether it left the table.
-  const target = event.target;
-  if (!tablePanel.hidden && !tablePanel.contains(target) && !tableToggle.contains(target) && !$('editor').contains(target)) {
-    setTableOperationsOpen(false);
-  }
-});
 let linkSelection = null;
 function hideLink(focus = false) {
   $('link-field').hidden = true;
@@ -362,8 +354,7 @@ $('replace-all').onclick = () => {
 };
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
-    if (!tablePanel.hidden) { event.preventDefault(); setTableOperationsOpen(false); editorView().focus(); }
-    else if (!$('link-field').hidden) { event.preventDefault(); hideLink(true); }
+    if (!$('link-field').hidden) { event.preventDefault(); hideLink(true); }
     else if (!$('find-bar').hidden) { event.preventDefault(); showSearch(false); }
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); showSearch(true); }

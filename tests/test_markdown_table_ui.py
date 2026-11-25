@@ -149,6 +149,7 @@ class MarkdownTableUiTests(unittest.TestCase):
         self.click_selector(selector)
         self.wait(lambda: self.editor.dirty)
         self.assertTrue(self.js("document.activeElement.closest('.ProseMirror') !== null"))
+        self.assertFalse(self.js("document.querySelector('#table-operations').hidden"))
 
     def assert_copies_text(self, expected):
         self.assertEqual(self.js("getSelection().toString()"), expected)
@@ -286,12 +287,10 @@ class MarkdownTableUiTests(unittest.TestCase):
         self.click_selector('[data-table-operation="col-delete"]')
         self.wait(lambda: self.table_matrix() == [row[:-1] for row in rows])
 
-        self.open_table_operations("tr:nth-child(2) td:first-child p")
         self.place_caret(bottom_right)
         self.click_selector('[data-table-operation="row-delete"]')
         self.wait(lambda: self.table_matrix() == [row[:-1] for row in rows[:-1]])
 
-        self.open_table_operations("tr:nth-child(2) td:first-child p")
         self.place_caret(".ProseMirror > p:first-child")
         self.assertTrue(self.js("document.querySelector('#table-operations').hidden"))
         self.assertTrue(self.button_disabled('[data-command="Table"]'))
@@ -322,9 +321,12 @@ class MarkdownTableUiTests(unittest.TestCase):
         self.assertEqual(self.table_matrix()[1], ["", "", ""])
         self.assertEqual(self.selection_cell(), [1, 1])
 
-        self.load("| Only |\n| --- |\n| body |\n")
-        self.open_table_operations("tr:nth-child(2) td p")
+        self.load("| Only | Extra |\n| --- | --- |\n| body | |\n")
+        self.open_table_operations("tr:nth-child(2) td:last-child p")
         self.assertTrue(self.button_disabled('[data-table-operation="row-delete"]'))
+        self.click_selector('[data-table-operation="col-delete"]')
+        self.wait(lambda: self.table_matrix() == [["Only"], ["body"]])
+        self.assertFalse(self.js("document.querySelector('#table-operations').hidden"))
         self.assertTrue(self.button_disabled('[data-table-operation="col-delete"]'))
 
         self.load(OPERATIONS_TABLE)
@@ -354,12 +356,8 @@ class MarkdownTableUiTests(unittest.TestCase):
             ["Left", "", "Right"], ["one", "", "three"], ["two", "", "four"]])
         once_deleted = self.editor.latest_markdown
 
-        # The command leaves the caret in the nearest surviving cell: reopen the
-        # compact panel and delete the next blank column without locating the
-        # caret again.
+        # The second deletion uses the still-open panel and the retained caret.
         self.assertEqual(self.selection_cell(), [2, 1])
-        self.click_selector('[data-command="Table"]')
-        self.wait(lambda: self.js("document.querySelector('#table-operations').offsetParent !== null"))
         self.click_selector('[data-table-operation="col-delete"]')
         self.wait(lambda: self.table_matrix() == [
             ["Left", "Right"], ["one", "three"], ["two", "four"]])
@@ -381,6 +379,10 @@ class MarkdownTableUiTests(unittest.TestCase):
         QTest.keyClick(self.target, Qt.Key_Z, Qt.MetaModifier | Qt.ShiftModifier)
         self.wait(lambda: self.editor.latest_markdown == twice_deleted)
         self.assertEqual(len(self.table_matrix()[0]), 2)
+        self.assertFalse(self.js("document.querySelector('#table-operations').hidden"))
+        self.click_selector('[data-command="Table"]')
+        self.assertTrue(self.js("document.querySelector('#table-operations').hidden"))
+        self.assertFalse(self.button_disabled('[data-command="Table"]'))
 
         self.load(OPERATIONS_TABLE)
         self.run_table_operation("row-before")
