@@ -2,12 +2,12 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
 main { padding: 0; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-#toolbar, .link-field, .find-bar { flex: 0 0 auto; }
+#toolbar, .link-field, .find-bar, .table-operations { flex: 0 0 auto; }
 [hidden] { display: none !important; }
 button { font: inherit; cursor: pointer; color: var(--text-muted, #68737c); background: transparent; border: 0; border-radius: 4px; }
 button:hover { background: var(--surface-hover, #dde3e7); color: var(--text, #23292e); }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent, #5f768b); outline-offset: -1px; }
-button[aria-pressed="true"] { background: var(--surface-selected, #cad6df); color: var(--text, #23292e); }
+button[aria-pressed="true"], #toolbar button[data-command="Table"][aria-expanded="true"] { background: var(--surface-selected, #cad6df); color: var(--text, #23292e); }
 button:disabled { opacity: .4; cursor: default; }
 #toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; padding: 5px 8px; margin: 0; overflow-x: auto; background: var(--editor-paper, #f0f2f5); position: sticky; top: 0; z-index: 2; }
 #toolbar button { display: inline-flex; align-items: center; justify-content: center; height: 28px; min-width: 28px; padding: 4px; flex-shrink: 0; font-size: 12px; line-height: 20px; }
@@ -34,6 +34,9 @@ button:disabled { opacity: .4; cursor: default; }
 .link-field input { width: min(380px, 75%); }
 .link-field button, .find-bar button { height: 28px; padding: 3px 7px; }
 #find-status { color: var(--text-muted, #68737c); }
+.table-operations { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 3px 8px 6px; border-bottom: 1px solid var(--editor-border, #dcdcdc); }
+.table-operations > div { display: flex; flex-wrap: wrap; gap: 2px; }
+.table-operations button { padding: 4px 7px; font-size: 12px; line-height: 19px; white-space: nowrap; }
 ::selection { background: var(--accent-soft, #cad6df); }
 #editor {
   --line-height: 1.9;

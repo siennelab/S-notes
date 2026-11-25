@@ -12,6 +12,7 @@ import { bodySizeExtension, setBodySize, setHeading } from "./body-size.js";
 import { toggleCodeBlock } from "./code-block.js";
 import { listStyleExtension, toggleList } from "./list-style.js";
 import { connectQt } from "./qt-bridge.js";
+import { runTableOperation, tableContext, tableOperationAllowed } from "./table-operations.js";
 
 const $ = id => document.getElementById(id);
 let editor = null, activeId = null, requestedId = null, bridge;
@@ -189,6 +190,7 @@ function updateToolbar(state) {
     && marks.every(set => (set.find(mark => mark.type.name === 'body_size')?.attrs.size || '20') === String(size)));
   for (const [key, name] of [['Bold','strong'], ['Italic','emphasis'], ['Strike','strike_through'], ['Inline code','inlineCode'], ['Link','link']]) pressed(key, hasMark(name));
   for (const [key, name] of [['Bullet list','bullet_list'], ['Ordered list','ordered_list'], ['Quote','blockquote'], ['Code block','code_block']]) pressed(key, nodes.some(node => node.type.name === name));
+  updateTableOperations(writable() ? tableContext(state) : null);
 }
 const commands = [
   ['H1', 'H1', '一级标题', setHeading, 1], ['H2', 'H2', '二级标题', setHeading, 2], ['H3', 'H3', '三级标题', setHeading, 3],
@@ -206,6 +208,40 @@ for (const [key, label, tooltip, command, payload, icon] of commands) {
     editor.action(ctx => { const view = ctx.get(editorViewCtx); view.focus(); updateToolbar(view.state); });
   }, icon);
 }
+const tablePanel = $('table-operations');
+const tableActions = tablePanel.querySelectorAll('button');
+const tableToggle = button('Table', '表格', '表格操作', event => {
+  setTableOperationsOpen(tablePanel.hidden);
+  if (!tablePanel.hidden && event.detail === 0) tablePanel.querySelector('button:enabled')?.focus();
+});
+tableToggle.setAttribute('aria-controls', tablePanel.id);
+setTableOperationsOpen(false);
+function setTableOperationsOpen(open) {
+  tablePanel.hidden = !open;
+  tableToggle.setAttribute('aria-expanded', String(open));
+}
+function updateTableOperations(rect) {
+  tableToggle.disabled = !rect;
+  if (!rect) setTableOperationsOpen(false);
+  for (const action of tableActions) action.disabled = !tableOperationAllowed(action.dataset.tableOperation, rect);
+}
+for (const action of tableActions) {
+  action.onmousedown = event => event.preventDefault();
+  action.onclick = () => {
+    if (!writable() || tablePanel.hidden) return;
+    setTableOperationsOpen(false);
+    editor.action(ctx => {
+      const view = ctx.get(editorViewCtx);
+      runTableOperation(ctx, view, action.dataset.tableOperation);
+      view.focus();
+    });
+  };
+}
+document.addEventListener('mousedown', event => {
+  if (!tablePanel.hidden && !tablePanel.contains(event.target) && !tableToggle.contains(event.target)) {
+    setTableOperationsOpen(false);
+  }
+});
 let linkSelection = null;
 function hideLink(focus = false) {
   $('link-field').hidden = true;
@@ -324,7 +360,8 @@ $('replace-all').onclick = () => {
 };
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
-    if (!$('link-field').hidden) { event.preventDefault(); hideLink(true); }
+    if (!tablePanel.hidden) { event.preventDefault(); setTableOperationsOpen(false); editorView().focus(); }
+    else if (!$('link-field').hidden) { event.preventDefault(); hideLink(true); }
     else if (!$('find-bar').hidden) { event.preventDefault(); showSearch(false); }
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); showSearch(true); }

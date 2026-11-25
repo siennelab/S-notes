@@ -9,6 +9,18 @@
 <body>
 <main>
   <nav id="toolbar" aria-label="格式工具栏"></nav>
+  <div id="table-operations" class="table-operations" role="group" aria-label="表格操作" hidden>
+    <div role="group" aria-label="行操作">
+      <button type="button" data-table-operation="row-before">上方插入行</button>
+      <button type="button" data-table-operation="row-after">下方插入行</button>
+      <button type="button" data-table-operation="row-delete">删除当前行</button>
+    </div>
+    <div role="group" aria-label="列操作">
+      <button type="button" data-table-operation="col-before">左侧插入列</button>
+      <button type="button" data-table-operation="col-after">右侧插入列</button>
+      <button type="button" data-table-operation="col-delete">删除当前列</button>
+    </div>
+  </div>
   <form id="link-field" class="link-field" hidden><input id="link-url" type="url" placeholder="输入链接地址，Enter 应用" aria-label="链接地址" /><button type="submit" title="应用链接">确定</button></form>
   <div id="find-bar" class="find-bar" role="search" hidden>
     <input id="find" aria-label="查找" placeholder="查找文字" />
