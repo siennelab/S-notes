@@ -51,6 +51,17 @@ print("Hello，世界")
 
 [外部链接](https://example.com)
 ''',
+    "表格与拖选": '''普通正文可用鼠标拖选。
+
+| Setting | Current use | | | | |
+| --- | --- | --- | --- | --- | --- |
+| Location | Don't allow | | | | |
+| Notifications | Don't allow | | | | |
+| Camera | | Don't allow | | | |
+| Microphone | Ask | | | | |
+| Third-party cookies | Block | | | | |
+| Pop-ups and redirects | Block | | | | |
+''',
     "空白": "",
     "相同正文 A": "两篇正文完全相同。\n",
     "相同正文 B": "两篇正文完全相同。\n",

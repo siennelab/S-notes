@@ -49,6 +49,20 @@ button:disabled { opacity: .4; cursor: default; }
 .ProseMirror p {
   margin: 0 0 var(--paragraph-gap);
 }
+.ProseMirror table {
+  border-collapse: collapse;
+}
+.ProseMirror :is(th, td) {
+  border: 1px solid var(--editor-border, #dcdcdc);
+  /* Leave room to drag past the first or last character within the cell. */
+  padding: 6px 8px;
+}
+.ProseMirror :is(th, td) > p:last-child {
+  margin-bottom: 0;
+}
+.ProseMirror :is(th, td).selectedCell {
+  background-color: var(--surface-selected, #d2dbe1);
+}
 .ProseMirror h1 {
   font-size: var(--heading-1-size, 32px);
 }
